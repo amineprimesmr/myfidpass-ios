@@ -104,10 +104,10 @@ struct iOS26StyleOnBoarding: View {
         .clipShape(shape)
         .overlay {
             if screenshotSize != .zero && !hideBezels {
-                /// Cadre iPhone noir (mockup)
+                /// Cadre iPhone (aligné sur iOSStyleOnBoarding référence)
                 ZStack {
                     shape
-                        .stroke(Color(white: 0.25), lineWidth: 6)
+                        .stroke(.white, lineWidth: 6)
                     shape
                         .stroke(.black, lineWidth: 4)
                     shape

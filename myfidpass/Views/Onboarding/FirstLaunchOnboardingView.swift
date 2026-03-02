@@ -66,6 +66,7 @@ struct FirstLaunchOnboardingView: View {
             FirstLaunchOnboarding.hasCompleted = true
             onComplete()
         }
+        .statusBarHidden(true)
         .ignoresSafeArea()
     }
 }
