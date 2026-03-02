@@ -163,22 +163,18 @@ final class AuthService: NSObject, ObservableObject {
 
 extension AuthService: ASWebAuthenticationPresentationContextProviding {
     nonisolated func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
-        func getAnchor() -> ASPresentationAnchor {
-            let scenes = UIApplication.shared.connectedScenes
-            let windowScene = scenes.compactMap { $0 as? UIWindowScene }.first
-            if let ws = windowScene,
-               let w = ws.windows.first(where: { $0.isKeyWindow }) ?? ws.windows.first {
-                return w
+        DispatchQueue.main.sync {
+            MainActor.assumeIsolated {
+                let scenes = UIApplication.shared.connectedScenes
+                guard let windowScene = scenes.compactMap({ $0 as? UIWindowScene }).first else {
+                    fatalError("No window scene available for OAuth presentation")
+                }
+                if let w = windowScene.windows.first(where: { $0.isKeyWindow }) ?? windowScene.windows.first {
+                    return w
+                }
+                return UIWindow(windowScene: windowScene)
             }
-            if let ws = windowScene {
-                return UIWindow(windowScene: ws)
-            }
-            return UIWindow()
         }
-        if Thread.isMainThread {
-            return getAnchor()
-        }
-        return DispatchQueue.main.sync(execute: getAnchor)
     }
 }
 

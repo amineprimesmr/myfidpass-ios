@@ -45,6 +45,7 @@ struct iOS26StyleOnBoarding: View {
             }
             .padding(.top, 20)
             .padding(.horizontal, 15)
+            .padding(.bottom, 28)
             .frame(height: 210)
             .background {
                 VariableGlassBlur(15)
@@ -64,7 +65,7 @@ struct iOS26StyleOnBoarding: View {
             let size = $0.size
             
             Rectangle()
-                .fill(isLightTheme ? Color(white: 0.95) : .black)
+                .fill(Color.black)
             
             ScrollView(.horizontal) {
                 HStack(spacing: 12) {
@@ -85,7 +86,7 @@ struct iOS26StyleOnBoarding: View {
                                     .clipShape(shape)
                             } else {
                                 Rectangle()
-                                    .fill(isLightTheme ? Color(white: 0.92) : .black)
+                                    .fill(Color.black)
                             }
                         }
                         .frame(width: size.width, height: size.height)
@@ -103,14 +104,14 @@ struct iOS26StyleOnBoarding: View {
         .clipShape(shape)
         .overlay {
             if screenshotSize != .zero && !hideBezels {
-                /// Device Frame UI
+                /// Cadre iPhone noir (mockup)
                 ZStack {
                     shape
-                        .stroke(isLightTheme ? Color(white: 0.3) : .white, lineWidth: 6)
+                        .stroke(Color(white: 0.25), lineWidth: 6)
                     shape
-                        .stroke(isLightTheme ? .white : .black, lineWidth: 4)
+                        .stroke(.black, lineWidth: 4)
                     shape
-                        .stroke(isLightTheme ? .white : .black, lineWidth: 6)
+                        .stroke(.black, lineWidth: 6)
                         .padding(4)
                 }
                 .padding(-7)
@@ -195,7 +196,7 @@ struct iOS26StyleOnBoarding: View {
                 currentIndex = min(currentIndex + 1, items.count - 1)
             }
         } label: {
-            Text(currentIndex == items.count - 1 ? "Get Started" : "Continue")
+            Text(currentIndex == items.count - 1 ? "Commencer" : "Continuer")
                 .fontWeight(.medium)
                 .contentTransition(.numericText())
                 .padding(.vertical, 6)

@@ -27,19 +27,19 @@ struct FirstLaunchOnboardingView: View {
             .init(
                 id: 0,
                 title: "Bienvenue sur MyFidpass",
-                subtitle: "Votre outil pour gérer vos cartes de fidélité et fidéliser vos clients.",
+                subtitle: "L’app des commerçants pour fidéliser vos clients avec des cartes dans le Wallet iPhone.",
                 screenshot: UIImage(named: "Screen1")
             ),
             .init(
                 id: 1,
-                title: "Cartes de fidélité",
-                subtitle: "Créez et personnalisez vos cartes.\nAjoutez-les au Wallet en un tap.",
+                title: "Cartes dans le Wallet",
+                subtitle: "Créez une carte fidélité (tampons ou points), personnalisez le design.\nVos clients l’ajoutent en un tap sur leur iPhone.",
                 screenshot: UIImage(named: "Screen2")
             ),
             .init(
                 id: 2,
-                title: "Tableau de bord",
-                subtitle: "Scannez les cartes, suivez les points\net envoyez des notifications.",
+                title: "Scannez et suivez",
+                subtitle: "Scannez le QR de la carte à chaque passage, ajoutez des tampons ou des points.\nConsultez l’activité et la liste des membres.",
                 screenshot: UIImage(named: "Screen4"),
                 zoomScale: 1.3,
                 zoomAnchor: .init(x: 0.5, y: 1.1)
@@ -47,15 +47,15 @@ struct FirstLaunchOnboardingView: View {
             .init(
                 id: 3,
                 title: "Notifications ciblées",
-                subtitle: "Envoyez des offres à tous vos membres\nou à des catégories précises.",
+                subtitle: "Envoyez des offres et actualités à tous vos membres ou à des catégories (ex. fidèles, inactifs).",
                 screenshot: UIImage(named: "Screen3"),
                 zoomScale: 1.3,
                 zoomAnchor: .init(x: 0.5, y: -0.3)
             ),
             .init(
                 id: 4,
-                title: "C’est parti",
-                subtitle: "Connectez-vous ou créez un compte\nsur myfidpass.fr pour commencer.",
+                title: "Prêt à commencer",
+                subtitle: "Connectez-vous ou créez votre compte commerçant sur myfidpass.fr pour activer votre carte.",
                 screenshot: UIImage(named: "Screen5")
             )
         ]

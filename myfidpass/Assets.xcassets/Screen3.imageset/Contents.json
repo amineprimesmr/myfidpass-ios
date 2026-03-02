@@ -1,15 +1,17 @@
 {
   "images" : [
     {
-      "filename" : "Screen3.png",
+      "filename" : "IMG_3256.png",
       "idiom" : "universal",
       "scale" : "1x"
     },
     {
+      "filename" : "IMG_3256 1.png",
       "idiom" : "universal",
       "scale" : "2x"
     },
     {
+      "filename" : "IMG_3256 2.png",
       "idiom" : "universal",
       "scale" : "3x"
     }
