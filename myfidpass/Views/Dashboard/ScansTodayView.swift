@@ -9,7 +9,6 @@ import SwiftUI
 import CoreData
 
 struct ScansTodayView: View {
-    @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var syncService: SyncService
     @StateObject private var dataService: DataService
 
@@ -50,11 +49,6 @@ struct ScansTodayView: View {
         }
         .navigationTitle("Scans aujourd'hui")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .cancellationAction) {
-                Button("Fermer") { dismiss() }
-            }
-        }
         .refreshable {
             await syncService.syncIfNeeded()
         }

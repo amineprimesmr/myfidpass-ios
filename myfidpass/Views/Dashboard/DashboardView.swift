@@ -32,6 +32,7 @@ struct DashboardView: View {
     @State private var selectedCategoryIdsForNotify: [String] = []
     @State private var showCategoriesManagement = false
     @State private var navigationPath = NavigationPath()
+    @State private var titleAppeared = false
 
     init(context: NSManagedObjectContext) {
         _dataService = StateObject(wrappedValue: DataService(context: context))
@@ -73,8 +74,15 @@ struct DashboardView: View {
                     }
                     .padding(AppTheme.Spacing.md)
                     .padding(.bottom, 120)
+                    .opacity(titleAppeared ? 1 : 0)
+                    .offset(y: titleAppeared ? 0 : 16)
                 }
                 .background(AppTheme.Colors.background)
+                .onAppear {
+                    withAnimation(.easeOut(duration: 0.55).delay(0.08)) {
+                        titleAppeared = true
+                    }
+                }
                 .refreshable {
                     await syncService.syncIfNeeded()
                 }
@@ -110,6 +118,8 @@ struct DashboardView: View {
             }
             .navigationTitle("Tableau de bord")
             .navigationBarTitleDisplayMode(.large)
+            .toolbarBackground(AppTheme.Colors.background, for: .navigationBar)
+            .toolbarColorScheme(.light, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {

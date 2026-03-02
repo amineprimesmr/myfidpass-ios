@@ -9,7 +9,6 @@ import SwiftUI
 import CoreData
 
 struct CategoriesManagementView: View {
-    @Environment(\.dismiss) private var dismiss
     @Environment(\.managedObjectContext) private var viewContext
     @EnvironmentObject private var syncService: SyncService
     @StateObject private var dataService: DataService
@@ -46,9 +45,6 @@ struct CategoriesManagementView: View {
             .navigationTitle("Catégories")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Fermer") { dismiss() }
-                }
                 ToolbarItem(placement: .primaryAction) {
                     Button {
                         showAddCategory = true

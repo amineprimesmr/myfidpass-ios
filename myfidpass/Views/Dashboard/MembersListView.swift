@@ -9,7 +9,6 @@ import SwiftUI
 import CoreData
 
 struct MembersListView: View {
-    @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var syncService: SyncService
     @StateObject private var dataService: DataService
     @State private var searchText = ""
@@ -58,9 +57,6 @@ struct MembersListView: View {
         .navigationTitle("Membres")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .cancellationAction) {
-                Button("Fermer") { dismiss() }
-            }
             ToolbarItem(placement: .primaryAction) {
                 NavigationLink {
                     CategoriesManagementView(context: context)
