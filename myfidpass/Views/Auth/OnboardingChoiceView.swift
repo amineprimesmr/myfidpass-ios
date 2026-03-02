@@ -12,7 +12,8 @@ struct OnboardingChoiceView: View {
     @Environment(\.openURL) private var openURL
     @EnvironmentObject var authService: AuthService
     @State private var appeared = false
-    @State private var showGoogleComingSoon = false
+    @State private var googleError: String?
+    @State private var isGoogleLoading = false
     @State private var showNoAccountInLogiciel = false
 
     var body: some View {
@@ -117,11 +118,16 @@ struct OnboardingChoiceView: View {
             .padding(.horizontal, AppTheme.Spacing.xl)
 
             Button {
-                showGoogleComingSoon = true
+                startGoogleSignIn()
             } label: {
                 HStack {
-                    Image(systemName: "globe")
-                    Text("Continuer avec Google")
+                    if isGoogleLoading {
+                        ProgressView()
+                            .tint(AppTheme.Colors.textPrimary)
+                    } else {
+                        Image(systemName: "globe")
+                        Text("Continuer avec Google")
+                    }
                 }
                 .font(AppTheme.Fonts.headline())
                 .frame(maxWidth: .infinity)
@@ -129,12 +135,13 @@ struct OnboardingChoiceView: View {
             }
             .buttonStyle(.bordered)
             .tint(AppTheme.Colors.textPrimary)
+            .disabled(isGoogleLoading)
             .padding(.horizontal, AppTheme.Spacing.xl)
         }
-        .alert("Bientôt disponible", isPresented: $showGoogleComingSoon) {
+        .alert("Connexion Google", isPresented: .init(get: { googleError != nil }, set: { if !$0 { googleError = nil } })) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text("La connexion avec Google sera disponible prochainement.")
+            if let msg = googleError { Text(msg) }
         }
         .alert("Aucun compte associé", isPresented: $showNoAccountInLogiciel) {
             Button("Ouvrir le site") {
@@ -143,6 +150,23 @@ struct OnboardingChoiceView: View {
             Button("Fermer", role: .cancel) {}
         } message: {
             Text("Aucun compte n’est rattaché à cet identifiant. Créez d’abord votre compte sur myfidpass.fr.")
+        }
+    }
+
+    private func startGoogleSignIn() {
+        isGoogleLoading = true
+        googleError = nil
+        Task {
+            do {
+                try await authService.startGoogleOAuthFlow()
+            } catch AuthError.notImplemented {
+                googleError = "La connexion avec Google sera disponible prochainement."
+            } catch AuthError.noAccountInLogiciel {
+                showNoAccountInLogiciel = true
+            } catch {
+                googleError = error.localizedDescription
+            }
+            isGoogleLoading = false
         }
     }
 }

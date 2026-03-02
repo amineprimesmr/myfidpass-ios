@@ -7,6 +7,8 @@
 
 import Foundation
 import Combine
+import AuthenticationServices
+import UIKit
 
 enum AppWebURL {
     static let createAccount = URL(string: "https://myfidpass.fr")!
@@ -90,17 +92,79 @@ final class AuthService: ObservableObject {
         }
     }
 
-    /// Connexion Google. POST /api/auth/google avec idToken. À brancher quand SDK Google est intégré.
+    /// Connexion Google. POST /api/auth/google avec idToken.
     func loginWithGoogle(idToken: String) async throws {
         let response: AuthLoginResponse = try await APIClient.shared.request(.authGoogle(idToken: idToken))
         AuthStorage.authProvider = .google
         applyAuthSuccess(response)
     }
 
+    /// Applique le JWT reçu après le redirect OAuth Google (myfidpass://auth?token=xxx), appelle /me puis met à jour la session.
+    func applyTokenFromGoogleOAuthCallback(token: String) async throws {
+        AuthStorage.authToken = token
+        AuthStorage.authProvider = .google
+        let me: AuthMeResponse = try await APIClient.shared.request(.authMe)
+        let response = AuthLoginResponse(user: me.user, token: token, businesses: me.businesses)
+        applyAuthSuccess(response)
+    }
+
+    /// Lance le flux OAuth Google (ouverture navigateur → redirect myfidpass://auth?token=…). En cas d’erreur ou d’annulation, throw.
+    func startGoogleOAuthFlow() async throws {
+        let config: AuthConfigResponse = try await APIClient.shared.request(.authConfig)
+        guard let clientId = config.googleClientId, !clientId.isEmpty else {
+            throw AuthError.notImplemented
+        }
+        let base = APIConfig.baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let redirectUri = "\(base)/api/auth/google-oauth-callback"
+        let scope = "openid email profile"
+        var comp = URLComponents(string: "https://accounts.google.com/o/oauth2/v2/auth")!
+        comp.queryItems = [
+            URLQueryItem(name: "client_id", value: clientId),
+            URLQueryItem(name: "redirect_uri", value: redirectUri),
+            URLQueryItem(name: "response_type", value: "code"),
+            URLQueryItem(name: "scope", value: scope),
+        ]
+        guard let authURL = comp.url else { throw AuthError.networkError }
+        let callbackURL = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<URL, Error>) in
+            let session = ASWebAuthenticationSession(
+                url: authURL,
+                callbackURLScheme: "myfidpass"
+            ) { callbackURL, error in
+                if let error = error {
+                    continuation.resume(throwing: error)
+                    return
+                }
+                guard let url = callbackURL else {
+                    continuation.resume(throwing: AuthError.networkError)
+                    return
+                }
+                continuation.resume(returning: url)
+            }
+            session.presentationContextProvider = self
+            session.prefersEphemeralWebBrowserSession = false
+            session.start()
+        }
+        let components = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false)
+        guard let token = components?.queryItems?.first(where: { $0.name == "token" })?.value, !token.isEmpty else {
+            let query = components?.query ?? ""
+            if query.contains("error=no_email") || query.contains("error=no_account") { throw AuthError.noAccountInLogiciel }
+            throw AuthError.networkError
+        }
+        try await applyTokenFromGoogleOAuthCallback(token: token)
+    }
+
     func logout() {
         AuthStorage.clearSession()
         currentUserEmail = nil
         currentScreen = .welcome
+    }
+}
+
+extension AuthService: ASWebAuthenticationPresentationContextProviding {
+    nonisolated func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+        let scenes = UIApplication.shared.connectedScenes
+        let windowScene = scenes.compactMap { $0 as? UIWindowScene }.first
+        return windowScene?.windows.first { $0.isKeyWindow } ?? (windowScene?.windows.first ?? UIWindow())
     }
 }
 

@@ -15,7 +15,8 @@ struct LoginView: View {
     @State private var password = ""
     @State private var isLoading = false
     @State private var errorMessage: String?
-    @State private var showGoogleComingSoon = false
+    @State private var googleError: String?
+    @State private var isGoogleLoading = false
     @State private var showNoAccountInLogiciel = false
     @FocusState private var focusedField: Field?
 
@@ -120,6 +121,11 @@ struct LoginView: View {
         } message: {
             Text("Aucun compte n’est rattaché. Créez d’abord votre compte sur myfidpass.fr.")
         }
+        .alert("Connexion Google", isPresented: .init(get: { googleError != nil }, set: { if !$0 { googleError = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            if let msg = googleError { Text(msg) }
+        }
     }
 
     private var socialSignInSection: some View {
@@ -156,16 +162,38 @@ struct LoginView: View {
             .frame(height: 50)
             .frame(maxWidth: 375)
 
-            Button("Continuer avec Google") {
-                showGoogleComingSoon = true
+            Button {
+                startGoogleSignIn()
+            } label: {
+                HStack {
+                    if isGoogleLoading {
+                        ProgressView()
+                            .tint(AppTheme.Colors.primary)
+                    } else {
+                        Text("Continuer avec Google")
+                    }
+                }
             }
             .font(AppTheme.Fonts.callout())
             .foregroundStyle(AppTheme.Colors.primary)
+            .disabled(isGoogleLoading)
         }
-        .alert("Bientôt disponible", isPresented: $showGoogleComingSoon) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text("La connexion avec Google sera disponible prochainement.")
+    }
+
+    private func startGoogleSignIn() {
+        isGoogleLoading = true
+        googleError = nil
+        Task {
+            do {
+                try await authService.startGoogleOAuthFlow()
+            } catch AuthError.notImplemented {
+                googleError = "La connexion avec Google sera disponible prochainement."
+            } catch AuthError.noAccountInLogiciel {
+                showNoAccountInLogiciel = true
+            } catch {
+                googleError = error.localizedDescription
+            }
+            isGoogleLoading = false
         }
     }
 

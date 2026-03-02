@@ -30,6 +30,12 @@ struct BusinessDTO: Decodable {
     let dashboardToken: String?
 }
 
+// MARK: - GET /api/auth/config
+
+struct AuthConfigResponse: Decodable {
+    let googleClientId: String?
+}
+
 // MARK: - GET /api/auth/me
 
 struct AuthMeResponse: Decodable {

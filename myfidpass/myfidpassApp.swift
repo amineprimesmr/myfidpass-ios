@@ -16,15 +16,25 @@ struct myfidpassApp: App {
     @StateObject private var syncService: SyncService = SyncService(context: PersistenceController.shared.container.viewContext)
     @StateObject private var appState = AppState.shared
 
+    @State private var showFirstLaunchOnboarding = !FirstLaunchOnboarding.hasCompleted
+
     var body: some Scene {
         WindowGroup {
-            RootView()
-                .environmentObject(authService)
-                .environmentObject(syncService)
-                .environmentObject(appState)
-                .environment(\.managedObjectContext, persistenceController.container.viewContext)
-                .preferredColorScheme(.light)
-                .overlay(alignment: .top) { errorBanner }
+            Group {
+                if showFirstLaunchOnboarding {
+                    FirstLaunchOnboardingView {
+                        showFirstLaunchOnboarding = false
+                    }
+                } else {
+                    RootView()
+                        .overlay(alignment: .top) { errorBanner }
+                }
+            }
+            .environmentObject(authService)
+            .environmentObject(syncService)
+            .environmentObject(appState)
+            .environment(\.managedObjectContext, persistenceController.container.viewContext)
+            .preferredColorScheme(.light)
         }
     }
 

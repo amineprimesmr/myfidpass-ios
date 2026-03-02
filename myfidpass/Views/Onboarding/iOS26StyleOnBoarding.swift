@@ -10,13 +10,24 @@ import SwiftUI
 struct iOS26StyleOnBoarding: View {
     var tint: Color = .blue
     var hideBezels: Bool = false
+    /// true = fond blanc et texte sombre (charte graphique / DA)
+    var isLightTheme: Bool = false
     var items: [Item]
     var onComplete: () -> ()
     /// View Properties
     @State private var currentIndex: Int = 0
     @State private var screenshotSize: CGSize = .zero
+
+    private var backgroundColor: Color { isLightTheme ? .white : .black }
+    private var textPrimaryColor: Color { isLightTheme ? Color(white: 0.06) : .white }
+    private var textSecondaryColor: Color { isLightTheme ? Color(white: 0.35) : .white.opacity(0.8) }
+    private var indicatorColor: Color { isLightTheme ? Color(white: 0.2) : .white }
+    private var indicatorInactiveOpacity: Double { isLightTheme ? 0.35 : 0.4 }
+
     var body: some View {
         ZStack(alignment: .bottom) {
+            backgroundColor
+                .ignoresSafeArea()
             ScreenshotView()
                 .compositingGroup()
                 .scaleEffect(
@@ -41,7 +52,7 @@ struct iOS26StyleOnBoarding: View {
             
             BackButton()
         }
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(isLightTheme ? .light : .dark)
     }
     
     /// Screenshot View
@@ -53,7 +64,7 @@ struct iOS26StyleOnBoarding: View {
             let size = $0.size
             
             Rectangle()
-                .fill(.black)
+                .fill(isLightTheme ? Color(white: 0.95) : .black)
             
             ScrollView(.horizontal) {
                 HStack(spacing: 12) {
@@ -74,7 +85,7 @@ struct iOS26StyleOnBoarding: View {
                                     .clipShape(shape)
                             } else {
                                 Rectangle()
-                                    .fill(.black)
+                                    .fill(isLightTheme ? Color(white: 0.92) : .black)
                             }
                         }
                         .frame(width: size.width, height: size.height)
@@ -95,13 +106,11 @@ struct iOS26StyleOnBoarding: View {
                 /// Device Frame UI
                 ZStack {
                     shape
-                        .stroke(.white, lineWidth: 6)
-                    
+                        .stroke(isLightTheme ? Color(white: 0.3) : .white, lineWidth: 6)
                     shape
-                        .stroke(.black, lineWidth: 4)
-                    
+                        .stroke(isLightTheme ? .white : .black, lineWidth: 4)
                     shape
-                        .stroke(.black, lineWidth: 6)
+                        .stroke(isLightTheme ? .white : .black, lineWidth: 6)
                         .padding(4)
                 }
                 .padding(-7)
@@ -132,13 +141,13 @@ struct iOS26StyleOnBoarding: View {
                                 .font(.title2)
                                 .fontWeight(.semibold)
                                 .lineLimit(1)
-                                .foregroundStyle(.white)
+                                .foregroundStyle(textPrimaryColor)
                             
                             Text(item.subtitle)
                                 .font(.callout)
                                 .lineLimit(2)
                                 .multilineTextAlignment(.center)
-                                .foregroundStyle(.white.opacity(0.8))
+                                .foregroundStyle(textSecondaryColor)
                         }
                         .frame(width: size.width)
                         .compositingGroup()
@@ -167,7 +176,7 @@ struct iOS26StyleOnBoarding: View {
                 let isActive: Bool = currentIndex == index
                 
                 Capsule()
-                    .fill(.white.opacity(isActive ? 1 : 0.4))
+                    .fill(indicatorColor.opacity(isActive ? 1 : indicatorInactiveOpacity))
                     .frame(width: isActive ? 25 : 6, height: 6)
             }
         }
@@ -207,6 +216,7 @@ struct iOS26StyleOnBoarding: View {
         } label: {
             Image(systemName: "chevron.left")
                 .font(.title3)
+                .foregroundStyle(isLightTheme ? textPrimaryColor : .white)
                 .frame(width: 20, height: 30)
         }
         .buttonStyle(.glass)
@@ -219,10 +229,9 @@ struct iOS26StyleOnBoarding: View {
     /// Variable Glass Effect Blur
     @ViewBuilder
     func VariableGlassBlur(_ radius: CGFloat) -> some View {
-        /// ADJUST THESE PROPERTIES ACCORDING TO YOUR OWN NEEDS!
-        let tint: Color = .black.opacity(0.5)
+        let glassTint: Color = isLightTheme ? .white.opacity(0.6) : .black.opacity(0.5)
         Rectangle()
-            .fill(tint)
+            .fill(glassTint)
             .glassEffect(.clear, in: .rect)
             .blur(radius: radius)
             .padding([.horizontal, .bottom], -radius * 2)

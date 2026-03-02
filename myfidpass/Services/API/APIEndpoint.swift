@@ -13,6 +13,7 @@ enum APIEndpoint {
     case authGoogle(idToken: String)
     case authApple(idToken: String, name: String?, email: String?)
     case authMe
+    case authConfig
 
     // MARK: - Sync (par business slug)
     case businessSettings(slug: String)
@@ -51,6 +52,7 @@ enum APIEndpoint {
         case .authGoogle: return "/api/auth/google"
         case .authApple: return "/api/auth/apple"
         case .authMe: return "/api/auth/me"
+        case .authConfig: return "/api/auth/config"
         case .businessSettings(let slug): return "/api/businesses/\(slug)/dashboard/settings"
         case .businessStats(let slug): return "/api/businesses/\(slug)/dashboard/stats"
         case .businessMembers(let slug, _, _): return "/api/businesses/\(slug)/dashboard/members"
@@ -74,7 +76,7 @@ enum APIEndpoint {
         case .authLogin, .authGoogle, .authApple, .scan, .deviceRegister, .notifyClients, .createCategory, .updateMemberCategories, .addMemberPoints: return "POST"
         case .updateCardSettings, .updateCategory: return "PATCH"
         case .deleteCategory: return "DELETE"
-        case .authMe, .businessSettings, .businessStats, .businessMembers, .businessTransactions, .businessCategories, .walletPass: return "GET"
+        case .authMe, .authConfig, .businessSettings, .businessStats, .businessMembers, .businessTransactions, .businessCategories, .walletPass: return "GET"
         }
     }
 
