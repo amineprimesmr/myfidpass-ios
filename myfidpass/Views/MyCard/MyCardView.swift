@@ -15,6 +15,8 @@ enum CardPreviewFormat: String, CaseIterable {
     case wallet
     case creditCard
     case stampGrid
+    /// Design dédié avec grille de tampons visible (Café des Arts).
+    case cafeDesArts
 }
 
 struct MyCardView: View {
@@ -48,6 +50,12 @@ struct MyCardView: View {
 
     /// Marge basse pour que le contenu reste visible au-dessus de la barre d’onglets.
     private let bottomScrollPadding: CGFloat = 100
+
+    /// Design dédié « Café des Arts » (grille tampons visible) quand le nom correspond.
+    private var isCafeDesArts: Bool {
+        let name = displayName.trimmingCharacters(in: .whitespaces)
+        return name.localizedCaseInsensitiveContains("Café des Arts") || name == "Cafe des Arts"
+    }
 
     var body: some View {
         NavigationStack {
@@ -143,16 +151,31 @@ struct MyCardView: View {
                     .offset(y: 6)
                     .opacity(0.4)
 
-                WalletCardPreview(
-                    displayName: displayName.isEmpty ? "Ma Carte Fidélité" : displayName,
-                    requiredStamps: Int32(requiredStamps),
-                    stampsCount: Int32(previewStampsCount),
-                    primaryColorHex: primaryHex,
-                    accentColorHex: accentHex,
-                    logoURL: logoURL.isEmpty ? nil : logoURL,
-                    stampEmoji: stampEmoji.isEmpty ? nil : stampEmoji,
-                    compact: false
-                )
+                Group {
+                    if isCafeDesArts {
+                        CafeDesArtsCardPreview(
+                            displayName: displayName.isEmpty ? "Café des Arts" : displayName,
+                            requiredStamps: Int32(requiredStamps),
+                            stampsCount: Int32(previewStampsCount),
+                            primaryColorHex: primaryHex,
+                            accentColorHex: accentHex,
+                            logoURL: logoURL.isEmpty ? nil : logoURL,
+                            stampEmoji: stampEmoji.isEmpty ? nil : stampEmoji,
+                            compact: false
+                        )
+                    } else {
+                        WalletCardPreview(
+                            displayName: displayName.isEmpty ? "Ma Carte Fidélité" : displayName,
+                            requiredStamps: Int32(requiredStamps),
+                            stampsCount: Int32(previewStampsCount),
+                            primaryColorHex: primaryHex,
+                            accentColorHex: accentHex,
+                            logoURL: logoURL.isEmpty ? nil : logoURL,
+                            stampEmoji: stampEmoji.isEmpty ? nil : stampEmoji,
+                            compact: false
+                        )
+                    }
+                }
                 .padding(.horizontal, AppTheme.Spacing.lg)
                 .frame(maxHeight: previewMaxHeight)
             }
@@ -489,7 +512,8 @@ struct MyCardView: View {
                 backgroundColor: primaryHex.hasPrefix("#") ? String(primaryHex.dropFirst()) : primaryHex,
                 foregroundColor: accentHex.hasPrefix("#") ? String(accentHex.dropFirst()) : accentHex,
                 stampEmoji: stampEmoji,
-                requiredStamps: requiredStamps
+                requiredStamps: requiredStamps,
+                template: isCafeDesArts ? "cafe" : nil
             )
             do {
                 let data = try await APIClient.shared.requestData(.walletPass(slug: slug, memberId: memberId, design: design))

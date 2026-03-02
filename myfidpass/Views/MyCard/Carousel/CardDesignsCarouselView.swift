@@ -68,7 +68,18 @@ struct CardDesignsCarouselView: View {
     @ViewBuilder
     private func cardView(preset: CardDesignPreset, cardHeight: CGFloat) -> some View {
         Group {
-            if preset.displayFormat == .stampGrid {
+            if preset.displayFormat == .cafeDesArts {
+                CafeDesArtsCardPreview(
+                    displayName: preset.displayName,
+                    requiredStamps: preset.requiredStamps,
+                    stampsCount: Int32(min(3, preset.requiredStamps)),
+                    primaryColorHex: preset.primaryHex,
+                    accentColorHex: preset.accentHex,
+                    logoURL: nil,
+                    stampEmoji: preset.stampEmoji,
+                    compact: false
+                )
+            } else if preset.displayFormat == .stampGrid {
                 StampGridStyleCardPreview(
                     displayName: preset.displayName,
                     requiredStamps: preset.requiredStamps,

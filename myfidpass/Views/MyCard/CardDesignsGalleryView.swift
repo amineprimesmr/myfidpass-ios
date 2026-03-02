@@ -49,7 +49,8 @@ enum CardDesignPresets {
             accentHex: "d7ccc8",
             stampEmoji: "☕",
             requiredStamps: 10,
-            description: "Marron chaud, emoji café — idéal pour un coffee shop."
+            description: "Marron chaud, grille de tampons — carte fidélité type café.",
+            displayFormat: .cafeDesArts
         ),
         CardDesignPreset(
             id: "cafe-modern",

@@ -102,7 +102,8 @@ enum APIEndpoint {
             if let o = offset { items.append(URLQueryItem(name: "offset", value: "\(o)")) }
             components.queryItems = items.isEmpty ? nil : items
         case .walletPass(_, _, let design):
-            var items = [URLQueryItem(name: "template", value: "classic")]
+            let template = design?.template.flatMap { $0.isEmpty ? nil : $0 } ?? "classic"
+            var items = [URLQueryItem(name: "template", value: template)]
             if let d = design {
                 if !d.organizationName.isEmpty { items.append(URLQueryItem(name: "organization_name", value: d.organizationName)) }
                 if !d.backgroundColor.isEmpty { items.append(URLQueryItem(name: "background_color", value: d.backgroundColor)) }
@@ -218,6 +219,8 @@ struct WalletPassDesign {
     var foregroundColor: String
     var stampEmoji: String
     var requiredStamps: Int
+    /// Template pass : "cafe" pour style Café des Arts (tampons + libellés café).
+    var template: String?
 }
 
 private struct ScanPayload: Encodable {

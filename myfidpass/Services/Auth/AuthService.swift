@@ -21,11 +21,12 @@ enum AuthScreen: Equatable {
 }
 
 @MainActor
-final class AuthService: ObservableObject {
+final class AuthService: NSObject, ObservableObject {
     @Published private(set) var currentScreen: AuthScreen = .welcome
     @Published private(set) var currentUserEmail: String?
 
-    init() {
+    override init() {
+        super.init()
         loadFromStorage()
     }
 
@@ -162,9 +163,22 @@ final class AuthService: ObservableObject {
 
 extension AuthService: ASWebAuthenticationPresentationContextProviding {
     nonisolated func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
-        let scenes = UIApplication.shared.connectedScenes
-        let windowScene = scenes.compactMap { $0 as? UIWindowScene }.first
-        return windowScene?.windows.first { $0.isKeyWindow } ?? (windowScene?.windows.first ?? UIWindow())
+        func getAnchor() -> ASPresentationAnchor {
+            let scenes = UIApplication.shared.connectedScenes
+            let windowScene = scenes.compactMap { $0 as? UIWindowScene }.first
+            if let ws = windowScene,
+               let w = ws.windows.first(where: { $0.isKeyWindow }) ?? ws.windows.first {
+                return w
+            }
+            if let ws = windowScene {
+                return UIWindow(windowScene: ws)
+            }
+            return UIWindow()
+        }
+        if Thread.isMainThread {
+            return getAnchor()
+        }
+        return DispatchQueue.main.sync(execute: getAnchor)
     }
 }
 
