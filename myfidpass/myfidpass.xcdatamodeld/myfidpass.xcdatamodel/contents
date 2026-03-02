@@ -1,9 +1,66 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<model type="com.apple.IDECoreDataModeler.DataModel" documentVersion="1.0" lastSavedToolsVersion="1" systemVersion="11A491" minimumToolsVersion="Automatic" sourceLanguage="Swift" usedWithCloudKit="false" userDefinedModelVersionIdentifier="">
+<model type="com.apple.IDECoreDataModeler.DataModel" documentVersion="1.0" lastSavedToolsVersion="22225" systemVersion="23F79" minimumToolsVersion="Automatic" sourceLanguage="Swift" usedWithCloudKit="NO" userDefinedModelVersionIdentifier="">
+    <entity name="Business" representedClassName="Business" syncable="YES" codeGenerationType="class">
+        <attribute name="address" optional="YES" attributeType="String"/>
+        <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="email" optional="YES" attributeType="String"/>
+        <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="logoURL" optional="YES" attributeType="String"/>
+        <attribute name="name" optional="YES" attributeType="String"/>
+        <attribute name="phone" optional="YES" attributeType="String"/>
+        <attribute name="updatedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <relationship name="cardTemplates" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="CardTemplate" inverseName="business" inverseEntity="CardTemplate"/>
+    </entity>
+    <entity name="CardTemplate" representedClassName="CardTemplate" syncable="YES" codeGenerationType="class">
+        <attribute name="accentColorHex" optional="YES" attributeType="String"/>
+        <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="displayName" optional="YES" attributeType="String"/>
+        <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="logoURL" optional="YES" attributeType="String"/>
+        <attribute name="requiredStamps" optional="YES" attributeType="Integer 32" defaultValueString="10" usesScalarValueType="YES"/>
+        <attribute name="primaryColorHex" optional="YES" attributeType="String"/>
+        <attribute name="stampEmoji" optional="YES" attributeType="String"/>
+        <attribute name="updatedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <relationship name="business" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="Business" inverseName="cardTemplates" inverseEntity="Business"/>
+        <relationship name="categories" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="MemberCategory" inverseName="template" inverseEntity="MemberCategory"/>
+        <relationship name="clientCards" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="ClientCard" inverseName="template" inverseEntity="ClientCard"/>
+    </entity>
+    <entity name="ClientCard" representedClassName="ClientCard" syncable="YES" codeGenerationType="class">
+        <attribute name="clientDisplayName" optional="YES" attributeType="String"/>
+        <attribute name="clientEmail" optional="YES" attributeType="String"/>
+        <attribute name="clientIdentifier" optional="YES" attributeType="String"/>
+        <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="qrCodeValue" optional="YES" attributeType="String"/>
+        <attribute name="stampsCount" optional="YES" attributeType="Integer 32" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="updatedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <relationship name="categories" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="MemberCategory" inverseName="members" inverseEntity="MemberCategory"/>
+        <relationship name="stamps" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="Stamp" inverseName="clientCard" inverseEntity="Stamp"/>
+        <relationship name="template" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="CardTemplate" inverseName="clientCards" inverseEntity="CardTemplate"/>
+    </entity>
     <entity name="Item" representedClassName="Item" syncable="YES" codeGenerationType="class">
         <attribute name="timestamp" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
     </entity>
+    <entity name="MemberCategory" representedClassName="MemberCategory" syncable="YES" codeGenerationType="class">
+        <attribute name="colorHex" optional="YES" attributeType="String"/>
+        <attribute name="name" optional="YES" attributeType="String"/>
+        <attribute name="serverId" optional="YES" attributeType="String"/>
+        <attribute name="sortOrder" optional="YES" attributeType="Integer 32" defaultValueString="0" usesScalarValueType="YES"/>
+        <relationship name="members" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="ClientCard" inverseName="categories" inverseEntity="ClientCard"/>
+        <relationship name="template" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="CardTemplate" inverseName="categories" inverseEntity="CardTemplate"/>
+    </entity>
+    <entity name="Stamp" representedClassName="Stamp" syncable="YES" codeGenerationType="class">
+        <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="note" optional="YES" attributeType="String"/>
+        <relationship name="clientCard" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="ClientCard" inverseName="stamps" inverseEntity="ClientCard"/>
+    </entity>
     <elements>
-        <element name="Item" positionX="-63" positionY="-18" width="128" height="44"/>
+        <element name="Business" positionX="-63" positionY="-18" width="128" height="134"/>
+        <element name="CardTemplate" positionX="-54" positionY="117" width="128" height="149"/>
+        <element name="ClientCard" positionX="-63" positionY="267" width="128" height="149"/>
+        <element name="Item" positionX="-63" positionY="417" width="128" height="44"/>
+        <element name="MemberCategory" positionX="-63" positionY="330" width="128" height="104"/>
+        <element name="Stamp" positionX="-63" positionY="462" width="128" height="89"/>
     </elements>
 </model>

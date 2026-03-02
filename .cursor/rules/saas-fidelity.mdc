@@ -1,0 +1,19 @@
+---
+description: Emplacement du SaaS / backend MyFidpass (fidelity)
+alwaysApply: true
+---
+
+# SaaS et backend MyFidpass
+
+Le **logiciel SaaS** et le **backend API** du projet MyFidpass se trouvent dans le dossier **fidelity** sur le Bureau :
+
+- **Chemin** : `~/Desktop/fidelity` (ou `/Users/amine/Desktop/fidelity`)
+- **Structure** : `fidelity/backend/` (Node.js, Express, SQLite), `fidelity/frontend/` (dashboard web)
+
+Lors de toute évolution concernant l’API (auth, sync, membres, catégories, notifications, etc.) :
+
+1. **Penser aux deux côtés** : l’app iOS (ce dépôt myfidpass) et le SaaS (fidelity sur le Bureau).
+2. **Synchroniser les contrats** : endpoints, body/query, réponses (snake_case pour l’app iOS).
+3. Si tu modifies ou ajoutes des endpoints, mettre à jour **fidelity** (backend + éventuellement frontend) en plus de l’app.
+
+Règle à retenir : **SaaS = dossier fidelity sur le Bureau**.
