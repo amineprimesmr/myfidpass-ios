@@ -41,7 +41,7 @@ enum APIEndpoint {
     case notifyClients(slug: String, message: String, categoryIds: [String]?)
 
     // MARK: - Mise à jour carte (Ma Carte → SaaS)
-    case updateCardSettings(slug: String, organizationName: String, backgroundColor: String, foregroundColor: String, requiredStamps: Int, logoBase64: String?, logoUrl: String?, locationAddress: String?, stampEmoji: String?)
+    case updateCardSettings(slug: String, organizationName: String, backgroundColor: String, foregroundColor: String, requiredStamps: Int, logoBase64: String?, logoUrl: String?, locationAddress: String?, stampEmoji: String?, cardBackgroundBase64: String?)
 
     // MARK: - Membre : ajouter des points (caisse)
     case addMemberPoints(slug: String, memberId: String, points: Int)
@@ -66,7 +66,7 @@ enum APIEndpoint {
         case .deviceRegister: return "/api/device/register"
         case .walletPass(let slug, let memberId, _): return "/api/businesses/\(slug)/members/\(memberId)/pass"
         case .notifyClients(let slug, _, _): return "/api/businesses/\(slug)/notify"
-        case .updateCardSettings(let slug, _, _, _, _, _, _, _, _): return "/api/businesses/\(slug)/dashboard/settings"
+        case .updateCardSettings(let slug, _, _, _, _, _, _, _, _, _): return "/api/businesses/\(slug)/dashboard/settings"
         case .addMemberPoints(let slug, let memberId, _): return "/api/businesses/\(slug)/members/\(memberId)/points"
         }
     }
@@ -137,7 +137,7 @@ enum APIEndpoint {
             bodyData = try encoder.encode(UpdateMemberCategoriesPayload(categoryIds: categoryIds))
         case .addMemberPoints(_, _, let points):
             bodyData = try encoder.encode(AddMemberPointsPayload(points: points))
-        case .updateCardSettings(_, let organizationName, let backgroundColor, let foregroundColor, let requiredStamps, let logoBase64, let logoUrl, let locationAddress, let stampEmoji):
+        case .updateCardSettings(_, let organizationName, let backgroundColor, let foregroundColor, let requiredStamps, let logoBase64, let logoUrl, let locationAddress, let stampEmoji, let cardBackgroundBase64):
             bodyData = try encoder.encode(UpdateCardSettingsPayload(
                 organizationName: organizationName,
                 backgroundColor: backgroundColor,
@@ -146,7 +146,8 @@ enum APIEndpoint {
                 logoBase64: logoBase64,
                 logoUrl: logoUrl,
                 locationAddress: locationAddress,
-                stampEmoji: stampEmoji
+                stampEmoji: stampEmoji,
+                cardBackgroundBase64: cardBackgroundBase64
             ))
         default:
             break
@@ -210,6 +211,7 @@ private struct UpdateCardSettingsPayload: Encodable {
     let logoUrl: String?
     let locationAddress: String?
     let stampEmoji: String?
+    let cardBackgroundBase64: String?
 }
 
 /// Design à envoyer au backend pour que le pass généré reflète la carte affichée (couleurs, nom, emoji, tampons).

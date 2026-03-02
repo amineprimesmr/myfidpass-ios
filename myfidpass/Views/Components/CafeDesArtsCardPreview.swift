@@ -101,26 +101,30 @@ struct CafeDesArtsCardPreview: View {
         )
     }
 
-    // MARK: - Grille de tampons (remplis / vides)
+    // MARK: - Grille de tampons (remplis / vides) — toujours 10 cases visibles si total = 10
 
     private var stampGridSection: some View {
         let total = max(1, Int(requiredStamps))
         let filled = min(max(0, Int(stampsCount)), total)
         let columns = min(5, max(2, total))
         let rows = (total + columns - 1) / columns
+        let useCompactStamps = total >= 10 || compact
+        let cellSize: CGFloat = useCompactStamps ? (compact ? 28 : 34) : (compact ? 32 : 42)
+        let rowSpacing: CGFloat = useCompactStamps ? (compact ? 4 : 6) : (compact ? 6 : 10)
+        let colSpacing: CGFloat = useCompactStamps ? (compact ? 4 : 6) : (compact ? 6 : 10)
 
-        return VStack(spacing: compact ? 8 : 12) {
+        return VStack(spacing: compact ? 8 : 10) {
             Text("\(total) café\(total > 1 ? "s" : "") acheté\(total > 1 ? "s" : "") = 1 offert")
                 .font(.system(size: compact ? 11 : 13, weight: .medium))
                 .foregroundStyle(primaryColor.opacity(0.9))
 
-            VStack(spacing: compact ? 6 : 10) {
+            VStack(spacing: rowSpacing) {
                 ForEach(0..<rows, id: \.self) { row in
-                    HStack(spacing: compact ? 6 : 10) {
+                    HStack(spacing: colSpacing) {
                         ForEach(0..<columns, id: \.self) { col in
                             let index = row * columns + col
                             if index < total {
-                                stampCell(filled: index < filled, index: index)
+                                stampCell(filled: index < filled, index: index, size: cellSize)
                             }
                         }
                     }
@@ -148,8 +152,8 @@ struct CafeDesArtsCardPreview: View {
         .background(accentColor.opacity(0.5))
     }
 
-    private func stampCell(filled: Bool, index: Int) -> some View {
-        let size: CGFloat = compact ? 32 : 42
+    private func stampCell(filled: Bool, index: Int, size: CGFloat? = nil) -> some View {
+        let cellSize = size ?? (compact ? 32 : 42)
         return ZStack {
             Circle()
                 .fill(filled ? primaryColor : Color.white)
@@ -160,15 +164,15 @@ struct CafeDesArtsCardPreview: View {
             if filled {
                 if let emoji = stampEmoji, !emoji.isEmpty {
                     Text(emoji)
-                        .font(.system(size: compact ? 16 : 22))
+                        .font(.system(size: cellSize * 0.5))
                 } else {
                     Image(systemName: stampIcon)
-                        .font(.system(size: compact ? 14 : 20))
+                        .font(.system(size: cellSize * 0.45))
                         .foregroundStyle(.white)
                 }
             }
         }
-        .frame(width: size, height: size)
+        .frame(width: cellSize, height: cellSize)
     }
 
     // MARK: - Pied de carte

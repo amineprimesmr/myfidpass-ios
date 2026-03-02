@@ -10,9 +10,11 @@ import UIKit
 enum CardLogoStorage {
     private static let subfolder = "CardLogos"
     private static let filename = "cardLogo.png"
+    private static let cardBackgroundFilename = "cardBackground.png"
 
     /// Chemin relatif pour stockage persistant (évite chemins absolus qui changent après mise à jour app).
     static let relativeLogoPath = "\(subfolder)/\(filename)"
+    static let relativeCardBackgroundPath = "\(subfolder)/\(cardBackgroundFilename)"
 
     static var directoryURL: URL {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
@@ -30,6 +32,18 @@ enum CardLogoStorage {
         do {
             try data.write(to: url)
             return relativeLogoPath
+        } catch {
+            return nil
+        }
+    }
+
+    /// Enregistre l’image de fond de carte (strip Wallet) et retourne le chemin relatif.
+    static func saveCardBackground(_ image: UIImage) -> String? {
+        let url = directoryURL.appendingPathComponent(cardBackgroundFilename)
+        guard let data = image.pngData() else { return nil }
+        do {
+            try data.write(to: url)
+            return relativeCardBackgroundPath
         } catch {
             return nil
         }

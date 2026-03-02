@@ -477,7 +477,8 @@ struct ProfileView: View {
                     logoBase64: logoBase64,
                     logoUrl: logoUrl,
                     locationAddress: address.isEmpty ? nil : address.trimmingCharacters(in: .whitespaces),
-                    stampEmoji: t.stampEmoji.flatMap { $0.isEmpty ? nil : $0 }
+                    stampEmoji: t.stampEmoji.flatMap { $0.isEmpty ? nil : $0 },
+                    cardBackgroundBase64: nil
                 )) as EmptyResponse
                 // Après envoi réussi du logo : utiliser l’URL API pour affichage persistant (plus de dépendance au chemin local).
                 if logoBase64 != nil {

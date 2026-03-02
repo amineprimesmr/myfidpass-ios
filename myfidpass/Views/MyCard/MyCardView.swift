@@ -30,6 +30,9 @@ struct MyCardView: View {
     @State private var logoURL: String = ""
     @State private var stampEmoji: String = ""
     @State private var logoPhotoItem: PhotosPickerItem?
+    /// Image de fond de carte (strip Wallet) — chemin local après import.
+    @State private var cardBackgroundImagePath: String?
+    @State private var cardBackgroundPhotoItem: PhotosPickerItem?
     /// Aperçu simulé : nombre de tampons affichés sur la carte (0 à requiredStamps).
     @State private var previewStampsCount: Int = 0
     @State private var savedFeedback = false
@@ -241,6 +244,7 @@ struct MyCardView: View {
             VStack(alignment: .leading, spacing: 20) {
                 editNameBlock
                 editLogoBlock
+                editBackgroundImageBlock
                 editStampEmojiBlock
                 editStampsBlock
                 editColorsBlock
@@ -348,6 +352,39 @@ struct MyCardView: View {
                     Button(role: .destructive) {
                         logoURL = ""
                         logoPhotoItem = nil
+                    } label: {
+                        Label("Supprimer", systemImage: "trash")
+                            .font(.caption)
+                    }
+                }
+            }
+        }
+    }
+
+    private var editBackgroundImageBlock: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("Image de fond de carte", systemImage: "photo.fill")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(AppTheme.Colors.textPrimary)
+            Text("Utilisée comme bandeau sur la carte dans le Wallet (optionnel).")
+                .font(.caption)
+                .foregroundStyle(AppTheme.Colors.textSecondary)
+            HStack(spacing: 12) {
+                PhotosPicker(
+                    selection: $cardBackgroundPhotoItem,
+                    matching: .images,
+                    photoLibrary: .shared()
+                ) {
+                    Label("Choisir une image", systemImage: "photo.on.rectangle.angled")
+                        .font(.callout)
+                }
+                .onChange(of: cardBackgroundPhotoItem) { _, new in
+                    Task { await loadCardBackgroundFromPicker(new) }
+                }
+                if cardBackgroundImagePath != nil {
+                    Button(role: .destructive) {
+                        cardBackgroundImagePath = nil
+                        cardBackgroundPhotoItem = nil
                     } label: {
                         Label("Supprimer", systemImage: "trash")
                             .font(.caption)
@@ -687,6 +724,17 @@ struct MyCardView: View {
         }
     }
 
+    private func loadCardBackgroundFromPicker(_ item: PhotosPickerItem?) async {
+        guard let item else { return }
+        guard let data = try? await item.loadTransferable(type: Data.self),
+              let image = UIImage(data: data) else { return }
+        let path = CardLogoStorage.saveCardBackground(image)
+        await MainActor.run {
+            cardBackgroundImagePath = path
+            if path != nil { cardBackgroundPhotoItem = nil }
+        }
+    }
+
     private func loadCurrentTemplate() {
         let t = dataService.createOrGetCurrentCardTemplate()
         displayName = t.displayName ?? "Ma Carte Fidélité"
@@ -743,6 +791,10 @@ struct MyCardView: View {
         if let slug = AuthStorage.currentBusinessSlug {
             var logoBase64: String? = nil
             var logoUrl: String? = nil
+            var cardBackgroundBase64: String? = nil
+            if let bgPath = cardBackgroundImagePath, !bgPath.isEmpty {
+                cardBackgroundBase64 = CardLogoStorage.compressedBase64FromFile(path: bgPath)
+            }
             if !logoURL.isEmpty {
                 let trimmed = logoURL.trimmingCharacters(in: .whitespaces)
                 if trimmed.lowercased().hasPrefix("http://") || trimmed.lowercased().hasPrefix("https://") {
@@ -766,7 +818,8 @@ struct MyCardView: View {
                     logoBase64: logoBase64,
                     logoUrl: logoUrl,
                     locationAddress: nil,
-                    stampEmoji: stampEmoji.isEmpty ? nil : String(stampEmoji.prefix(8))
+                    stampEmoji: stampEmoji.isEmpty ? nil : String(stampEmoji.prefix(8)),
+                    cardBackgroundBase64: cardBackgroundBase64
                 )) as EmptyResponse
                 await MainActor.run { saveLogoError = nil }
                 if let sentBase64 = logoBase64, !sentBase64.isEmpty {
