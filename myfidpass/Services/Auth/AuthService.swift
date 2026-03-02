@@ -144,6 +144,11 @@ final class AuthService: NSObject, ObservableObject {
             session.presentationContextProvider = self
             session.prefersEphemeralWebBrowserSession = false
             session.start()
+            // Sur iPad (et simulateur), la fenêtre OAuth peut ne pas s'afficher : après 12 s on annule pour débloquer l'UI.
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(12))
+                session.cancel()
+            }
         }
         let components = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false)
         guard let token = components?.queryItems?.first(where: { $0.name == "token" })?.value, !token.isEmpty else {
@@ -163,18 +168,31 @@ final class AuthService: NSObject, ObservableObject {
 
 extension AuthService: ASWebAuthenticationPresentationContextProviding {
     nonisolated func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
-        DispatchQueue.main.sync {
+        func anchor() -> ASPresentationAnchor {
             MainActor.assumeIsolated {
                 let scenes = UIApplication.shared.connectedScenes
-                guard let windowScene = scenes.compactMap({ $0 as? UIWindowScene }).first else {
-                    fatalError("No window scene available for OAuth presentation")
+                let windowScenes = scenes.compactMap { $0 as? UIWindowScene }
+                for ws in windowScenes {
+                    if let w = ws.windows.first(where: { $0.isKeyWindow }) ?? ws.windows.first {
+                        return w
+                    }
                 }
-                if let w = windowScene.windows.first(where: { $0.isKeyWindow }) ?? windowScene.windows.first {
+                // Toujours utiliser init(windowScene:) pour éviter la dépréciation iOS 26 de UIWindow().
+                if let w = windowScenes.flatMap({ Array($0.windows) }).first {
                     return w
                 }
-                return UIWindow(windowScene: windowScene)
+                if let scene = windowScenes.first {
+                    return UIWindow(windowScene: scene)
+                }
+                // Fallback extrême (aucune scène) : requis par le protocole.
+                return UIWindow()
             }
         }
+        // Ne jamais faire main.sync depuis le main thread → deadlock puis SIGTERM/watchdog.
+        if Thread.isMainThread {
+            return anchor()
+        }
+        return DispatchQueue.main.sync(execute: anchor)
     }
 }
 

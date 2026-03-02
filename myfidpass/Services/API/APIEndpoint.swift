@@ -27,6 +27,7 @@ enum APIEndpoint {
     case updateMemberCategories(slug: String, memberId: String, categoryIds: [String])
 
     // MARK: - Scan
+    case scanLookup(slug: String, barcode: String)
     case scan(slug: String, barcode: String, visit: Bool, points: Int?, amountEur: Double?)
 
     // MARK: - Notifications
@@ -41,10 +42,12 @@ enum APIEndpoint {
     case notifyClients(slug: String, message: String, categoryIds: [String]?)
 
     // MARK: - Mise à jour carte (Ma Carte → SaaS)
-    case updateCardSettings(slug: String, organizationName: String, backgroundColor: String, foregroundColor: String, requiredStamps: Int, logoBase64: String?, logoUrl: String?, locationAddress: String?, stampEmoji: String?, cardBackgroundBase64: String?)
+    case updateCardSettings(slug: String, organizationName: String, backgroundColor: String, foregroundColor: String, requiredStamps: Int, logoBase64: String?, logoUrl: String?, locationAddress: String?, stampEmoji: String?, cardBackgroundBase64: String?, programType: String?, pointsPerEuro: Int?, pointsPerVisit: Int?, pointsMinAmountEur: Double?, pointsRewardTiers: [PointsRewardTierPayload]?, stampRewardLabel: String?, expiryMonths: Int?, sector: String?)
 
     // MARK: - Membre : ajouter des points (caisse)
     case addMemberPoints(slug: String, memberId: String, points: Int)
+    // MARK: - Membre : utiliser une récompense (tampons → 0, ou points → déduction)
+    case redeemReward(slug: String, memberId: String, type: RedeemType)
 
     var path: String {
         switch self {
@@ -62,21 +65,23 @@ enum APIEndpoint {
         case .updateCategory(let slug, let categoryId, _, _, _): return "/api/businesses/\(slug)/dashboard/categories/\(categoryId)"
         case .deleteCategory(let slug, let categoryId): return "/api/businesses/\(slug)/dashboard/categories/\(categoryId)"
         case .updateMemberCategories(let slug, let memberId, _): return "/api/businesses/\(slug)/dashboard/members/\(memberId)/categories"
+        case .scanLookup(let slug, _): return "/api/businesses/\(slug)/integration/lookup"
         case .scan(let slug, _, _, _, _): return "/api/businesses/\(slug)/integration/scan"
         case .deviceRegister: return "/api/device/register"
         case .walletPass(let slug, let memberId, _): return "/api/businesses/\(slug)/members/\(memberId)/pass"
         case .notifyClients(let slug, _, _): return "/api/businesses/\(slug)/notify"
-        case .updateCardSettings(let slug, _, _, _, _, _, _, _, _, _): return "/api/businesses/\(slug)/dashboard/settings"
+        case .updateCardSettings(let slug, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _): return "/api/businesses/\(slug)/dashboard/settings"
         case .addMemberPoints(let slug, let memberId, _): return "/api/businesses/\(slug)/members/\(memberId)/points"
+        case .redeemReward(let slug, let memberId, _): return "/api/businesses/\(slug)/members/\(memberId)/redeem"
         }
     }
 
     var method: String {
         switch self {
-        case .authLogin, .authGoogle, .authApple, .scan, .deviceRegister, .notifyClients, .createCategory, .updateMemberCategories, .addMemberPoints: return "POST"
+        case .authLogin, .authGoogle, .authApple, .scan, .scanLookup, .deviceRegister, .notifyClients, .createCategory, .updateMemberCategories, .addMemberPoints, .redeemReward: return "POST"
         case .updateCardSettings, .updateCategory: return "PATCH"
         case .deleteCategory: return "DELETE"
-        case .authMe, .authConfig, .businessSettings, .businessStats, .businessMembers, .businessTransactions, .businessCategories, .walletPass: return "GET"
+        case .authMe, .authConfig, .businessSettings, .businessStats, .businessMembers, .businessTransactions, .businessCategories, .walletPass, .scanLookup: return "GET"
         }
     }
 
@@ -101,6 +106,8 @@ enum APIEndpoint {
             if let l = limit { items.append(URLQueryItem(name: "limit", value: "\(l)")) }
             if let o = offset { items.append(URLQueryItem(name: "offset", value: "\(o)")) }
             components.queryItems = items.isEmpty ? nil : items
+        case .scanLookup(_, let barcode):
+            components.queryItems = [URLQueryItem(name: "barcode", value: barcode)]
         case .walletPass(_, _, let design):
             let template = design?.template.flatMap { $0.isEmpty ? nil : $0 } ?? "classic"
             var items = [URLQueryItem(name: "template", value: template)]
@@ -137,7 +144,9 @@ enum APIEndpoint {
             bodyData = try encoder.encode(UpdateMemberCategoriesPayload(categoryIds: categoryIds))
         case .addMemberPoints(_, _, let points):
             bodyData = try encoder.encode(AddMemberPointsPayload(points: points))
-        case .updateCardSettings(_, let organizationName, let backgroundColor, let foregroundColor, let requiredStamps, let logoBase64, let logoUrl, let locationAddress, let stampEmoji, let cardBackgroundBase64):
+        case .redeemReward(_, _, let type):
+            bodyData = try encoder.encode(RedeemPayload(type: type))
+        case .updateCardSettings(_, let organizationName, let backgroundColor, let foregroundColor, let requiredStamps, let logoBase64, let logoUrl, let locationAddress, let stampEmoji, let cardBackgroundBase64, let programType, let pointsPerEuro, let pointsPerVisit, let pointsMinAmountEur, let pointsRewardTiers, let stampRewardLabel, let expiryMonths, let sector):
             bodyData = try encoder.encode(UpdateCardSettingsPayload(
                 organizationName: organizationName,
                 backgroundColor: backgroundColor,
@@ -147,7 +156,15 @@ enum APIEndpoint {
                 logoUrl: logoUrl,
                 locationAddress: locationAddress,
                 stampEmoji: stampEmoji,
-                cardBackgroundBase64: cardBackgroundBase64
+                cardBackgroundBase64: cardBackgroundBase64,
+                programType: programType,
+                pointsPerEuro: pointsPerEuro,
+                pointsPerVisit: pointsPerVisit,
+                pointsMinAmountEur: pointsMinAmountEur,
+                pointsRewardTiers: pointsRewardTiers,
+                stampRewardLabel: stampRewardLabel,
+                expiryMonths: expiryMonths,
+                sector: sector
             ))
         default:
             break
@@ -202,6 +219,33 @@ private struct AddMemberPointsPayload: Encodable {
     let points: Int
 }
 
+/// Type de récompense à utiliser (tampons = remise à 0, points = déduction).
+enum RedeemType {
+    case stamps
+    case points(pointsToDeduct: Int)
+}
+
+private struct RedeemPayload: Encodable {
+    let type: String
+    let points: Int?
+
+    init(type: RedeemType) {
+        switch type {
+        case .stamps:
+            self.type = "stamps"
+            self.points = nil
+        case .points(let n):
+            self.type = "points"
+            self.points = n
+        }
+    }
+}
+
+struct PointsRewardTierPayload: Encodable {
+    let points: Int
+    let label: String
+}
+
 private struct UpdateCardSettingsPayload: Encodable {
     let organizationName: String
     let backgroundColor: String
@@ -212,6 +256,14 @@ private struct UpdateCardSettingsPayload: Encodable {
     let locationAddress: String?
     let stampEmoji: String?
     let cardBackgroundBase64: String?
+    let programType: String?
+    let pointsPerEuro: Int?
+    let pointsPerVisit: Int?
+    let pointsMinAmountEur: Double?
+    let pointsRewardTiers: [PointsRewardTierPayload]?
+    let stampRewardLabel: String?
+    let expiryMonths: Int?
+    let sector: String?
 }
 
 /// Design à envoyer au backend pour que le pass généré reflète la carte affichée (couleurs, nom, emoji, tampons).

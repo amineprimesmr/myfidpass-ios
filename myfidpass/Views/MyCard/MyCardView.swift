@@ -48,6 +48,16 @@ struct MyCardView: View {
     @State private var saveLogoError: String?
     @State private var showOnboardingStyle = false
     @State private var showDesignsGallery = false
+    // Règles de la carte (points vs tampons, récompenses)
+    @State private var programType: String = "stamps"
+    @State private var pointsPerEuro: Int = 1
+    @State private var pointsPerVisit: Int = 0
+    @State private var pointsMinAmountEur: String = ""
+    @State private var pointsRewardTiersText: String = ""
+    @State private var stampRewardLabel: String = ""
+    @State private var expiryMonths: String = ""
+    @State private var sector: String = ""
+    @State private var rulesLoadedFromAPI = false
 
     init(context: NSManagedObjectContext) {
         _dataService = StateObject(wrappedValue: DataService(context: context))
@@ -112,6 +122,11 @@ struct MyCardView: View {
                 }
             }
             .onAppear { loadCurrentTemplate() }
+            .onChange(of: isEditingCard) { _, isEditing in
+                if isEditing && !rulesLoadedFromAPI {
+                    Task { await loadRulesFromAPI() }
+                }
+            }
             .onChange(of: requiredStamps) { _, new in
                 if previewStampsCount > new { previewStampsCount = new }
             }
@@ -244,6 +259,7 @@ struct MyCardView: View {
                 .padding(.bottom, 12)
 
             VStack(alignment: .leading, spacing: 20) {
+                editRulesBlock
                 editNameBlock
                 editLogoBlock
                 editBackgroundImageBlock
@@ -298,6 +314,77 @@ struct MyCardView: View {
             .padding(.horizontal, AppTheme.Spacing.lg)
             .padding(.top, 20)
             .padding(.bottom, 8)
+        }
+    }
+
+    private var editRulesBlock: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("Règles de la carte", systemImage: "list.bullet.rectangle")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(AppTheme.Colors.textPrimary)
+            Text("Type de programme : points (ex. 1 pt/€) ou tampons (ex. 1 tampon/visite, 10 = récompense).")
+                .font(.caption)
+                .foregroundStyle(AppTheme.Colors.textSecondary)
+            Picker("Type", selection: $programType) {
+                Text("Points").tag("points")
+                Text("Tampons").tag("stamps")
+            }
+            .pickerStyle(.segmented)
+
+            if programType == "points" {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("Points par €")
+                        Spacer()
+                        TextField("1", value: $pointsPerEuro, format: .number)
+                            .keyboardType(.numberPad)
+                            .multilineTextAlignment(.trailing)
+                            .frame(width: 60)
+                    }
+                    .font(.subheadline)
+                    HStack {
+                        Text("Points par passage")
+                        Spacer()
+                        TextField("0", value: $pointsPerVisit, format: .number)
+                            .keyboardType(.numberPad)
+                            .multilineTextAlignment(.trailing)
+                            .frame(width: 60)
+                    }
+                    .font(.subheadline)
+                    TextField("Montant min. (€) pour gagner des points", text: $pointsMinAmountEur)
+                        .keyboardType(.decimalPad)
+                        .textFieldStyle(.plain)
+                        .padding(10)
+                        .background(AppTheme.Colors.background)
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                    Text("Paliers (ex. 100:5€ de réduction)")
+                        .font(.caption)
+                        .foregroundStyle(AppTheme.Colors.textSecondary)
+                    TextEditor(text: $pointsRewardTiersText)
+                        .frame(minHeight: 60)
+                        .padding(8)
+                        .background(AppTheme.Colors.background)
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                }
+            } else {
+                TextField("Récompense affichée (ex. 1 café offert)", text: $stampRewardLabel)
+                    .textFieldStyle(.plain)
+                    .padding(10)
+                    .background(AppTheme.Colors.background)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+            }
+
+            HStack {
+                Text("Expiration (mois)")
+                    .font(.subheadline)
+                Spacer()
+                TextField("Jamais", text: $expiryMonths)
+                    .keyboardType(.numberPad)
+                    .multilineTextAlignment(.trailing)
+                    .frame(width: 70)
+            }
+            .font(.caption)
+            .foregroundStyle(AppTheme.Colors.textSecondary)
         }
     }
 
@@ -753,6 +840,31 @@ struct MyCardView: View {
         previewStampsCount = min(3, requiredStamps)
     }
 
+    private func loadRulesFromAPI() async {
+        guard let slug = AuthStorage.currentBusinessSlug else { return }
+        do {
+            let settings = try await APIClient.shared.request(APIEndpoint.businessSettings(slug: slug)) as BusinessSettingsResponse
+            await MainActor.run {
+                programType = (settings.programType ?? "stamps").lowercased()
+                if programType != "points" && programType != "stamps" { programType = "stamps" }
+                pointsPerEuro = settings.pointsPerEuro ?? 1
+                pointsPerVisit = settings.pointsPerVisit ?? 0
+                pointsMinAmountEur = settings.pointsMinAmountEur.map { String(format: "%.2f", $0) } ?? ""
+                if let tiers = settings.pointsRewardTiers, !tiers.isEmpty {
+                    pointsRewardTiersText = tiers.map { "\($0.points):\($0.label)" }.joined(separator: "\n")
+                } else {
+                    pointsRewardTiersText = ""
+                }
+                stampRewardLabel = settings.stampRewardLabel ?? ""
+                expiryMonths = settings.expiryMonths.map { String($0) } ?? ""
+                sector = settings.sector ?? ""
+                rulesLoadedFromAPI = true
+            }
+        } catch {
+            await MainActor.run { rulesLoadedFromAPI = true }
+        }
+    }
+
     /// Applique un design de la galerie à la carte, enregistre en local et pousse vers le backend (affiché dans le Wallet).
     /// On met à jour le template Core Data tout de suite pour que loadCurrentTemplate() (onAppear au retour) ne réécrive pas avec d’anciennes données.
     private func applyDesignFromGallery(_ preset: CardDesignPreset) {
@@ -817,6 +929,24 @@ struct MyCardView: View {
             } else {
                 logoBase64 = ""
             }
+            var rewardTiers: [PointsRewardTierPayload]? = nil
+            if !pointsRewardTiersText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                let lines = pointsRewardTiersText.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+                var tiers: [PointsRewardTierPayload] = []
+                for line in lines {
+                    if let colon = line.firstIndex(of: ":") {
+                        let ptsStr = String(line[..<colon]).trimmingCharacters(in: .whitespaces)
+                        let label = String(line[line.index(after: colon)...]).trimmingCharacters(in: .whitespaces)
+                        if let pts = Int(ptsStr), pts >= 0 {
+                            tiers.append(PointsRewardTierPayload(points: pts, label: label))
+                        }
+                    }
+                }
+                if !tiers.isEmpty { rewardTiers = tiers }
+            }
+            let ptsMinEur: Double? = Double(pointsMinAmountEur.trimmingCharacters(in: .whitespaces)).flatMap { $0 >= 0 ? $0 : nil }
+            let expMonths: Int? = Int(expiryMonths.trimmingCharacters(in: .whitespaces)).flatMap { $0 >= 0 ? $0 : nil }
+            let sectorVal = sector.trimmingCharacters(in: .whitespaces)
             do {
                 _ = try await APIClient.shared.request(APIEndpoint.updateCardSettings(
                     slug: slug,
@@ -828,7 +958,15 @@ struct MyCardView: View {
                     logoUrl: logoUrl,
                     locationAddress: nil,
                     stampEmoji: stampEmoji.isEmpty ? nil : String(stampEmoji.prefix(8)),
-                    cardBackgroundBase64: cardBackgroundBase64
+                    cardBackgroundBase64: cardBackgroundBase64,
+                    programType: programType,
+                    pointsPerEuro: pointsPerEuro,
+                    pointsPerVisit: pointsPerVisit,
+                    pointsMinAmountEur: ptsMinEur,
+                    pointsRewardTiers: rewardTiers,
+                    stampRewardLabel: stampRewardLabel.isEmpty ? nil : String(stampRewardLabel.prefix(120)),
+                    expiryMonths: expMonths,
+                    sector: sectorVal.isEmpty ? nil : sectorVal
                 )) as EmptyResponse
                 await MainActor.run {
                     saveLogoError = nil

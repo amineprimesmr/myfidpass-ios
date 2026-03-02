@@ -64,9 +64,22 @@ struct BusinessSettingsResponse: Decodable {
     let locationAddress: String?
     let requiredStamps: Int?
     let stampEmoji: String?
+    let stampRewardLabel: String?
+    let programType: String?
+    let pointsPerEuro: Int?
+    let pointsPerVisit: Int?
+    let pointsMinAmountEur: Double?
+    let pointsRewardTiers: [PointsRewardTierDTO]?
+    let expiryMonths: Int?
+    let sector: String?
     let logoUrl: String?
     /// Date ISO8601 de la dernière mise à jour du logo côté serveur (pour last-write-wins avec l’app).
     let logoUpdatedAt: String?
+}
+
+struct PointsRewardTierDTO: Decodable {
+    let points: Int
+    let label: String
 }
 
 // MARK: - GET .../dashboard/stats
@@ -116,6 +129,12 @@ struct TransactionDTO: Decodable {
     let createdAt: String?
 }
 
+// MARK: - GET .../integration/lookup (identifier un membre sans créditer)
+
+struct ScanLookupResponse: Decodable {
+    let member: ScanMemberDTO
+}
+
 // MARK: - POST .../integration/scan
 
 struct ScanResponse: Decodable {
@@ -129,6 +148,18 @@ struct ScanMemberDTO: Decodable {
     let name: String?
     let email: String?
     let points: Int?
+    let lastVisitAt: String?
+}
+
+// MARK: - POST .../members/:memberId/redeem
+
+struct RedeemResponse: Decodable {
+    let ok: Bool?
+    let type: String?
+    let newPoints: Int?
+    let previousPoints: Int?
+    let pointsDeducted: Int?
+    let message: String?
 }
 
 // MARK: - Catégories de membres (GET .../dashboard/categories)

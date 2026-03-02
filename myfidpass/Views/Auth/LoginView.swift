@@ -165,17 +165,24 @@ struct LoginView: View {
             Button {
                 startGoogleSignIn()
             } label: {
-                HStack {
+                HStack(spacing: 10) {
                     if isGoogleLoading {
                         ProgressView()
                             .tint(AppTheme.Colors.primary)
+                        Text("Ouverture de Google…")
+                            .font(AppTheme.Fonts.callout())
+                            .foregroundStyle(AppTheme.Colors.primary)
                     } else {
+                        Image(systemName: "globe")
                         Text("Continuer avec Google")
                     }
                 }
+                .frame(maxWidth: .infinity)
+                .frame(minHeight: 50)
             }
             .font(AppTheme.Fonts.callout())
             .foregroundStyle(AppTheme.Colors.primary)
+            .buttonStyle(.bordered)
             .disabled(isGoogleLoading)
         }
     }
@@ -191,7 +198,12 @@ struct LoginView: View {
             } catch AuthError.noAccountInLogiciel {
                 showNoAccountInLogiciel = true
             } catch {
-                googleError = error.localizedDescription
+                let ns = error as NSError
+                if ns.domain == "com.apple.AuthenticationServices.WebAuthenticationSession" && ns.code == 1 {
+                    googleError = "Connexion annulée. Si la fenêtre ne s’est pas ouverte (iPad), réessayez."
+                } else {
+                    googleError = error.localizedDescription
+                }
             }
             isGoogleLoading = false
         }

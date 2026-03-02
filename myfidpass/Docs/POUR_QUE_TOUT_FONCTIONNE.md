@@ -41,6 +41,8 @@ Le backend (api.myfidpass.fr) doit exposer les endpoints suivants avec les **mé
 
 Sans ces 7 points, au moins une des fonctions de base (connexion, tableau de bord, scan) ne fonctionnera pas.
 
+**Règles de la carte (production)** : `GET/PATCH .../dashboard/settings` et `PATCH .../slug` exposent désormais `program_type`, `points_per_euro`, `points_per_visit`, `points_min_amount_eur`, `points_reward_tiers`, `stamp_reward_label`, `expiry_months`, `sector`. L’app et le SaaS envoient/reçoivent ces champs ; la sync (GET settings) et la sauvegarde (PATCH) restent alignées.
+
 ### Pour les autres fonctions
 
 | Endpoint | Rôle |

@@ -17,6 +17,8 @@ struct MemberDetailView: View {
     @State private var showAddPointsSheet = false
     @State private var pointsToAdd = "1"
     @State private var isAddingPoints = false
+    @State private var isRedeeming = false
+    @State private var pointsToRedeem = ""
     @State private var errorMessage: String?
     @State private var successMessage: String?
 
@@ -68,6 +70,29 @@ struct MemberDetailView: View {
                 }
             } header: {
                 Text("Actions")
+            }
+
+            if template != nil {
+                let required = Int(template!.requiredStamps)
+                let hasEnoughStamps = Int(card.stampsCount) >= required && required > 0
+                Section {
+                    if hasEnoughStamps {
+                        Button {
+                            redeemStamps()
+                        } label: {
+                            Label("Utiliser la récompense (tampons)", systemImage: "gift.fill")
+                        }
+                        .disabled(isRedeeming)
+                    }
+                    HStack {
+                        TextField("Points à déduire", text: $pointsToRedeem)
+                            .keyboardType(.numberPad)
+                        Button("Utiliser") { redeemPoints() }
+                            .disabled(isRedeeming || pointsToRedeem.trimmingCharacters(in: .whitespaces).isEmpty)
+                    }
+                } header: {
+                    Text("Utiliser une récompense")
+                }
             }
         }
         .listStyle(.insetGrouped)
@@ -141,6 +166,54 @@ struct MemberDetailView: View {
                 }
             }
             await MainActor.run { isAddingPoints = false }
+        }
+    }
+
+    private func redeemStamps() {
+        guard let slug = AuthStorage.currentBusinessSlug, let memberId = card.qrCodeValue else { return }
+        isRedeeming = true
+        Task {
+            do {
+                _ = try await APIClient.shared.request(.redeemReward(slug: slug, memberId: memberId, type: .stamps)) as RedeemResponse
+                await MainActor.run {
+                    card.stampsCount = 0
+                    card.updatedAt = Date()
+                    try? context.save()
+                    successMessage = "Récompense tampons utilisée."
+                }
+                await syncService.syncIfNeeded()
+            } catch {
+                await MainActor.run { errorMessage = (error as? APIError)?.errorDescription ?? "Impossible d'utiliser la récompense." }
+            }
+            await MainActor.run { isRedeeming = false }
+        }
+    }
+
+    private func redeemPoints() {
+        guard let slug = AuthStorage.currentBusinessSlug, let memberId = card.qrCodeValue else { return }
+        let value = pointsToRedeem.trimmingCharacters(in: .whitespaces)
+        guard let points = Int(value), points > 0 else {
+            errorMessage = "Saisissez un nombre de points à déduire."
+            return
+        }
+        isRedeeming = true
+        Task {
+            do {
+                let response = try await APIClient.shared.request(.redeemReward(slug: slug, memberId: memberId, type: .points(pointsToDeduct: points))) as RedeemResponse
+                await MainActor.run {
+                    if let newPts = response.newPoints {
+                        card.stampsCount = Int32(newPts)
+                        card.updatedAt = Date()
+                        try? context.save()
+                    }
+                    pointsToRedeem = ""
+                    successMessage = "Points utilisés."
+                }
+                await syncService.syncIfNeeded()
+            } catch {
+                await MainActor.run { errorMessage = (error as? APIError)?.errorDescription ?? "Impossible d'utiliser les points." }
+            }
+            await MainActor.run { isRedeeming = false }
         }
     }
 }
