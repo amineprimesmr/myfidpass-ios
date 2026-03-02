@@ -33,6 +33,8 @@ struct MyCardView: View {
     /// Image de fond de carte (strip Wallet) — chemin local après import.
     @State private var cardBackgroundImagePath: String?
     @State private var cardBackgroundPhotoItem: PhotosPickerItem?
+    /// True si l'utilisateur a supprimé l'image de fond (pour envoyer "" au backend à l'enregistrement).
+    @State private var cardBackgroundWasRemoved = false
     /// Aperçu simulé : nombre de tampons affichés sur la carte (0 à requiredStamps).
     @State private var previewStampsCount: Int = 0
     @State private var savedFeedback = false
@@ -369,27 +371,29 @@ struct MyCardView: View {
             Text("Utilisée comme bandeau sur la carte dans le Wallet (optionnel).")
                 .font(.caption)
                 .foregroundStyle(AppTheme.Colors.textSecondary)
-            HStack(spacing: 12) {
-                PhotosPicker(
-                    selection: $cardBackgroundPhotoItem,
-                    matching: .images,
-                    photoLibrary: .shared()
-                ) {
-                    Label("Choisir une image", systemImage: "photo.on.rectangle.angled")
-                        .font(.callout)
+            PhotosPicker(
+                selection: $cardBackgroundPhotoItem,
+                matching: .images,
+                photoLibrary: .shared()
+            ) {
+                Label("Choisir une image", systemImage: "photo.on.rectangle.angled")
+                    .font(.callout)
+            }
+            .onChange(of: cardBackgroundPhotoItem) { _, new in
+                Task { await loadCardBackgroundFromPicker(new) }
+            }
+            if cardBackgroundImagePath != nil {
+                Button(role: .destructive) {
+                    cardBackgroundImagePath = nil
+                    cardBackgroundPhotoItem = nil
+                    cardBackgroundWasRemoved = true
+                } label: {
+                    Label("Supprimer l'image de fond", systemImage: "trash.fill")
+                        .font(.subheadline.weight(.medium))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
                 }
-                .onChange(of: cardBackgroundPhotoItem) { _, new in
-                    Task { await loadCardBackgroundFromPicker(new) }
-                }
-                if cardBackgroundImagePath != nil {
-                    Button(role: .destructive) {
-                        cardBackgroundImagePath = nil
-                        cardBackgroundPhotoItem = nil
-                    } label: {
-                        Label("Supprimer", systemImage: "trash")
-                            .font(.caption)
-                    }
-                }
+                .buttonStyle(.bordered)
             }
         }
     }
@@ -731,7 +735,10 @@ struct MyCardView: View {
         let path = CardLogoStorage.saveCardBackground(image)
         await MainActor.run {
             cardBackgroundImagePath = path
-            if path != nil { cardBackgroundPhotoItem = nil }
+            if path != nil {
+                cardBackgroundPhotoItem = nil
+                cardBackgroundWasRemoved = false
+            }
         }
     }
 
@@ -792,7 +799,9 @@ struct MyCardView: View {
             var logoBase64: String? = nil
             var logoUrl: String? = nil
             var cardBackgroundBase64: String? = nil
-            if let bgPath = cardBackgroundImagePath, !bgPath.isEmpty {
+            if cardBackgroundWasRemoved {
+                cardBackgroundBase64 = ""
+            } else if let bgPath = cardBackgroundImagePath, !bgPath.isEmpty {
                 cardBackgroundBase64 = CardLogoStorage.compressedBase64FromFile(path: bgPath)
             }
             if !logoURL.isEmpty {
@@ -821,7 +830,10 @@ struct MyCardView: View {
                     stampEmoji: stampEmoji.isEmpty ? nil : String(stampEmoji.prefix(8)),
                     cardBackgroundBase64: cardBackgroundBase64
                 )) as EmptyResponse
-                await MainActor.run { saveLogoError = nil }
+                await MainActor.run {
+                    saveLogoError = nil
+                    if cardBackgroundBase64 == "" { cardBackgroundWasRemoved = false }
+                }
                 if let sentBase64 = logoBase64, !sentBase64.isEmpty {
                     let base = APIConfig.baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
                     let apiLogoURL = "\(base)/api/businesses/\(slug)/logo"
