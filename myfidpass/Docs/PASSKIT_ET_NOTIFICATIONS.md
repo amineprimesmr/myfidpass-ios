@@ -73,16 +73,36 @@ Aucune logique PassKit côté app : l’app envoie uniquement le message au back
 
 ---
 
-## 5. Lien au dos du pass
+## 5. Dos du pass (backFields) — vue CLIENT dans le Wallet
+
+### Comment le client voit le détail (récompenses, progression)
+
+Pour une **carte de fidélité** (pass type **store card**), Apple Wallet ne permet **pas** d’ouvrir une app ou une vue custom au tap sur la carte. La seule interaction « détail » est : le **bouton (i)** en bas à droite de la carte. Quand le **client** touche **(i)**, Wallet affiche le **dos du pass** : les champs **backFields** du `pass.json`.
+
+**Ce qu’on met au dos (orienté client) :**
+
+1. **Votre progression** — ex. « 3 / 20 tampons » ou « 150 points »
+2. **Récompense** — ex. « 20 tampons = 1 café offert » ou la liste des paliers points
+3. **Pour l’obtenir** — ex. « Il vous manque 17 tampons pour avoir 1 café offert. » ou « Encore 50 points pour : 5 € de réduction. »
+4. **Conditions** — texte défini par le commerçant
+5. **Contact** — email / infos du commerce
+6. **Voir en ligne** — lien cliquable vers le site (ex. myfidpass.fr)
+
+Sur le **recto** du pass, on affiche aussi une ligne du type : « Touchez (i) en bas à droite pour voir le détail (progression, récompense). » pour que le client sache où regarder.
+
+### Différence avec Revolut / cartes de paiement
+
+**Revolut** (et les banques) affichent dans le Wallet une **carte de paiement** (Apple Pay). Ce type de pass est géré par Apple et les **extensions Wallet / Apple Pay** des apps bancaires : au tap, iOS peut ouvrir l’app ou une vue dédiée (dernières transactions, etc.). Ce n’est **pas** le même type de pass que notre **store card**.
+
+Pour une **store card** (carte de fidélité), Apple ne fournit **que** :
+- le **recto** (champs primary/secondary/auxiliary + image strip),
+- le **dos** (backFields) affiché quand le client touche **(i)**.
+
+On ne peut donc pas « ouvrir une page transactions » comme Revolut ; on met **tout le détail utile** (progression, récompense, « il vous manque X », conditions, contact, lien) dans les **backFields** pour que le client ait toutes les infos en touchant **(i)**.
 
 ### Back field avec URL
 
-Sur le **dos du pass**, un champ (**back field**) avec une **URL** et **`PKDataDetectorTypeLink`** pour que le lien soit **cliquable**.
-
-- Chez nous : libellé **« Voir en ligne »**, lien vers le site (ex. `https://myfidpass.fr`).
-
-**À faire côté backend :**  
-Lors de la génération du pass, ajouter dans `pass.json` un **back field** avec cette URL et le type approprié pour que le lien soit détecté et cliquable.
+Un des back fields contient une **URL** avec **`PKDataDetectorTypeLink`** pour que le lien soit **cliquable** (ex. « Voir en ligne » → myfidpass.fr).
 
 ---
 

@@ -48,8 +48,6 @@ struct MyCardView: View {
     @State private var saveLogoError: String?
     @State private var showOnboardingStyle = false
     @State private var showDesignsGallery = false
-    /// Afficher le bloc « Infos carte » (récompense, conditions, contact) sous la carte au tap.
-    @State private var showCardBackInfo = false
     // Règles de la carte (points vs tampons, récompenses)
     @State private var programType: String = "stamps"
     @State private var pointsPerEuro: Int = 1
@@ -160,16 +158,11 @@ struct MyCardView: View {
 
     private var previewSection: some View {
         VStack(spacing: AppTheme.Spacing.lg) {
-            HStack(spacing: 4) {
-                Text("Aperçu comme dans le Wallet")
-                    .font(AppTheme.Fonts.caption())
-                    .foregroundStyle(AppTheme.Colors.textSecondary)
-                    .textCase(.uppercase)
-                    .tracking(0.6)
-                Text("(tapez pour les infos)")
-                    .font(AppTheme.Fonts.caption())
-                    .foregroundStyle(AppTheme.Colors.textSecondary.opacity(0.8))
-            }
+            Text("Aperçu comme dans le Wallet")
+                .font(AppTheme.Fonts.caption())
+                .foregroundStyle(AppTheme.Colors.textSecondary)
+                .textCase(.uppercase)
+                .tracking(0.6)
 
             ZStack {
                 RoundedRectangle(cornerRadius: 24)
@@ -206,16 +199,8 @@ struct MyCardView: View {
                 .padding(.horizontal, AppTheme.Spacing.lg)
                 .frame(maxHeight: previewMaxHeight)
             }
-            .contentShape(Rectangle())
-            .onTapGesture {
-                withAnimation(.easeInOut(duration: 0.25)) { showCardBackInfo.toggle() }
-            }
             .id("\(primaryHex)-\(accentHex)-\(displayName)-\(requiredStamps)-\(previewStampsCount)")
             .padding(.vertical, AppTheme.Spacing.sm)
-
-            if showCardBackInfo {
-                cardBackInfoBlock
-            }
 
             Text("Simuler les tampons : \(previewStampsCount)/\(requiredStamps)")
                 .font(AppTheme.Fonts.caption())
@@ -235,62 +220,6 @@ struct MyCardView: View {
         }
         .padding(.top, AppTheme.Spacing.lg)
         .padding(.bottom, AppTheme.Spacing.md)
-    }
-
-    /// Bloc « dos de la carte » : récompense, conditions, contact, lien — affiché sous la carte au tap.
-    private var cardBackInfoBlock: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Infos carte")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(AppTheme.Colors.textSecondary)
-                .textCase(.uppercase)
-                .tracking(0.5)
-
-            VStack(spacing: 0) {
-                cardBackRow(label: "Récompense", value: programType == "stamps"
-                    ? (stampRewardLabel.isEmpty ? "\(requiredStamps) tampons = 1 offert" : "\(requiredStamps) tampons = \(stampRewardLabel)")
-                    : (pointsRewardTiersText.isEmpty ? "Paliers en magasin" : pointsRewardTiersText.components(separatedBy: "\n").prefix(3).joined(separator: " · ")))
-                Divider().padding(.leading, 16)
-                cardBackRow(label: "Conditions", value: "Valable en magasin.")
-                Divider().padding(.leading, 16)
-                cardBackRow(label: "Contact", value: "Voir le site pour nous contacter.")
-                Divider().padding(.leading, 16)
-                if let slug = AuthStorage.currentBusinessSlug, let encoded = slug.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed), let url = URL(string: "https://myfidpass.fr/?ref=pass&b=\(encoded)") {
-                    Link(destination: url) {
-                        HStack {
-                            Text("Voir en ligne")
-                                .foregroundStyle(AppTheme.Colors.primary)
-                            Image(systemName: "arrow.up.right")
-                                .font(.caption)
-                                .foregroundStyle(AppTheme.Colors.primary)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 12)
-                    }
-                }
-            }
-            .background(AppTheme.Colors.cardBackground)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-        }
-        .padding(.horizontal, AppTheme.Spacing.lg)
-        .padding(.top, 4)
-        .transition(.opacity.combined(with: .move(edge: .top)))
-    }
-
-    private func cardBackRow(label: String, value: String) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            Text(label)
-                .font(.caption)
-                .foregroundStyle(AppTheme.Colors.textSecondary)
-                .frame(width: 80, alignment: .leading)
-            Text(value)
-                .font(.subheadline)
-                .foregroundStyle(AppTheme.Colors.textPrimary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
     }
 
     // MARK: - Boutons d'action (mode aperçu)
