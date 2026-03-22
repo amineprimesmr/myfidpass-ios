@@ -2,7 +2,7 @@
 //  APIEndpoint.swift
 //  myfidpass
 //
-//  Endpoints alignés sur la doc API MyFidpass (api.myfidpass.fr).
+//  Endpoints alignés sur l’API MyFidpass / fidelity (dashboard, membres, jeux, engagement).
 //
 
 import Foundation
@@ -10,85 +10,162 @@ import Foundation
 enum APIEndpoint {
     // MARK: - Auth
     case authLogin(email: String, password: String)
+    case authRegister(email: String, password: String, name: String?)
+    case authForgotPassword(email: String)
+    case authResetPassword(token: String, newPassword: String)
     case authGoogle(idToken: String)
     case authApple(idToken: String, name: String?, email: String?)
     case authMe
     case authConfig
+    case authDeleteAccount
 
-    // MARK: - Sync (par business slug)
+    // MARK: - Commerce (JWT)
+    case createBusiness(payload: CreateBusinessPayload)
+    case paymentCheckout(planId: String?)
+
+    // MARK: - Sync (dashboard / slug)
     case businessSettings(slug: String)
-    case businessStats(slug: String)
-    case businessMembers(slug: String, limit: Int?, offset: Int?)
-    case businessTransactions(slug: String, limit: Int?, offset: Int?)
+    case businessStats(slug: String, period: String?)
+    case businessEvolution(slug: String, weeks: Int?, period: String?)
+    case businessMembers(slug: String, limit: Int?, offset: Int?, search: String?, filter: String?, sort: String?)
+    case businessMembersExport(slug: String, search: String?, filter: String?, sort: String?)
+    case businessTransactions(slug: String, limit: Int?, offset: Int?, memberId: String?, days: Int?, type: String?)
+    case businessTransactionsExport(slug: String, days: Int?, type: String?)
     case businessCategories(slug: String)
-    case createCategory(slug: String, name: String, colorHex: String?)
+    case createCategory(slug: String, name: String, colorHex: String?, sortOrder: Int?)
     case updateCategory(slug: String, categoryId: String, name: String?, colorHex: String?, sortOrder: Int?)
     case deleteCategory(slug: String, categoryId: String)
     case updateMemberCategories(slug: String, memberId: String, categoryIds: [String])
+
+    // MARK: - Jeux & engagement (dashboard)
+    case dashboardGames(slug: String)
+    case dashboardPatchGame(slug: String, gameCode: String, body: PatchGameBody)
+    case dashboardGameRewardsGet(slug: String, gameCode: String)
+    case dashboardGameRewardsPut(slug: String, gameCode: String, body: PutGameRewardsBody)
+
+    // MARK: - Notifications dashboard
+    case dashboardNotificationSend(slug: String, body: NotificationSendPayload)
+    case dashboardNotificationSegments(slug: String)
+    case dashboardNotificationStats(slug: String)
+    case dashboardTestPasskit(slug: String)
+    case dashboardRemoveTestDevice(slug: String)
 
     // MARK: - Scan
     case scanLookup(slug: String, barcode: String)
     case scan(slug: String, barcode: String, visit: Bool, points: Int?, amountEur: Double?)
 
-    // MARK: - Notifications
     case deviceRegister(token: String)
 
-    // MARK: - Wallet (pass Apple Wallet)
-    /// GET .../members/:memberId/pass — optionnellement avec design (organization_name, background_color, foreground_color, stamp_emoji, required_stamps) pour que le pass reflète la carte affichée.
     case walletPass(slug: String, memberId: String, design: WalletPassDesign?)
 
-    // MARK: - Notifier les clients (message push / changeMessage)
-    /// categoryIds: si nil ou vide = tous les membres ; sinon envoi limité à ces catégories.
     case notifyClients(slug: String, message: String, categoryIds: [String]?)
 
-    // MARK: - Mise à jour carte (Ma Carte → SaaS)
-    case updateCardSettings(slug: String, organizationName: String, backgroundColor: String, foregroundColor: String, requiredStamps: Int, logoBase64: String?, logoUrl: String?, locationAddress: String?, stampEmoji: String?, cardBackgroundBase64: String?, programType: String?, pointsPerEuro: Int?, pointsPerVisit: Int?, pointsMinAmountEur: Double?, pointsRewardTiers: [PointsRewardTierPayload]?, stampRewardLabel: String?, expiryMonths: Int?, sector: String?)
+    case patchDashboardSettings(slug: String, patch: FullDashboardSettingsPatch)
+    case updateLocationSettings(slug: String, locationLat: Double?, locationLng: Double?, locationRadiusMeters: Int?, locationRelevantText: String?, locationAddress: String?)
 
-    // MARK: - Membre : ajouter des points (caisse)
-    case addMemberPoints(slug: String, memberId: String, points: Int)
-    // MARK: - Membre : utiliser une récompense (tampons → 0, ou points → déduction)
+    /// Crédit membre (points directs, montant €, et/ou passage) — aligné POST .../members/:id/points.
+    case creditMember(slug: String, memberId: String, points: Int?, amountEur: Double?, visit: Bool)
     case redeemReward(slug: String, memberId: String, type: RedeemType)
+
+    // MARK: - Membres (import, détail public, tickets, récompenses)
+    case membersImport(slug: String, payload: MembersImportPayload)
+    case createMember(slug: String, email: String, name: String)
+    case memberPublic(slug: String, memberId: String)
+    case memberTickets(slug: String, memberId: String)
+    case memberTicketsConvert(slug: String, memberId: String, pointsToConvert: Int, idempotencyKey: String?)
+    case memberRewardsList(slug: String, memberId: String)
+    case claimMemberReward(slug: String, memberId: String, grantId: String)
+    case googleWalletMemberUrl(slug: String, memberId: String)
 
     var path: String {
         switch self {
         case .authLogin: return "/api/auth/login"
+        case .authRegister: return "/api/auth/register"
+        case .authForgotPassword: return "/api/auth/forgot-password"
+        case .authResetPassword: return "/api/auth/reset-password"
         case .authGoogle: return "/api/auth/google"
         case .authApple: return "/api/auth/apple"
         case .authMe: return "/api/auth/me"
         case .authConfig: return "/api/auth/config"
+        case .authDeleteAccount: return "/api/auth/account"
+        case .createBusiness: return "/api/businesses"
+        case .paymentCheckout: return "/api/payment/create-checkout-session"
         case .businessSettings(let slug): return "/api/businesses/\(slug)/dashboard/settings"
-        case .businessStats(let slug): return "/api/businesses/\(slug)/dashboard/stats"
-        case .businessMembers(let slug, _, _): return "/api/businesses/\(slug)/dashboard/members"
-        case .businessTransactions(let slug, _, _): return "/api/businesses/\(slug)/dashboard/transactions"
+        case .businessStats(let slug, _): return "/api/businesses/\(slug)/dashboard/stats"
+        case .businessEvolution(let slug, _, _): return "/api/businesses/\(slug)/dashboard/evolution"
+        case .businessMembers(let slug, _, _, _, _, _): return "/api/businesses/\(slug)/dashboard/members"
+        case .businessMembersExport(let slug, _, _, _): return "/api/businesses/\(slug)/dashboard/members/export"
+        case .businessTransactions(let slug, _, _, _, _, _): return "/api/businesses/\(slug)/dashboard/transactions"
+        case .businessTransactionsExport(let slug, _, _): return "/api/businesses/\(slug)/dashboard/transactions/export"
         case .businessCategories(let slug): return "/api/businesses/\(slug)/dashboard/categories"
-        case .createCategory(let slug, _, _): return "/api/businesses/\(slug)/dashboard/categories"
+        case .createCategory(let slug, _, _, _): return "/api/businesses/\(slug)/dashboard/categories"
         case .updateCategory(let slug, let categoryId, _, _, _): return "/api/businesses/\(slug)/dashboard/categories/\(categoryId)"
         case .deleteCategory(let slug, let categoryId): return "/api/businesses/\(slug)/dashboard/categories/\(categoryId)"
         case .updateMemberCategories(let slug, let memberId, _): return "/api/businesses/\(slug)/dashboard/members/\(memberId)/categories"
+        case .dashboardGames(let slug): return "/api/businesses/\(slug)/dashboard/games"
+        case .dashboardPatchGame(let slug, let gameCode, _): return "/api/businesses/\(slug)/dashboard/games/\(gameCode)"
+        case .dashboardGameRewardsGet(let slug, let gameCode): return "/api/businesses/\(slug)/dashboard/games/\(gameCode)/rewards"
+        case .dashboardGameRewardsPut(let slug, let gameCode, _): return "/api/businesses/\(slug)/dashboard/games/\(gameCode)/rewards"
+        case .dashboardNotificationSend(let slug, _): return "/api/businesses/\(slug)/dashboard/notifications/send"
+        case .dashboardNotificationSegments(let slug): return "/api/businesses/\(slug)/dashboard/notifications/campaign-segments"
+        case .dashboardNotificationStats(let slug): return "/api/businesses/\(slug)/dashboard/notifications/stats"
+        case .dashboardTestPasskit(let slug): return "/api/businesses/\(slug)/dashboard/notifications/test-passkit"
+        case .dashboardRemoveTestDevice(let slug): return "/api/businesses/\(slug)/dashboard/notifications/remove-test-device"
         case .scanLookup(let slug, _): return "/api/businesses/\(slug)/integration/lookup"
         case .scan(let slug, _, _, _, _): return "/api/businesses/\(slug)/integration/scan"
         case .deviceRegister: return "/api/device/register"
         case .walletPass(let slug, let memberId, _): return "/api/businesses/\(slug)/members/\(memberId)/pass"
         case .notifyClients(let slug, _, _): return "/api/businesses/\(slug)/notify"
-        case .updateCardSettings(let slug, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _): return "/api/businesses/\(slug)/dashboard/settings"
-        case .addMemberPoints(let slug, let memberId, _): return "/api/businesses/\(slug)/members/\(memberId)/points"
+        case .patchDashboardSettings(let slug, _): return "/api/businesses/\(slug)/dashboard/settings"
+        case .updateLocationSettings(let slug, _, _, _, _, _): return "/api/businesses/\(slug)/dashboard/settings"
+        case .creditMember(let slug, let memberId, _, _, _): return "/api/businesses/\(slug)/members/\(memberId)/points"
         case .redeemReward(let slug, let memberId, _): return "/api/businesses/\(slug)/members/\(memberId)/redeem"
-        }
-    }
-
-    var method: String {
-        switch self {
-        case .authLogin, .authGoogle, .authApple, .scan, .scanLookup, .deviceRegister, .notifyClients, .createCategory, .updateMemberCategories, .addMemberPoints, .redeemReward: return "POST"
-        case .updateCardSettings, .updateCategory: return "PATCH"
-        case .deleteCategory: return "DELETE"
-        case .authMe, .authConfig, .businessSettings, .businessStats, .businessMembers, .businessTransactions, .businessCategories, .walletPass, .scanLookup: return "GET"
+        case .membersImport(let slug, _): return "/api/businesses/\(slug)/members/import"
+        case .createMember(let slug, _, _): return "/api/businesses/\(slug)/members"
+        case .memberPublic(let slug, let memberId): return "/api/businesses/\(slug)/members/\(memberId)"
+        case .memberTickets(let slug, let memberId): return "/api/businesses/\(slug)/members/\(memberId)/tickets"
+        case .memberTicketsConvert(let slug, let memberId, _, _): return "/api/businesses/\(slug)/members/\(memberId)/tickets/convert"
+        case .memberRewardsList(let slug, let memberId): return "/api/businesses/\(slug)/members/\(memberId)/rewards"
+        case .claimMemberReward(let slug, let memberId, let grantId): return "/api/businesses/\(slug)/members/\(memberId)/rewards/\(grantId)/claim"
+        case .googleWalletMemberUrl(let slug, let memberId): return "/api/businesses/\(slug)/members/\(memberId)/google-wallet-url"
         }
     }
 
     var isAuth: Bool {
         switch self {
-        case .authLogin, .authGoogle, .authApple: return true
-        default: return false
+        case .authLogin, .authGoogle, .authApple, .authRegister, .authForgotPassword, .authResetPassword:
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// En-têtes additionnels (ex. idempotency).
+    var supplementalHeaders: [String: String] {
+        switch self {
+        case .memberTicketsConvert(_, _, _, let key):
+            if let key, !key.isEmpty { return ["Idempotency-Key": key] }
+            return [:]
+        default:
+            return [:]
+        }
+    }
+
+    var method: String {
+        switch self {
+        case .authLogin, .authRegister, .authForgotPassword, .authResetPassword, .authGoogle, .authApple,
+             .scan, .deviceRegister, .notifyClients, .createCategory, .updateMemberCategories, .creditMember,
+             .redeemReward, .createBusiness, .paymentCheckout, .dashboardNotificationSend, .dashboardRemoveTestDevice,
+             .membersImport, .createMember, .memberTicketsConvert, .claimMemberReward:
+            return "POST"
+        case .patchDashboardSettings, .updateCategory, .updateLocationSettings, .dashboardPatchGame:
+            return "PATCH"
+        case .deleteCategory, .authDeleteAccount:
+            return "DELETE"
+        case .dashboardGameRewardsPut:
+            return "PUT"
+        default:
+            return "GET"
         }
     }
 
@@ -96,15 +173,41 @@ enum APIEndpoint {
         guard let url = URL(string: path, relativeTo: base) else { throw APIError.invalidURL }
         var components = URLComponents(url: url, resolvingAgainstBaseURL: true)!
         switch self {
-        case .businessMembers(_, let limit, let offset):
+        case .businessStats(_, let period):
+            if let period, !period.isEmpty {
+                components.queryItems = [URLQueryItem(name: "period", value: period)]
+            }
+        case .businessEvolution(_, let weeks, let period):
             var items: [URLQueryItem] = []
-            if let l = limit { items.append(URLQueryItem(name: "limit", value: "\(l)")) }
-            if let o = offset { items.append(URLQueryItem(name: "offset", value: "\(o)")) }
+            if let w = weeks { items.append(URLQueryItem(name: "weeks", value: "\(w)")) }
+            if let p = period, !p.isEmpty { items.append(URLQueryItem(name: "period", value: p)) }
             components.queryItems = items.isEmpty ? nil : items
-        case .businessTransactions(_, let limit, let offset):
+        case .businessMembers(_, let limit, let offset, let search, let filter, let sort):
             var items: [URLQueryItem] = []
             if let l = limit { items.append(URLQueryItem(name: "limit", value: "\(l)")) }
             if let o = offset { items.append(URLQueryItem(name: "offset", value: "\(o)")) }
+            if let s = search, !s.isEmpty { items.append(URLQueryItem(name: "search", value: s)) }
+            if let f = filter, !f.isEmpty { items.append(URLQueryItem(name: "filter", value: f)) }
+            if let so = sort, !so.isEmpty { items.append(URLQueryItem(name: "sort", value: so)) }
+            components.queryItems = items.isEmpty ? nil : items
+        case .businessMembersExport(_, let search, let filter, let sort):
+            var items: [URLQueryItem] = []
+            if let s = search, !s.isEmpty { items.append(URLQueryItem(name: "search", value: s)) }
+            if let f = filter, !f.isEmpty { items.append(URLQueryItem(name: "filter", value: f)) }
+            if let so = sort, !so.isEmpty { items.append(URLQueryItem(name: "sort", value: so)) }
+            components.queryItems = items.isEmpty ? nil : items
+        case .businessTransactions(_, let limit, let offset, let memberId, let days, let type):
+            var items: [URLQueryItem] = []
+            if let l = limit { items.append(URLQueryItem(name: "limit", value: "\(l)")) }
+            if let o = offset { items.append(URLQueryItem(name: "offset", value: "\(o)")) }
+            if let m = memberId, !m.isEmpty { items.append(URLQueryItem(name: "memberId", value: m)) }
+            if let d = days { items.append(URLQueryItem(name: "days", value: "\(d)")) }
+            if let t = type, !t.isEmpty { items.append(URLQueryItem(name: "type", value: t)) }
+            components.queryItems = items.isEmpty ? nil : items
+        case .businessTransactionsExport(_, let days, let type):
+            var items: [URLQueryItem] = []
+            if let d = days { items.append(URLQueryItem(name: "days", value: "\(d)")) }
+            if let t = type, !t.isEmpty { items.append(URLQueryItem(name: "type", value: t)) }
             components.queryItems = items.isEmpty ? nil : items
         case .scanLookup(_, let barcode):
             components.queryItems = [URLQueryItem(name: "barcode", value: barcode)]
@@ -115,57 +218,74 @@ enum APIEndpoint {
                 if !d.organizationName.isEmpty { items.append(URLQueryItem(name: "organization_name", value: d.organizationName)) }
                 if !d.backgroundColor.isEmpty { items.append(URLQueryItem(name: "background_color", value: d.backgroundColor)) }
                 if !d.foregroundColor.isEmpty { items.append(URLQueryItem(name: "foreground_color", value: d.foregroundColor)) }
+                if let pt = d.programType, !pt.isEmpty { items.append(URLQueryItem(name: "program_type", value: pt)) }
+                if let sc = d.stripColor, !sc.isEmpty { items.append(URLQueryItem(name: "strip_color", value: sc)) }
+                if let mode = d.stripDisplayMode, !mode.isEmpty { items.append(URLQueryItem(name: "strip_display_mode", value: mode)) }
+                if let st = d.stripText, !st.isEmpty { items.append(URLQueryItem(name: "strip_text", value: st)) }
                 if !d.stampEmoji.isEmpty { items.append(URLQueryItem(name: "stamp_emoji", value: d.stampEmoji)) }
                 if d.requiredStamps > 0 { items.append(URLQueryItem(name: "required_stamps", value: "\(d.requiredStamps)")) }
             }
             components.queryItems = items
-        default: break
+        default:
+            break
         }
         guard let finalURL = components.url else { throw APIError.invalidURL }
         var bodyData: Data?
         switch self {
         case .authLogin(let email, let password):
             bodyData = try encoder.encode(LoginPayload(email: email, password: password))
+        case .authRegister(let email, let password, let name):
+            bodyData = try encoder.encode(AuthRegisterPayload(email: email, password: password, name: name))
+        case .authForgotPassword(let email):
+            bodyData = try encoder.encode(ForgotPasswordPayload(email: email))
+        case .authResetPassword(let token, let newPassword):
+            bodyData = try encoder.encode(ResetPasswordPayload(token: token, newPassword: newPassword))
         case .authGoogle(let idToken):
             bodyData = try encoder.encode(GooglePayload(idToken: idToken))
         case .authApple(let idToken, let name, let email):
             bodyData = try encoder.encode(ApplePayload(idToken: idToken, name: name, email: email))
+        case .createBusiness(let payload):
+            bodyData = try encoder.encode(payload)
+        case .paymentCheckout(let planId):
+            bodyData = try encoder.encode(CheckoutSessionPayload(planId: planId))
         case .scan(_, let barcode, let visit, let points, let amountEur):
             bodyData = try encoder.encode(ScanPayload(barcode: barcode, visit: visit, points: points, amount_eur: amountEur))
         case .deviceRegister(let token):
             bodyData = try encoder.encode(DeviceRegisterPayload(deviceToken: token))
         case .notifyClients(_, let message, let categoryIds):
             bodyData = try encoder.encode(NotifyClientsPayload(message: message, categoryIds: categoryIds))
-        case .createCategory(_, let name, let colorHex):
-            bodyData = try encoder.encode(CreateCategoryPayload(name: name, colorHex: colorHex))
+        case .createCategory(_, let name, let colorHex, let sortOrder):
+            bodyData = try encoder.encode(CreateCategoryPayload(name: name, colorHex: colorHex, sortOrder: sortOrder))
         case .updateCategory(_, _, let name, let colorHex, let sortOrder):
             bodyData = try encoder.encode(UpdateCategoryPayload(name: name, colorHex: colorHex, sortOrder: sortOrder))
         case .updateMemberCategories(_, _, let categoryIds):
             bodyData = try encoder.encode(UpdateMemberCategoriesPayload(categoryIds: categoryIds))
-        case .addMemberPoints(_, _, let points):
-            bodyData = try encoder.encode(AddMemberPointsPayload(points: points))
+        case .creditMember(_, _, let points, let amountEur, let visit):
+            bodyData = try encoder.encode(CreditMemberBody(points: points, amountEur: amountEur, visit: visit))
         case .redeemReward(_, _, let type):
             bodyData = try encoder.encode(RedeemPayload(type: type))
-        case .updateCardSettings(_, let organizationName, let backgroundColor, let foregroundColor, let requiredStamps, let logoBase64, let logoUrl, let locationAddress, let stampEmoji, let cardBackgroundBase64, let programType, let pointsPerEuro, let pointsPerVisit, let pointsMinAmountEur, let pointsRewardTiers, let stampRewardLabel, let expiryMonths, let sector):
-            bodyData = try encoder.encode(UpdateCardSettingsPayload(
-                organizationName: organizationName,
-                backgroundColor: backgroundColor,
-                foregroundColor: foregroundColor,
-                requiredStamps: requiredStamps,
-                logoBase64: logoBase64,
-                logoUrl: logoUrl,
-                locationAddress: locationAddress,
-                stampEmoji: stampEmoji,
-                cardBackgroundBase64: cardBackgroundBase64,
-                programType: programType,
-                pointsPerEuro: pointsPerEuro,
-                pointsPerVisit: pointsPerVisit,
-                pointsMinAmountEur: pointsMinAmountEur,
-                pointsRewardTiers: pointsRewardTiers,
-                stampRewardLabel: stampRewardLabel,
-                expiryMonths: expiryMonths,
-                sector: sector
+        case .updateLocationSettings(_, let locationLat, let locationLng, let locationRadiusMeters, let locationRelevantText, let locationAddress):
+            bodyData = try encoder.encode(UpdateLocationSettingsPayload(
+                locationLat: locationLat,
+                locationLng: locationLng,
+                locationRadiusMeters: locationRadiusMeters,
+                locationRelevantText: locationRelevantText,
+                locationAddress: locationAddress
             ))
+        case .patchDashboardSettings(_, let patch):
+            bodyData = try encoder.encode(patch)
+        case .dashboardPatchGame(_, _, let body):
+            bodyData = try encoder.encode(body)
+        case .dashboardGameRewardsPut(_, _, let body):
+            bodyData = try encoder.encode(body)
+        case .dashboardNotificationSend(_, let body):
+            bodyData = try encoder.encode(body)
+        case .membersImport(_, let payload):
+            bodyData = try encoder.encode(payload)
+        case .createMember(_, let email, let name):
+            bodyData = try encoder.encode(CreateMemberPayload(email: email, name: name))
+        case .memberTicketsConvert(_, _, let pointsToConvert, _):
+            bodyData = try encoder.encode(MemberTicketsConvertBody(pointsToConvert: pointsToConvert))
         default:
             break
         }
@@ -203,6 +323,7 @@ private struct NotifyClientsPayload: Encodable {
 private struct CreateCategoryPayload: Encodable {
     let name: String
     let colorHex: String?
+    let sortOrder: Int?
 }
 
 private struct UpdateCategoryPayload: Encodable {
@@ -215,11 +336,32 @@ private struct UpdateMemberCategoriesPayload: Encodable {
     let categoryIds: [String]
 }
 
-private struct AddMemberPointsPayload: Encodable {
-    let points: Int
+private struct CreditMemberBody: Encodable {
+    let points: Int?
+    let amountEur: Double?
+    let visit: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case points
+        case amountEur = "amount_eur"
+        case visit
+    }
+
+    init(points: Int?, amountEur: Double?, visit: Bool) {
+        self.points = points
+        self.amountEur = amountEur
+        self.visit = visit ? true : nil
+    }
 }
 
-/// Type de récompense à utiliser (tampons = remise à 0, points = déduction).
+private struct MemberTicketsConvertBody: Encodable {
+    let pointsToConvert: Int
+
+    enum CodingKeys: String, CodingKey {
+        case pointsToConvert = "points_to_convert"
+    }
+}
+
 enum RedeemType {
     case stamps
     case points(pointsToDeduct: Int)
@@ -246,34 +388,24 @@ struct PointsRewardTierPayload: Encodable {
     let label: String
 }
 
-private struct UpdateCardSettingsPayload: Encodable {
-    let organizationName: String
-    let backgroundColor: String
-    let foregroundColor: String
-    let requiredStamps: Int
-    let logoBase64: String?
-    let logoUrl: String?
+private struct UpdateLocationSettingsPayload: Encodable {
+    let locationLat: Double?
+    let locationLng: Double?
+    let locationRadiusMeters: Int?
+    let locationRelevantText: String?
     let locationAddress: String?
-    let stampEmoji: String?
-    let cardBackgroundBase64: String?
-    let programType: String?
-    let pointsPerEuro: Int?
-    let pointsPerVisit: Int?
-    let pointsMinAmountEur: Double?
-    let pointsRewardTiers: [PointsRewardTierPayload]?
-    let stampRewardLabel: String?
-    let expiryMonths: Int?
-    let sector: String?
 }
 
-/// Design à envoyer au backend pour que le pass généré reflète la carte affichée (couleurs, nom, emoji, tampons).
 struct WalletPassDesign {
     var organizationName: String
     var backgroundColor: String
     var foregroundColor: String
     var stampEmoji: String
     var requiredStamps: Int
-    /// Template pass : "cafe" pour style Café des Arts (tampons + libellés café).
+    var programType: String?
+    var stripColor: String?
+    var stripDisplayMode: String?
+    var stripText: String?
     var template: String?
 }
 
