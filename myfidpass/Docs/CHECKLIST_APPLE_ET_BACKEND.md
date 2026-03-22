@@ -41,8 +41,8 @@ L’app mobile **n’a pas besoin** de Pass Type ID ni de ce certificat : elle a
 | Vérification | Où | Statut actuel dans le projet |
 |--------------|-----|------------------------------|
 | **Signing** | Signing & Capabilities | Team + Bundle ID doivent correspondre à l’App ID Apple. |
-| **Sign in with Apple** | Signing & Capabilities | Capability ajoutée. `myfidpass.entitlements` contient `com.apple.developer.applesignin` = Default. |
-| **Push Notifications** | Signing & Capabilities | Capability à **activer** dans l’onglet (bouton +). `myfidpass.entitlements` contient déjà `aps-environment` = `development`. Pour la release App Store, passer à `production`. |
+| **Sign in with Apple** | Signing & Capabilities | Capability ajoutée. Les deux fichiers d’entitlements contiennent `com.apple.developer.applesignin` = Default (`myfidpass-Debug.entitlements` en Debug, `myfidpass.entitlements` en Release). |
+| **Push Notifications** | Signing & Capabilities | Capability à **activer** dans l’onglet (bouton +). **Debug** : `myfidpass-Debug.entitlements` → `aps-environment` = `development`. **Release / App Store** : `myfidpass.entitlements` → `aps-environment` = `production`. |
 
 À faire dans Xcode :  
 1. Ouvrir le projet → cible **myfidpass** → onglet **Signing & Capabilities**.  

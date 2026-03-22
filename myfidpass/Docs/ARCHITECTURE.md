@@ -85,4 +85,4 @@ myfidpass/
 - **Refresh** : Dashboard et Profil utilisent `.refreshable { await syncService.syncIfNeeded() }`.
 - **Chargement** : Indicateurs (ProgressView) pendant sync et pendant la requête de scan.
 - **Production** : `APIConfig.baseURL` = `https://api.myfidpass.fr` ; en DEBUG, override possible via `MYFIDPASS_API_URL`. Création de compte uniquement sur myfidpass.fr ; login uniquement si le compte existe côté backend.
-- **Push notifications** : Dans Xcode, activer la capacité **Push Notifications** (Signing & Capabilities). Le fichier `myfidpass.entitlements` contient déjà `aps-environment` (development ; passer à `production` pour la release App Store).
+- **Push notifications** : Dans Xcode, activer la capacité **Push Notifications** (Signing & Capabilities). **Debug** utilise `myfidpass-Debug.entitlements` (`aps-environment` = development) ; **Release** utilise `myfidpass.entitlements` (`aps-environment` = production) pour TestFlight / App Store.
