@@ -113,8 +113,8 @@ struct OnboardingChoiceView: View {
                 }
             }
             .signInWithAppleButtonStyle(.black)
-            .frame(height: 50)
-            .frame(maxWidth: 375)
+            .frame(maxWidth: .infinity)
+            .frame(minHeight: 50)
             .padding(.horizontal, AppTheme.Spacing.xl)
 
             Button {

@@ -18,6 +18,8 @@ struct LoginView: View {
     @State private var googleError: String?
     @State private var isGoogleLoading = false
     @State private var showNoAccountInLogiciel = false
+    @State private var isRegisterMode = false
+    @State private var displayName = ""
     @FocusState private var focusedField: Field?
 
     enum Field { case email, password }
@@ -61,7 +63,21 @@ struct LoginView: View {
     }
 
     private var formSection: some View {
-        VStack(alignment: .leading, spacing: AppTheme.Spacing.md) {
+            VStack(alignment: .leading, spacing: AppTheme.Spacing.md) {
+            Picker("", selection: $isRegisterMode) {
+                Text("Connexion").tag(false)
+                Text("Inscription").tag(true)
+            }
+            .pickerStyle(.segmented)
+            if isRegisterMode {
+                VStack(alignment: .leading, spacing: AppTheme.Spacing.xs) {
+                    Text("Nom (optionnel)")
+                        .font(AppTheme.Fonts.caption())
+                        .foregroundStyle(AppTheme.Colors.textSecondary)
+                    TextField("Votre nom", text: $displayName)
+                        .textFieldStyle(.roundedBorder)
+                }
+            }
             VStack(alignment: .leading, spacing: AppTheme.Spacing.xs) {
                 Text("Email")
                     .font(AppTheme.Fonts.caption())
@@ -86,14 +102,18 @@ struct LoginView: View {
     private var submitSection: some View {
         VStack(spacing: AppTheme.Spacing.md) {
             Button {
-                submitLogin()
+                if isRegisterMode {
+                    submitRegister()
+                } else {
+                    submitLogin()
+                }
             } label: {
                 Group {
                     if isLoading {
                         ProgressView()
                             .tint(.white)
                     } else {
-                        Text("Se connecter")
+                        Text(isRegisterMode ? "Créer mon compte" : "Se connecter")
                     }
                 }
                 .font(AppTheme.Fonts.headline())
@@ -102,12 +122,26 @@ struct LoginView: View {
             }
             .buttonStyle(.borderedProminent)
             .tint(AppTheme.Colors.primary)
-            .disabled(isLoading || email.isEmpty)
+            .disabled(
+                isLoading
+                    || email.trimmingCharacters(in: .whitespaces).isEmpty
+                    || password.isEmpty
+                    || (isRegisterMode && password.count < 8)
+            )
 
-            socialSignInSection
+            if !isRegisterMode {
+                socialSignInSection
+            }
 
-            Button("Créer un compte") {
-                openURL(AppWebURL.createAccount)
+            LegalDocumentLinksView()
+                .padding(.top, AppTheme.Spacing.sm)
+
+            Button(isRegisterMode ? "Déjà un compte ? Se connecter" : "Créer un compte sur le web") {
+                if isRegisterMode {
+                    isRegisterMode = false
+                } else {
+                    openURL(AppWebURL.createAccount)
+                }
             }
             .font(AppTheme.Fonts.callout())
             .foregroundStyle(AppTheme.Colors.primary)
@@ -159,8 +193,8 @@ struct LoginView: View {
                 }
             }
             .signInWithAppleButtonStyle(.black)
-            .frame(height: 50)
-            .frame(maxWidth: 375)
+            .frame(maxWidth: .infinity)
+            .frame(minHeight: 50)
 
             Button {
                 startGoogleSignIn()
@@ -218,6 +252,25 @@ struct LoginView: View {
                 try await authService.login(email: email, password: password)
             } catch AuthError.noAccountInLogiciel {
                 showNoAccountInLogiciel = true
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            isLoading = false
+        }
+    }
+
+    private func submitRegister() {
+        errorMessage = nil
+        focusedField = nil
+        isLoading = true
+        Task {
+            do {
+                let name = displayName.trimmingCharacters(in: .whitespaces)
+                try await authService.register(
+                    email: email.trimmingCharacters(in: .whitespaces).lowercased(),
+                    password: password,
+                    name: name.isEmpty ? nil : name
+                )
             } catch {
                 errorMessage = error.localizedDescription
             }
