@@ -2,7 +2,7 @@
 //  ContentView.swift
 //  myfidpass
 //
-//  Point d’entrée principal : app commerçant (Dashboard, Scanner, Ma Carte, Profil).
+//  Point d’entrée principal : app commerçant (Dashboard, Ma Carte, Profil).
 //
 
 import SwiftUI
@@ -11,6 +11,7 @@ import CoreData
 struct ContentView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @EnvironmentObject private var syncService: SyncService
+    @EnvironmentObject private var authService: AuthService
     @State private var updateAppInfo: VersionCheckManager.ReturnResult?
     @State private var forcedAppUpdate = false
 
@@ -20,7 +21,7 @@ struct ContentView: View {
             .onAppear {
                 NotificationsService.shared.requestPermissionAndRegister()
                 Task(priority: .utility) {
-                    try? await Task.sleep(nanoseconds: 400_000_000)
+                    try? await Task.sleep(nanoseconds: 80_000_000)
                     await syncService.syncIfNeeded()
                 }
             }
@@ -28,6 +29,7 @@ struct ContentView: View {
                 AppUpdateView(appInfo: info, forcedUpdate: $forcedAppUpdate)
             }
             .task {
+                await authService.refreshBusinessesIfNeeded()
                 if let result = await VersionCheckManager.shared.checkIfAppUpdateAvailable() {
                     updateAppInfo = result
                     // Option : forcer la mise à jour si les release notes contiennent "!" (ex. "! Important")
@@ -41,4 +43,5 @@ struct ContentView: View {
     ContentView()
         .environment(\.managedObjectContext, PersistenceController.preview.container.viewContext)
         .environmentObject(SyncService(context: PersistenceController.preview.container.viewContext))
+        .environmentObject(AuthService())
 }

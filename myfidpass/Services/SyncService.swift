@@ -29,9 +29,9 @@ final class SyncService: ObservableObject {
     private static let syncThrottleInterval: TimeInterval = 15
 
     /// Récupère user + businesses, puis pour le commerce courant (slug) : settings, stats, members, transactions.
-    func syncIfNeeded() async {
+    func syncIfNeeded(force: Bool = false) async {
         guard AuthStorage.isLoggedIn, let token = APIClient.shared.authToken, !token.isEmpty else { return }
-        if let last = lastSyncDate, Date().timeIntervalSince(last) < Self.syncThrottleInterval, !isSyncing {
+        if !force, let last = lastSyncDate, Date().timeIntervalSince(last) < Self.syncThrottleInterval, !isSyncing {
             return
         }
         isSyncing = true
@@ -39,8 +39,8 @@ final class SyncService: ObservableObject {
         defer { isSyncing = false }
         do {
             let me: AuthMeResponse = try await APIClient.shared.request(.authMe)
-            if let slug = me.businesses.first?.slug {
-                AuthStorage.currentBusinessSlug = slug
+            let slug = resolvedSlug(from: me)
+            if let slug {
                 let lastSaved = UserDefaults.standard.object(forKey: Self.templateLastSavedKey) as? Date
                 let skipTemplate = (lastSaved != nil && lastSyncDate != nil && lastSaved! > lastSyncDate!)
                 try await syncBusiness(slug: slug, skipTemplateOverwrite: skipTemplate)
@@ -69,18 +69,33 @@ final class SyncService: ObservableObject {
     }
 
     private func syncBusiness(slug: String, skipTemplateOverwrite: Bool = false) async throws {
-        let (settings, stats, members, transactions) = try await (
-            APIClient.shared.request(.businessSettings(slug: slug)) as BusinessSettingsResponse,
-            APIClient.shared.request(.businessStats(slug: slug)) as BusinessStatsResponse,
-            APIClient.shared.request(.businessMembers(slug: slug, limit: 500, offset: 0)) as BusinessMembersResponse,
-            APIClient.shared.request(.businessTransactions(slug: slug, limit: 100, offset: 0)) as BusinessTransactionsResponse
-        )
-        let categoriesResponse: BusinessCategoriesResponse? = try? await APIClient.shared.request(.businessCategories(slug: slug)) as BusinessCategoriesResponse
+        // Un tuple `try await (a, b, …)` exécute chaque requête l’une après l’autre. `async let` les lance en parallèle.
+        async let settingsTask = APIClient.shared.request(.businessSettings(slug: slug)) as BusinessSettingsResponse
+        async let statsTask = APIClient.shared.request(.businessStats(slug: slug, period: nil)) as BusinessStatsResponse
+        async let membersTask = APIClient.shared.request(.businessMembers(slug: slug, limit: 500, offset: 0, search: nil, filter: nil, sort: nil)) as BusinessMembersResponse
+        async let transactionsTask = APIClient.shared.request(.businessTransactions(slug: slug, limit: 100, offset: 0, memberId: nil, days: nil, type: nil)) as BusinessTransactionsResponse
+        async let categoriesTask = fetchCategoriesOptional(slug: slug)
+
+        let settings = try await settingsTask
+        let stats = try await statsTask
+        let members = try await membersTask
+        let transactions = try await transactionsTask
+        let categoriesResponse = await categoriesTask
+
         try mergeIntoCoreData(slug: slug, settings: settings, stats: stats, members: members, transactions: transactions, categories: categoriesResponse, skipTemplateOverwrite: skipTemplateOverwrite)
+    }
+
+    private func fetchCategoriesOptional(slug: String) async -> BusinessCategoriesResponse? {
+        do {
+            return try await APIClient.shared.request(.businessCategories(slug: slug)) as BusinessCategoriesResponse
+        } catch {
+            return nil
+        }
     }
 
     private func mergeIntoCoreData(slug: String, settings: BusinessSettingsResponse, stats: BusinessStatsResponse, members: BusinessMembersResponse, transactions: BusinessTransactionsResponse, categories: BusinessCategoriesResponse?, skipTemplateOverwrite: Bool = false) throws {
         let business = findOrCreateBusiness(slug: slug)
+        business.slug = slug
         business.name = stats.businessName ?? settings.organizationName ?? "Mon Commerce"
         business.address = settings.locationAddress
         business.updatedAt = Date()
@@ -128,7 +143,7 @@ final class SyncService: ObservableObject {
         for t in transactions.transactions {
             guard let memberId = t.memberId else { continue }
             let cardRequest = ClientCard.fetchRequest()
-            cardRequest.predicate = NSPredicate(format: "qrCodeValue == %@", memberId)
+            cardRequest.predicate = NSPredicate(format: "qrCodeValue == %@ AND template == %@", memberId, template)
             cardRequest.fetchLimit = 1
             guard let card = try context.fetch(cardRequest).first else { continue }
             if let tid = t.id, findStamp(serverId: tid) != nil { continue }
@@ -148,13 +163,30 @@ final class SyncService: ObservableObject {
         return formatter.date(from: s) ?? ISO8601DateFormatter().date(from: s)
     }
 
+    /// Slug effectif : préférence locale si encore dans la liste /me, sinon premier commerce.
+    private func resolvedSlug(from me: AuthMeResponse) -> String? {
+        let list = me.businesses
+        guard !list.isEmpty else {
+            AuthStorage.currentBusinessSlug = nil
+            return nil
+        }
+        if let saved = AuthStorage.currentBusinessSlug,
+           list.contains(where: { $0.slug == saved }) {
+            return saved
+        }
+        let first = list[0].slug
+        AuthStorage.currentBusinessSlug = first
+        return first
+    }
+
     private func findOrCreateBusiness(slug: String) -> Business {
         let request = Business.fetchRequest()
-        request.sortDescriptors = [NSSortDescriptor(keyPath: \Business.createdAt, ascending: true)]
+        request.predicate = NSPredicate(format: "slug == %@", slug)
         request.fetchLimit = 1
         if let b = try? context.fetch(request).first { return b }
         let b = Business(context: context)
         b.id = UUID()
+        b.slug = slug
         b.name = "Mon Commerce"
         b.createdAt = Date()
         b.updatedAt = Date()
@@ -180,7 +212,7 @@ final class SyncService: ObservableObject {
 
     private func findOrCreateClientCard(template: CardTemplate, memberId: String, name: String?, email: String?, points: Int) -> ClientCard {
         let request = ClientCard.fetchRequest()
-        request.predicate = NSPredicate(format: "qrCodeValue == %@", memberId)
+        request.predicate = NSPredicate(format: "qrCodeValue == %@ AND template == %@", memberId, template)
         request.fetchLimit = 1
         if let c = try? context.fetch(request).first { return c }
         let c = ClientCard(context: context)

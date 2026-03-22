@@ -33,6 +33,9 @@ struct DashboardView: View {
     @State private var showCategoriesManagement = false
     @State private var navigationPath = NavigationPath()
     @State private var titleAppeared = false
+    /// Après scan : si programme points, afficher la sheet pour saisir le montant du panier.
+    @State private var scanResultSheet: ScanResultSheetData?
+    @State private var isScanAmountSubmitting = false
 
     init(context: NSManagedObjectContext) {
         _dataService = StateObject(wrappedValue: DataService(context: context))
@@ -84,7 +87,7 @@ struct DashboardView: View {
                     }
                 }
                 .refreshable {
-                    await syncService.syncIfNeeded()
+                    await syncService.syncIfNeeded(force: true)
                 }
                 .qrScanner(isScanning: $showScanner) { code in
                     handleQRScanned(code)
@@ -143,6 +146,26 @@ struct DashboardView: View {
         .sheet(isPresented: $showCategoriesManagement) {
             CategoriesManagementView(context: viewContext)
                 .environmentObject(syncService)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+                .modifier(LiquidGlassSheetModifier())
+        }
+        .sheet(item: $scanResultSheet) { data in
+            ScanAmountSheet(
+                memberName: data.memberName,
+                barcode: data.barcode,
+                pointsPerEuro: data.pointsPerEuro,
+                isSubmitting: $isScanAmountSubmitting,
+                onDismiss: { scanResultSheet = nil },
+                onSubmit: { amountEur in
+                    await submitScanAmount(slug: data.slug, barcode: data.barcode, amountEur: amountEur)
+                    scanResultSheet = nil
+                    showToast = true
+                }
+            )
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+            .modifier(LiquidGlassSheetModifier())
         }
     }
 
@@ -262,10 +285,13 @@ struct DashboardView: View {
         isNotificationFieldFocused = false
         Task {
             do {
-                _ = try await APIClient.shared.request(APIEndpoint.notifyClients(slug: slug, message: msg, categoryIds: selectedCategoryIdsForNotify.isEmpty ? nil : selectedCategoryIdsForNotify)) as EmptyResponse
+                let result = try await APIClient.shared.request(
+                    APIEndpoint.notifyClients(slug: slug, message: msg, categoryIds: selectedCategoryIdsForNotify.isEmpty ? nil : selectedCategoryIdsForNotify)
+                ) as NotifyClientsResult
                 await MainActor.run {
                     isSendingNotification = false
-                    notifyResultMessage = "Notification envoyée à tous les membres."
+                    let n = result.sent ?? 0
+                    notifyResultMessage = n > 0 ? "Notification envoyée (\(n) appareil(s))." : "Aucun appareil cible (Wallet / Web). Message enregistré."
                     notificationMessage = ""
                     DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
                         notifyResultMessage = nil
@@ -283,28 +309,59 @@ struct DashboardView: View {
         }
     }
 
-    /// Appel API scan puis affichage du Dynamic Island Toast si l'utilisateur a bien été détecté.
+    /// Extrait l’ID membre (UUID) du code scanné (brut ou contenu dans une URL).
+    private func normalizeBarcodeToMemberId(_ raw: String) -> String {
+        let s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if s.isEmpty { return raw }
+        let uuidPattern = #"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"#
+        if let range = s.range(of: uuidPattern, options: .regularExpression) {
+            return String(s[range])
+        }
+        if s.count == 36, s.contains("-") { return s }
+        return s
+    }
+
+    /// Lookup client puis, selon le type de programme (tampons vs points), soit on enregistre 1 tampon, soit on affiche la sheet pour saisir le montant du panier.
     private func handleQRScanned(_ code: String) {
         guard let slug = AuthStorage.currentBusinessSlug else {
             appState.showError("Aucun commerce. Reconnectez-vous.")
             scanError = "Aucun commerce. Reconnectez-vous."
             return
         }
+        let barcode = normalizeBarcodeToMemberId(code)
         Task {
             do {
-                let response: ScanResponse = try await APIClient.shared.request(.scan(slug: slug, barcode: code, visit: true, points: nil, amountEur: nil))
+                async let lookupTask = APIClient.shared.request(.scanLookup(slug: slug, barcode: barcode)) as ScanLookupResponse
+                async let settingsTask = APIClient.shared.request(.businessSettings(slug: slug)) as BusinessSettingsResponse
+                let lookup = try await lookupTask
+                let settings = try await settingsTask
+                let memberName = lookup.member.name ?? "Client"
+                let programType = (settings.programType ?? "stamps").lowercased()
+                let pointsPerEuro = settings.pointsPerEuro ?? 1
+
+                if programType == "points" {
+                    await MainActor.run {
+                        scanResultSheet = ScanResultSheetData(
+                            slug: slug,
+                            memberName: memberName,
+                            barcode: barcode,
+                            pointsPerEuro: pointsPerEuro
+                        )
+                    }
+                    return
+                }
+
+                // Programme tampons : enregistrer 1 passage (1 tampon) immédiatement.
+                let response: ScanResponse = try await APIClient.shared.request(.scan(slug: slug, barcode: barcode, visit: true, points: nil, amountEur: nil))
                 await MainActor.run {
-                    successToast = Toast.scanSuccess(
-                        memberName: response.member.name ?? "Client",
-                        pointsAdded: response.pointsAdded
-                    )
+                    successToast = Toast.scanStampSuccess(memberName: response.member.name ?? memberName)
                     showToast = true
                 }
                 await syncService.syncIfNeeded()
             } catch APIError.notFound {
                 await MainActor.run {
-                    scanError = "Code non reconnu pour ce commerce."
-                    appState.showError("Code non reconnu.")
+                    scanError = "Code non reconnu pour ce commerce. Scannez le QR affiché sur la carte dans le Wallet du client (pas le lien « Ajouter à Wallet »)."
+                    appState.showError(scanError ?? "Code non reconnu.")
                 }
             } catch {
                 let msg = (error as? APIError)?.errorDescription ?? "Erreur lors du scan."
@@ -312,6 +369,26 @@ struct DashboardView: View {
                     scanError = msg
                     appState.showError(msg)
                 }
+            }
+        }
+    }
+
+    private func submitScanAmount(slug: String, barcode: String, amountEur: Double) async {
+        isScanAmountSubmitting = true
+        defer { Task { @MainActor in isScanAmountSubmitting = false } }
+        do {
+            let response: ScanResponse = try await APIClient.shared.request(.scan(slug: slug, barcode: barcode, visit: false, points: nil, amountEur: amountEur))
+            await MainActor.run {
+                successToast = Toast.scanSuccess(
+                    memberName: response.member.name ?? "Client",
+                    pointsAdded: response.pointsAdded
+                )
+            }
+            await syncService.syncIfNeeded()
+        } catch {
+            await MainActor.run {
+                scanError = (error as? APIError)?.errorDescription ?? "Erreur lors de l'enregistrement."
+                appState.showError(scanError ?? "Erreur")
             }
         }
     }
@@ -355,6 +432,122 @@ struct DashboardView: View {
         }
     }
 
+}
+
+// MARK: - Sheet montant du panier (programme points)
+private struct ScanResultSheetData: Identifiable {
+    let id = UUID()
+    let slug: String
+    let memberName: String
+    let barcode: String
+    let pointsPerEuro: Int
+}
+
+private struct ScanAmountSheet: View {
+    let memberName: String
+    let barcode: String
+    let pointsPerEuro: Int
+    @Binding var isSubmitting: Bool
+    var onDismiss: () -> Void
+    var onSubmit: (Double) async -> Void
+
+    @State private var amountText = ""
+    @FocusState private var amountFocused: Bool
+
+    private var amountValue: Double? {
+        let s = amountText.replacingOccurrences(of: ",", with: ".").trimmingCharacters(in: .whitespaces)
+        return Double(s)
+    }
+
+    private var pointsFromAmount: Int {
+        guard let a = amountValue, a > 0 else { return 0 }
+        return Int(floor(a * Double(pointsPerEuro)))
+    }
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: AppTheme.Spacing.xl) {
+                Text("Client reconnu")
+                    .font(AppTheme.Fonts.caption())
+                    .foregroundStyle(AppTheme.Colors.textSecondary)
+                Text(memberName)
+                    .font(AppTheme.Fonts.title3())
+                    .foregroundStyle(AppTheme.Colors.primary)
+
+                Text("Montant du panier")
+                    .font(AppTheme.Fonts.callout())
+                    .foregroundStyle(AppTheme.Colors.textSecondary)
+
+                Button {
+                    amountFocused = true
+                } label: {
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
+                        Text(amountText.isEmpty ? "0" : amountText)
+                            .font(.system(size: 56, weight: .bold, design: .rounded))
+                            .foregroundStyle(amountText.isEmpty ? AppTheme.Colors.textSecondary.opacity(0.5) : AppTheme.Colors.primary)
+                        Text("€")
+                            .font(.system(size: 32, weight: .semibold, design: .rounded))
+                            .foregroundStyle(AppTheme.Colors.textSecondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Appuyez pour saisir le montant")
+
+                TextField("Montant", text: $amountText)
+                    .keyboardType(.decimalPad)
+                    .textFieldStyle(.plain)
+                    .focused($amountFocused)
+                    .frame(width: 1, height: 1)
+                    .opacity(0.01)
+
+                if pointsFromAmount > 0 {
+                    Text("= \(pointsFromAmount) point\(pointsFromAmount > 1 ? "s" : "")")
+                        .font(AppTheme.Fonts.title3())
+                        .foregroundStyle(AppTheme.Colors.accent)
+                        .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                }
+
+                Button {
+                    guard let amount = amountValue, amount > 0 else { return }
+                    Task {
+                        await onSubmit(amount)
+                    }
+                } label: {
+                    if isSubmitting {
+                        ProgressView()
+                            .tint(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, AppTheme.Spacing.md)
+                    } else {
+                        Text("Enregistrer")
+                            .font(AppTheme.Fonts.headline())
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, AppTheme.Spacing.md)
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(AppTheme.Colors.primary)
+                .disabled(amountValue == nil || amountValue ?? 0 <= 0 || isSubmitting)
+            }
+            .padding(AppTheme.Spacing.xl)
+            .animation(.easeOut(duration: 0.25), value: amountText)
+            .animation(.easeOut(duration: 0.25), value: pointsFromAmount)
+            .onAppear {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                    amountFocused = true
+                }
+            }
+            .navigationTitle("Ajouter des points")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Annuler") { onDismiss() }
+                }
+            }
+        }
+    }
 }
 
 private struct StatCard: View {
