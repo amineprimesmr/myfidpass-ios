@@ -8,6 +8,7 @@
 import SwiftUI
 import CoreData
 import PassKit
+import Photos
 import PhotosUI
 import UIKit
 
@@ -19,6 +20,101 @@ enum CardPreviewFormat: String, CaseIterable {
     case cafeDesArts
 }
 
+/// Modifier pour adopter le style Liquid Glass natif des sheets sur iOS 26 (coins système, pas de fond opaque).
+struct LiquidGlassSheetModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 26, *) {
+            content.presentationCornerRadius(nil)
+        } else {
+            content
+        }
+    }
+}
+
+/// Aperçu d’une image depuis une URL (http) ou un chemin local (logo ou image de fond).
+struct CardImagePreviewView: View {
+    let urlOrPath: String
+    var body: some View {
+        let trimmed = urlOrPath.trimmingCharacters(in: .whitespaces)
+        Group {
+            if trimmed.isEmpty {
+                EmptyView()
+            } else if let filePath = resolvedFilePath(trimmed) {
+                LocalImagePreviewView(path: filePath)
+            } else if let url = resolvedHTTPURL(trimmed), isAPILogoURL(url) {
+                AuthenticatedLogoView(url: url, stripBackgroundFill: false)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
+            } else if let url = resolvedHTTPURL(trimmed), isAPICardBackgroundURL(url) {
+                AuthenticatedLogoView(url: url, stripBackgroundFill: false)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
+            } else if let url = resolvedHTTPURL(trimmed) {
+                AsyncImage(url: url) { phase in
+                    if let image = phase.image {
+                        image.resizable().scaledToFit()
+                    } else {
+                        Color.gray.opacity(0.2)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .clipped()
+            } else {
+                LocalImagePreviewView(path: urlOrPath)
+            }
+        }
+        .id(trimmed)
+    }
+
+    /// URL absolue ou chemin `/api/...` renvoyé seul par le backend.
+    private func resolvedHTTPURL(_ s: String) -> URL? {
+        if let u = URL(string: s), u.scheme == "http" || u.scheme == "https" { return u }
+        if s.hasPrefix("/"), let u = URL(string: s, relativeTo: APIConfig.baseURL)?.absoluteURL,
+           u.scheme == "http" || u.scheme == "https" {
+            return u
+        }
+        return nil
+    }
+    private func resolvedFilePath(_ path: String) -> String? {
+        if path.contains("CardLogos"), let full = CardLogoStorage.fullPath(forRelative: path) { return full }
+        if path.hasPrefix("/") { return path }
+        if path.hasPrefix("file:"), let p = URL(string: path)?.path { return p }
+        if let full = CardLogoStorage.fullPath(forRelative: path) { return full }
+        return nil
+    }
+    private func isAPILogoURL(_ url: URL) -> Bool {
+        (url.scheme == "http" || url.scheme == "https") && url.host() == APIConfig.baseURL.host() && url.path.contains("/logo")
+    }
+
+    private func isAPICardBackgroundURL(_ url: URL) -> Bool {
+        (url.scheme == "http" || url.scheme == "https") && url.host() == APIConfig.baseURL.host() && url.path.contains("card-background")
+    }
+}
+
+private struct LocalImagePreviewView: View {
+    let path: String
+    @State private var image: UIImage?
+    var body: some View {
+        Group {
+            if let img = image {
+                Image(uiImage: img)
+                    .resizable()
+                    .scaledToFit()
+            } else {
+                Color.gray.opacity(0.2)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .clipped()
+        .onAppear { loadImage() }
+        .onChange(of: path) { _, _ in loadImage() }
+    }
+    private func loadImage() {
+        let fullPath = path.hasPrefix("/") || path.hasPrefix("file:") ? (path.hasPrefix("file:") ? (URL(string: path)?.path ?? path) : path) : (CardLogoStorage.fullPath(forRelative: path) ?? path)
+        image = UIImage(contentsOfFile: fullPath)
+    }
+}
+
 struct MyCardView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @EnvironmentObject private var syncService: SyncService
@@ -27,6 +123,12 @@ struct MyCardView: View {
     @State private var requiredStamps: Int = 10
     @State private var primaryHex: String = "2563EB"
     @State private var accentHex: String = "F59E0B"
+    /// Couleur des libellés (RÉCOMPENSE, MEMBRE, etc.). Si vide, blanc/opacité par défaut.
+    @State private var labelHex: String = ""
+    /// "logo" = image logo, "text" = texte à la place du logo dans le bandeau.
+    @State private var stripDisplayMode: String = "logo"
+    /// Texte affiché dans le bandeau quand stripDisplayMode == "text".
+    @State private var stripText: String = ""
     @State private var logoURL: String = ""
     @State private var stampEmoji: String = ""
     @State private var logoPhotoItem: PhotosPickerItem?
@@ -35,29 +137,48 @@ struct MyCardView: View {
     @State private var cardBackgroundPhotoItem: PhotosPickerItem?
     /// True si l'utilisateur a supprimé l'image de fond (pour envoyer "" au backend à l'enregistrement).
     @State private var cardBackgroundWasRemoved = false
-    /// Aperçu simulé : nombre de tampons affichés sur la carte (0 à requiredStamps).
+    /// Aperçu simulé : nombre de tampons affichés (mode tampons).
     @State private var previewStampsCount: Int = 0
-    @State private var savedFeedback = false
+    /// Aperçu simulé : nombre de points affichés (mode points).
+    @State private var previewPointsCount: Int = 50
     /// Données du pass pour afficher la feuille « Ajouter à l’Apple Wallet ».
-    /// Mode édition inline : la carte reste visible, les champs apparaissent en dessous (pas de sheet).
-    @State private var isEditingCard = false
-    @State private var isSaving = false
+    /// Feuille ouverte pour une zone de la carte (tap sur l’aperçu).
+    @State private var customizationZone: CardPreviewEditZone?
     @State private var walletPassData: Data?
     @State private var walletLoading = false
     @State private var walletErrorMessage: String?
     @State private var saveLogoError: String?
-    @State private var showOnboardingStyle = false
-    @State private var showDesignsGallery = false
+    /// Fond carte hébergé sur l’API (GET …/card-background, Bearer) quand défini dans le SaaS.
+    @State private var cardBackgroundRemoteURL: String?
+    /// Couleurs dominantes extraites du logo, pour les proposer comme fond (comme sur le SaaS).
+    @State private var logoDominantColors: [String] = []
     // Règles de la carte (points vs tampons, récompenses)
     @State private var programType: String = "stamps"
     @State private var pointsPerEuro: Int = 1
     @State private var pointsPerVisit: Int = 0
     @State private var pointsMinAmountEur: String = ""
-    @State private var pointsRewardTiersText: String = ""
+    /// Paliers points (jusqu’à 5), alignés sur le SaaS web.
+    @State private var tierPoints: [String] = Array(repeating: "", count: 5)
+    @State private var tierLabels: [String] = Array(repeating: "", count: 5)
     @State private var stampRewardLabel: String = ""
     @State private var expiryMonths: String = ""
     @State private var sector: String = ""
     @State private var rulesLoadedFromAPI = false
+    /// True après un GET settings réussi : permet d’envoyer les champs avancés sans écraser le serveur avant chargement.
+    @State private var dashboardSettingsHydrated = false
+    @State private var backTerms: String = ""
+    @State private var backContact: String = ""
+    @State private var stampMidRewardLabel: String = ""
+    @State private var labelRestants: String = ""
+    /// Non éditables dans l’UI (fixes sur le SaaS) : conservés pour ne pas écraser l’API au PATCH.
+    @State private var labelMember: String = ""
+    @State private var headerRightText: String = ""
+    @State private var stampSkipMidReward = false
+    @State private var notificationTitleOverride: String = ""
+    @State private var notificationChangeMessage: String = ""
+    @State private var stampIconPhotoItem: PhotosPickerItem?
+    @State private var stampIconWasRemoved = false
+    @State private var stampIconPendingBase64: String?
 
     init(context: NSManagedObjectContext) {
         _dataService = StateObject(wrappedValue: DataService(context: context))
@@ -72,65 +193,82 @@ struct MyCardView: View {
         return name.localizedCaseInsensitiveContains("Café des Arts") || name == "Cafe des Arts"
     }
 
+    /// Texte récompense / palier pour l’aperçu (aligné sur le SaaS : premier palier ou libellé tampon).
+    private var cardRewardPreviewText: String {
+        if programType == "stamps" {
+            let s = stampRewardLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+            return s.isEmpty ? "Paliers en magasin" : s
+        }
+        for i in 0..<5 {
+            let lab = tierLabels[i].trimmingCharacters(in: .whitespacesAndNewlines)
+            let pts = tierPoints[i].trimmingCharacters(in: .whitespacesAndNewlines)
+            if !lab.isEmpty, Int(pts) != nil { return lab }
+        }
+        return "Paliers en magasin"
+    }
+
+    private var cardMemberPreviewText: String {
+        let n = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return n.isEmpty ? "Prévisualisation" : n
+    }
+
+    /// `label_member` API (SaaS) — texte au-dessus du nom client à droite.
+    private var previewMemberColumnTitle: String {
+        let m = labelMember.trimmingCharacters(in: .whitespacesAndNewlines)
+        return m.isEmpty ? "MEMBRE" : m
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView(.vertical, showsIndicators: true) {
                 VStack(spacing: AppTheme.Spacing.lg) {
                     previewSection
-                    if isEditingCard {
-                        editFormSection
-                    } else {
-                        actionsSection
-                    }
+                    actionsSection
                 }
                 .padding(.bottom, bottomScrollPadding)
             }
             .scrollBounceBehavior(.basedOnSize)
             .background(AppTheme.Colors.background)
-            .navigationTitle("Ma Carte")
-            .navigationBarTitleDisplayMode(.large)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    HStack(spacing: 12) {
-                        Button {
-                            showOnboardingStyle = true
-                        } label: {
-                            Label("Onboarding", systemImage: "rectangle.stack.fill")
-                        }
-                        .foregroundStyle(AppTheme.Colors.primary)
-                        Button {
-                            showDesignsGallery = true
-                        } label: {
-                            Label("Designs", systemImage: "paintbrush.pointed.fill")
-                        }
-                        .foregroundStyle(AppTheme.Colors.primary)
-                    }
+            .toolbar(.hidden, for: .navigationBar)
+            .onAppear {
+                loadCurrentTemplate()
+                if let slug = AuthStorage.currentBusinessSlug,
+                   let snap = CardPreviewDisplaySnapshotStore.load(slug: slug) {
+                    applyDisplaySnapshot(snap)
+                    Task { await prefetchCardMediaURLs(logoURLString: snap.logoURL, backgroundURLString: snap.cardBackgroundRemoteURL) }
                 }
+                Task { await loadCardSettingsFromAPI() }
             }
-            .fullScreenCover(isPresented: $showOnboardingStyle) {
-                OnboardingStylePageView()
+            .onChange(of: syncService.lastSyncDate) { _, newDate in
+                guard newDate != nil else { return }
+                Task { await loadCardSettingsFromAPI() }
             }
-            .fullScreenCover(isPresented: $showDesignsGallery) {
-                NavigationStack {
-                    CardDesignsGalleryView(
-                        onApplyDesign: { preset in
-                            applyDesignFromGallery(preset)
-                            showDesignsGallery = false
-                        },
-                        onDismiss: { showDesignsGallery = false }
-                    )
-                }
-            }
-            .onAppear { loadCurrentTemplate() }
-            .onChange(of: isEditingCard) { _, isEditing in
-                if isEditing && !rulesLoadedFromAPI {
-                    Task { await loadRulesFromAPI() }
-                }
+            .task(id: logoURL) {
+                await refreshLogoColors()
             }
             .onChange(of: requiredStamps) { _, new in
                 if previewStampsCount > new { previewStampsCount = new }
             }
-            .animation(.easeInOut(duration: 0.25), value: isEditingCard)
+            .sheet(item: $customizationZone) { zone in
+                CardElementCustomizationSheet(
+                    zone: zone,
+                    pack: cardCustomizationBindPack,
+                    actions: cardCustomizationActions,
+                    logoDominantColors: logoDominantColors,
+                    dashboardSettingsHydrated: dashboardSettingsHydrated,
+                    onClose: { customizationZone = nil },
+                    onSave: {
+                        let ok = await saveTemplate()
+                        if ok { await MainActor.run { triggerSavedFeedback() } }
+                        return ok
+                    }
+                )
+                .task(id: zone.id) {
+                    if zone == .walletPassBack {
+                        await loadCardSettingsFromAPI()
+                    }
+                }
+            }
             .overlay {
                 if walletPassData != nil {
                     AddToWalletPresenter(passData: walletPassData) {
@@ -140,11 +278,17 @@ struct MyCardView: View {
                 }
             }
             .alert("Apple Wallet", isPresented: .constant(walletErrorMessage != nil)) {
-                Button("OK") { walletErrorMessage = nil }
+                Button("Réessayez") {
+                    walletErrorMessage = nil
+                    addToWalletTapped()
+                }
+                Button("OK", role: .cancel) { walletErrorMessage = nil }
             } message: {
-                if let msg = walletErrorMessage { Text(msg) }
+                if let msg = walletErrorMessage {
+                    Text("\(msg)\n\nSi l’erreur revient, le problème vient du serveur (certificats ou configuration). Consultez les logs Railway.")
+                }
             }
-            .alert("Logo non synchronisé", isPresented: .constant(saveLogoError != nil)) {
+            .alert("Enregistrement", isPresented: .constant(saveLogoError != nil)) {
                 Button("OK") { saveLogoError = nil }
             } message: {
                 if let msg = saveLogoError { Text(msg) }
@@ -154,85 +298,176 @@ struct MyCardView: View {
 
     // MARK: - Aperçu carte (Wallet uniquement)
 
-    private let previewMaxHeight: CGFloat = 320
+    private let previewMinHeight: CGFloat = 438
+
+    /// Même URL que le lien « Lien et QR code » / page carte publique.
+    private var fidelityCardPageURLString: String? {
+        guard let slug = AuthStorage.currentBusinessSlug,
+              let url = LegalURLs.fidelityCardPage(slug: slug) else { return nil }
+        return url.absoluteString
+    }
 
     private var previewSection: some View {
-        VStack(spacing: AppTheme.Spacing.lg) {
-            Text("Aperçu comme dans le Wallet")
-                .font(AppTheme.Fonts.caption())
-                .foregroundStyle(AppTheme.Colors.textSecondary)
-                .textCase(.uppercase)
-                .tracking(0.6)
-
+        VStack(spacing: AppTheme.Spacing.md) {
             ZStack {
-                RoundedRectangle(cornerRadius: 24)
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .fill(AppTheme.Colors.shadow)
                     .blur(radius: 18)
                     .offset(y: 6)
                     .opacity(0.4)
 
                 Group {
-                    if isCafeDesArts {
+                    if programType == "stamps" {
                         CafeDesArtsCardPreview(
-                            displayName: displayName.isEmpty ? "Café des Arts" : displayName,
-                            requiredStamps: Int32(requiredStamps),
-                            stampsCount: Int32(previewStampsCount),
-                            primaryColorHex: primaryHex,
-                            accentColorHex: accentHex,
-                            logoURL: logoURL.isEmpty ? nil : logoURL,
-                            stampEmoji: stampEmoji.isEmpty ? nil : stampEmoji,
-                            compact: false
-                        )
-                    } else {
-                        WalletCardPreview(
                             displayName: displayName.isEmpty ? "Ma Carte Fidélité" : displayName,
                             requiredStamps: Int32(requiredStamps),
                             stampsCount: Int32(previewStampsCount),
                             primaryColorHex: primaryHex,
                             accentColorHex: accentHex,
+                            stripColorHex: nil,
                             logoURL: logoURL.isEmpty ? nil : logoURL,
+                            stripDisplayMode: stripDisplayMode,
+                            stripText: stripText.isEmpty ? nil : stripText,
                             stampEmoji: stampEmoji.isEmpty ? nil : stampEmoji,
-                            compact: false
+                            cardBackgroundImagePath: cardBackgroundImagePath.flatMap { $0.isEmpty ? nil : CardLogoStorage.fullPath(forRelative: $0) },
+                            cardBackgroundRemoteURL: cardBackgroundRemoteURL,
+                            labelColorHex: labelHex.trimmingCharacters(in: .whitespaces).isEmpty ? nil : labelHex,
+                            headerRightText: headerRightText.isEmpty ? nil : headerRightText,
+                            rewardPreviewText: cardRewardPreviewText,
+                            memberPreviewText: cardMemberPreviewText,
+                            memberColumnTitle: previewMemberColumnTitle,
+                            restantsCaption: labelRestants.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Restants" : labelRestants.trimmingCharacters(in: .whitespacesAndNewlines),
+                            compact: false,
+                            fidelityQRPayloadURL: fidelityCardPageURLString,
+                            onEditZoneTap: { handleCardPreviewZoneTap($0) }
+                        )
+                    } else {
+                        WalletCardPreview(
+                            displayName: displayName.isEmpty ? "Ma Carte Fidélité" : displayName,
+                            requiredStamps: Int32(requiredStamps),
+                            stampsCount: Int32(previewPointsCount),
+                            primaryColorHex: primaryHex,
+                            accentColorHex: accentHex,
+                            stripColorHex: nil,
+                            logoURL: logoURL.isEmpty ? nil : logoURL,
+                            stripDisplayMode: stripDisplayMode,
+                            stripText: stripText.isEmpty ? nil : stripText,
+                            stampEmoji: stampEmoji.isEmpty ? nil : stampEmoji,
+                            cardBackgroundImagePath: cardBackgroundImagePath.flatMap { $0.isEmpty ? nil : CardLogoStorage.fullPath(forRelative: $0) },
+                            cardBackgroundRemoteURL: cardBackgroundRemoteURL,
+                            labelColorHex: labelHex.trimmingCharacters(in: .whitespaces).isEmpty ? nil : labelHex,
+                            headerRightText: headerRightText.isEmpty ? nil : headerRightText,
+                            rewardPreviewText: cardRewardPreviewText,
+                            memberPreviewText: cardMemberPreviewText,
+                            memberColumnTitle: previewMemberColumnTitle,
+                            compact: false,
+                            fidelityQRPayloadURL: fidelityCardPageURLString,
+                            onEditZoneTap: { handleCardPreviewZoneTap($0) }
                         )
                     }
                 }
                 .padding(.horizontal, AppTheme.Spacing.lg)
-                .frame(maxHeight: previewMaxHeight)
+                .frame(minHeight: previewMinHeight)
             }
-            .id("\(primaryHex)-\(accentHex)-\(displayName)-\(requiredStamps)-\(previewStampsCount)")
-            .padding(.vertical, AppTheme.Spacing.sm)
-
-            Text("Simuler les tampons : \(previewStampsCount)/\(requiredStamps)")
-                .font(AppTheme.Fonts.caption())
-                .foregroundStyle(AppTheme.Colors.textSecondary)
-
-            Slider(
-                value: Binding(
-                    get: { Double(previewStampsCount) },
-                    set: { previewStampsCount = Int($0.rounded()) }
-                ),
-                in: 0...Double(max(1, requiredStamps))
+            .id(
+                "\(programType)-\(primaryHex)-\(accentHex)-\(labelHex)-\(logoURL)-\(stripDisplayMode)-\(stripText)-\(headerRightText)-\(displayName)-\(requiredStamps)-\(previewStampsCount)-\(previewPointsCount)-\(cardBackgroundImagePath ?? "")-\(cardBackgroundRemoteURL ?? "")-\(cardRewardPreviewText)-\(cardMemberPreviewText)-\(previewMemberColumnTitle)"
             )
-            .tint(AppTheme.Colors.primary)
-            .padding(.horizontal, AppTheme.Spacing.xl)
-
-            // Bouton : tester la carte dans l’Apple Wallet
+            .padding(.vertical, AppTheme.Spacing.xs)
         }
-        .padding(.top, AppTheme.Spacing.lg)
-        .padding(.bottom, AppTheme.Spacing.md)
+        .padding(.top, AppTheme.Spacing.xl + AppTheme.Spacing.md)
+        .padding(.bottom, AppTheme.Spacing.sm)
     }
 
-    // MARK: - Boutons d'action (mode aperçu)
+    private func handleCardPreviewZoneTap(_ zone: CardPreviewEditZone) {
+        customizationZone = zone
+    }
+
+    /// Bindings passés à la feuille de personnalisation (une seule construction à la présentation).
+    private var cardCustomizationBindPack: CardCustomizationBindPack {
+        CardCustomizationBindPack(
+            primaryHex: $primaryHex,
+            accentHex: $accentHex,
+            labelHex: $labelHex,
+            stripDisplayMode: $stripDisplayMode,
+            stripText: $stripText,
+            logoURL: $logoURL,
+            logoPhotoItem: $logoPhotoItem,
+            headerRightText: $headerRightText,
+            labelMember: $labelMember,
+            labelRestants: $labelRestants,
+            displayName: $displayName,
+            cardBackgroundPhotoItem: $cardBackgroundPhotoItem,
+            cardBackgroundImagePath: $cardBackgroundImagePath,
+            cardBackgroundRemoteURL: $cardBackgroundRemoteURL,
+            programType: $programType,
+            tierPoints: $tierPoints,
+            tierLabels: $tierLabels,
+            requiredStamps: $requiredStamps,
+            previewStampsCount: $previewStampsCount,
+            previewPointsCount: $previewPointsCount,
+            stampEmoji: $stampEmoji,
+            stampRewardLabel: $stampRewardLabel,
+            stampMidRewardLabel: $stampMidRewardLabel,
+            stampSkipMidReward: $stampSkipMidReward,
+            stampIconPhotoItem: $stampIconPhotoItem,
+            backTerms: $backTerms,
+            backContact: $backContact,
+            notificationTitleOverride: $notificationTitleOverride,
+            notificationChangeMessage: $notificationChangeMessage
+        )
+    }
+
+    private var cardCustomizationActions: CardCustomizationActions {
+        CardCustomizationActions(
+            loadLogoFromPicker: { item in await loadLogoFromPicker(item) },
+            loadLogoFromPhotoAsset: { asset in await loadLogoFromPhotoAsset(asset) },
+            loadCardBackgroundFromPicker: { item in await loadCardBackgroundFromPicker(item) },
+            loadCardBackgroundFromPhotoAsset: { asset in await loadCardBackgroundFromPhotoAsset(asset) },
+            loadStampIconFromPicker: { item in await loadStampIconFromPicker(item) },
+            removeCardBackground: {
+                cardBackgroundImagePath = nil
+                cardBackgroundPhotoItem = nil
+                cardBackgroundRemoteURL = nil
+                cardBackgroundWasRemoved = true
+            },
+            removeLogo: {
+                logoURL = ""
+                logoPhotoItem = nil
+            },
+            resetStampIcon: {
+                stampIconWasRemoved = true
+                stampIconPendingBase64 = nil
+                stampIconPhotoItem = nil
+            }
+        )
+    }
+
+    // MARK: - Actions sous l’aperçu
 
     private var actionsSection: some View {
         VStack(spacing: 14) {
-            Button {
-                withAnimation(.easeInOut(duration: 0.25)) { isEditingCard = true }
+            Text("Touchez un élément sur la carte pour ouvrir ses réglages (texte, couleurs, image ou règles).")
+                .font(.subheadline)
+                .foregroundStyle(AppTheme.Colors.textSecondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, AppTheme.Spacing.sm)
+
+            Menu {
+                Button {
+                    customizationZone = .cardAppearance
+                } label: {
+                    Label("Couleurs de la carte", systemImage: "paintpalette")
+                }
+                Button {
+                    customizationZone = .walletPassBack
+                } label: {
+                    Label("Verso du pass & notifications", systemImage: "doc.text")
+                }
             } label: {
                 HStack(spacing: 10) {
-                    Image(systemName: "paintbrush.pointed.fill")
+                    Image(systemName: "slider.horizontal.3")
                         .font(.title3)
-                    Text("Modifier la carte")
+                    Text("Autres réglages")
                         .fontWeight(.semibold)
                 }
                 .frame(maxWidth: .infinity)
@@ -247,337 +482,6 @@ struct MyCardView: View {
         .padding(.top, AppTheme.Spacing.lg)
     }
 
-    // MARK: - Formulaire d'édition inline (la carte reste visible au-dessus)
-
-    private var editFormSection: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text("Personnalisation")
-                .font(.headline)
-                .foregroundStyle(AppTheme.Colors.textPrimary)
-                .padding(.horizontal, AppTheme.Spacing.lg)
-                .padding(.top, 24)
-                .padding(.bottom, 12)
-
-            VStack(alignment: .leading, spacing: 20) {
-                editRulesBlock
-                editNameBlock
-                editLogoBlock
-                editBackgroundImageBlock
-                editStampEmojiBlock
-                editStampsBlock
-                editColorsBlock
-            }
-            .padding(AppTheme.Spacing.lg)
-            .background(AppTheme.Colors.cardBackground)
-            .clipShape(RoundedRectangle(cornerRadius: 16))
-            .overlay(
-                RoundedRectangle(cornerRadius: 16)
-                    .strokeBorder(AppTheme.Colors.textSecondary.opacity(0.15), lineWidth: 1)
-            )
-            .padding(.horizontal, AppTheme.Spacing.lg)
-
-            HStack(spacing: 12) {
-                Button {
-                    withAnimation(.easeInOut(duration: 0.25)) { isEditingCard = false }
-                } label: {
-                    Text("Terminer")
-                        .fontWeight(.semibold)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 16)
-                }
-                .buttonStyle(.bordered)
-                .tint(AppTheme.Colors.textPrimary)
-
-                Button {
-                    saveAndStayInEditMode()
-                } label: {
-                    HStack(spacing: 8) {
-                        if isSaving {
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                .scaleEffect(0.9)
-                        } else if savedFeedback {
-                            Image(systemName: "checkmark.circle.fill")
-                        } else {
-                            Image(systemName: "square.and.arrow.down")
-                        }
-                        Text(isSaving ? "Enregistrement…" : (savedFeedback ? "Enregistré" : "Enregistrer"))
-                            .fontWeight(.semibold)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 16)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(savedFeedback ? AppTheme.Colors.success : AppTheme.Colors.primary)
-                .disabled(isSaving)
-            }
-            .padding(.horizontal, AppTheme.Spacing.lg)
-            .padding(.top, 20)
-            .padding(.bottom, 8)
-        }
-    }
-
-    private var editRulesBlock: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Label("Règles de la carte", systemImage: "list.bullet.rectangle")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(AppTheme.Colors.textPrimary)
-            Text("Type de programme : points (ex. 1 pt/€) ou tampons (ex. 1 tampon/visite, 10 = récompense).")
-                .font(.caption)
-                .foregroundStyle(AppTheme.Colors.textSecondary)
-            Picker("Type", selection: $programType) {
-                Text("Points").tag("points")
-                Text("Tampons").tag("stamps")
-            }
-            .pickerStyle(.segmented)
-
-            if programType == "points" {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Text("Points par €")
-                        Spacer()
-                        TextField("1", value: $pointsPerEuro, format: .number)
-                            .keyboardType(.numberPad)
-                            .multilineTextAlignment(.trailing)
-                            .frame(width: 60)
-                    }
-                    .font(.subheadline)
-                    HStack {
-                        Text("Points par passage")
-                        Spacer()
-                        TextField("0", value: $pointsPerVisit, format: .number)
-                            .keyboardType(.numberPad)
-                            .multilineTextAlignment(.trailing)
-                            .frame(width: 60)
-                    }
-                    .font(.subheadline)
-                    TextField("Montant min. (€) pour gagner des points", text: $pointsMinAmountEur)
-                        .keyboardType(.decimalPad)
-                        .textFieldStyle(.plain)
-                        .padding(10)
-                        .background(AppTheme.Colors.background)
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
-                    Text("Paliers (ex. 100:5€ de réduction)")
-                        .font(.caption)
-                        .foregroundStyle(AppTheme.Colors.textSecondary)
-                    TextEditor(text: $pointsRewardTiersText)
-                        .frame(minHeight: 60)
-                        .padding(8)
-                        .background(AppTheme.Colors.background)
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
-                }
-            } else {
-                TextField("Récompense affichée (ex. 1 café offert)", text: $stampRewardLabel)
-                    .textFieldStyle(.plain)
-                    .padding(10)
-                    .background(AppTheme.Colors.background)
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-            }
-
-            HStack {
-                Text("Expiration (mois)")
-                    .font(.subheadline)
-                Spacer()
-                TextField("Jamais", text: $expiryMonths)
-                    .keyboardType(.numberPad)
-                    .multilineTextAlignment(.trailing)
-                    .frame(width: 70)
-            }
-            .font(.caption)
-            .foregroundStyle(AppTheme.Colors.textSecondary)
-        }
-    }
-
-    private var editNameBlock: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label("Nom de l'établissement", systemImage: "textformat")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(AppTheme.Colors.textPrimary)
-            TextField("Ex: Café du coin, Ma Boulangerie", text: $displayName)
-                .textFieldStyle(.plain)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 14)
-                .background(AppTheme.Colors.background)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12)
-                        .strokeBorder(AppTheme.Colors.textSecondary.opacity(0.2), lineWidth: 1)
-                )
-                .autocorrectionDisabled()
-        }
-    }
-
-    private var editLogoBlock: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Label("Logo sur la carte", systemImage: "photo")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(AppTheme.Colors.textPrimary)
-            TextField("URL de l'image (https://…)", text: $logoURL)
-                .textFieldStyle(.plain)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-                .background(AppTheme.Colors.background)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12)
-                        .strokeBorder(AppTheme.Colors.textSecondary.opacity(0.2), lineWidth: 1)
-                )
-                .keyboardType(.URL)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-            HStack(spacing: 12) {
-                PhotosPicker(
-                    selection: $logoPhotoItem,
-                    matching: .images,
-                    photoLibrary: .shared()
-                ) {
-                    Label("Importer une image", systemImage: "photo.on.rectangle.angled")
-                        .font(.callout)
-                }
-                .onChange(of: logoPhotoItem) { _, new in
-                    Task { await loadLogoFromPicker(new) }
-                }
-                if !logoURL.isEmpty {
-                    Button(role: .destructive) {
-                        logoURL = ""
-                        logoPhotoItem = nil
-                    } label: {
-                        Label("Supprimer", systemImage: "trash")
-                            .font(.caption)
-                    }
-                }
-            }
-        }
-    }
-
-    private var editBackgroundImageBlock: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Label("Image de fond de carte", systemImage: "photo.fill")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(AppTheme.Colors.textPrimary)
-            Text("Utilisée comme bandeau sur la carte dans le Wallet (optionnel).")
-                .font(.caption)
-                .foregroundStyle(AppTheme.Colors.textSecondary)
-            PhotosPicker(
-                selection: $cardBackgroundPhotoItem,
-                matching: .images,
-                photoLibrary: .shared()
-            ) {
-                Label("Choisir une image", systemImage: "photo.on.rectangle.angled")
-                    .font(.callout)
-            }
-            .onChange(of: cardBackgroundPhotoItem) { _, new in
-                Task { await loadCardBackgroundFromPicker(new) }
-            }
-            if cardBackgroundImagePath != nil {
-                Button(role: .destructive) {
-                    cardBackgroundImagePath = nil
-                    cardBackgroundPhotoItem = nil
-                    cardBackgroundWasRemoved = true
-                } label: {
-                    Label("Supprimer l'image de fond", systemImage: "trash.fill")
-                        .font(.subheadline.weight(.medium))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                }
-                .buttonStyle(.bordered)
-            }
-        }
-    }
-
-    private var editStampEmojiBlock: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Label("Emoji sur la carte", systemImage: "face.smiling")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(AppTheme.Colors.textPrimary)
-            Text("Un emoji affiché à côté des points (ex. ☕ pour un café, 🍔 pour un burger)")
-                .font(.caption)
-                .foregroundStyle(AppTheme.Colors.textSecondary)
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 12) {
-                    ForEach(StampEmojiPresets.all, id: \.self) { emoji in
-                        Button {
-                            stampEmoji = stampEmoji == emoji ? "" : emoji
-                        } label: {
-                            Text(emoji)
-                                .font(.system(size: 28))
-                                .frame(width: 44, height: 44)
-                                .background((stampEmoji == emoji ? AppTheme.Colors.primary.opacity(0.2) : Color.clear))
-                                .clipShape(RoundedRectangle(cornerRadius: 10))
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    Button {
-                        stampEmoji = ""
-                    } label: {
-                        Text("Aucun")
-                            .font(.caption)
-                            .foregroundStyle(AppTheme.Colors.textSecondary)
-                            .frame(width: 60, height: 44)
-                            .background(stampEmoji.isEmpty ? AppTheme.Colors.primary.opacity(0.2) : Color.clear)
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
-                    }
-                    .buttonStyle(.plain)
-                }
-                .padding(.vertical, 4)
-            }
-        }
-    }
-
-    private var editStampsBlock: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Label("Tampons pour une récompense", systemImage: "star.circle")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(AppTheme.Colors.textPrimary)
-            HStack(spacing: 16) {
-                Text("\(requiredStamps)")
-                    .font(.title2.weight(.bold))
-                    .foregroundStyle(AppTheme.Colors.primary)
-                    .frame(minWidth: 32, alignment: .trailing)
-                Slider(
-                    value: Binding(
-                        get: { Double(requiredStamps) },
-                        set: { requiredStamps = Int($0.rounded()) }
-                    ),
-                    in: 5...30,
-                    step: 1
-                )
-                .tint(AppTheme.Colors.primary)
-            }
-            .padding(.vertical, 4)
-        }
-    }
-
-    private var editColorsBlock: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Label("Couleurs", systemImage: "paintpalette")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(AppTheme.Colors.textPrimary)
-            ColorPickerRow(
-                title: "Couleur principale",
-                subtitle: "Fond de la carte",
-                hex: $primaryHex
-            )
-            ColorPickerRow(
-                title: "Couleur des points",
-                subtitle: "Tampons et compteur",
-                hex: $accentHex
-            )
-        }
-    }
-
-    private func saveAndStayInEditMode() {
-        guard !isSaving else { return }
-        isSaving = true
-        Task {
-            await saveTemplate()
-            await MainActor.run {
-                triggerSavedFeedback()
-                isSaving = false
-            }
-        }
-    }
-
     private var addToWalletButton: some View {
         Button {
             addToWalletTapped()
@@ -587,8 +491,12 @@ struct MyCardView: View {
                     ProgressView()
                         .progressViewStyle(CircularProgressViewStyle(tint: .white))
                 } else {
-                    Image(systemName: "wallet.pass.fill")
-                        .font(.title3)
+                    Image("AppleWalletAppIcon")
+                        .resizable()
+                        .interpolation(.high)
+                        .scaledToFit()
+                        .frame(width: 28, height: 28)
+                        .clipShape(RoundedRectangle(cornerRadius: 6.5, style: .continuous))
                 }
                 Text(walletLoading ? "Chargement…" : "Tester dans l’Apple Wallet")
                     .fontWeight(.semibold)
@@ -602,11 +510,18 @@ struct MyCardView: View {
     }
 
     private func addToWalletTapped() {
-        walletLoading = true
         walletErrorMessage = nil
         Task {
-            // Enregistrer d’abord le design actuel (celui affiché, y compris en mode Grille) pour que le pass Wallet le reflète.
-            await saveTemplate()
+            await MainActor.run { walletLoading = true }
+            defer {
+                Task { @MainActor in
+                    walletLoading = false
+                }
+            }
+            // Enregistrer d’abord le design actuel pour que le pass reflète l’aperçu.
+            await loadCardSettingsFromAPI()
+            let saved = await saveTemplate()
+            guard saved else { return }
 
             var slug = AuthStorage.currentBusinessSlug
             if slug == nil, AuthStorage.isLoggedIn {
@@ -615,190 +530,49 @@ struct MyCardView: View {
             }
             guard let slug else {
                 await MainActor.run {
-                    walletLoading = false
                     walletErrorMessage = "Votre commerce n’a pas encore été chargé. Vérifiez votre connexion, tirez pour actualiser le tableau de bord puis réessayez."
                 }
                 return
             }
             guard let template = dataService.currentCardTemplate() else {
                 await MainActor.run {
-                    walletLoading = false
                     walletErrorMessage = "Données du commerce manquantes. Actualisez le tableau de bord puis réessayez."
                 }
                 return
             }
-            let members = dataService.clientCards(for: template)
+            let members = dataService.uniqueClientCards(for: template)
             guard let memberId = members.first?.qrCodeValue, !memberId.isEmpty else {
                 await MainActor.run {
-                    walletLoading = false
                     walletErrorMessage = "Aucun membre. Synchronisez le tableau de bord (tirez pour actualiser) ou ajoutez un client pour tester le pass."
                 }
                 return
             }
+            let bgHex = primaryHex.hasPrefix("#") ? String(primaryHex.dropFirst()) : primaryHex
             let design = WalletPassDesign(
                 organizationName: displayName.trimmingCharacters(in: .whitespaces).isEmpty ? "Ma Carte Fidélité" : displayName.trimmingCharacters(in: .whitespaces),
-                backgroundColor: primaryHex.hasPrefix("#") ? String(primaryHex.dropFirst()) : primaryHex,
+                backgroundColor: bgHex,
                 foregroundColor: accentHex.hasPrefix("#") ? String(accentHex.dropFirst()) : accentHex,
                 stampEmoji: stampEmoji,
-                requiredStamps: requiredStamps,
+                requiredStamps: programType == "stamps" ? 10 : requiredStamps,
+                programType: programType,
+                stripColor: bgHex,
+                stripDisplayMode: stripDisplayMode,
+                stripText: stripText.trimmingCharacters(in: .whitespaces).isEmpty ? nil : stripText.trimmingCharacters(in: .whitespaces),
                 template: isCafeDesArts ? "cafe" : nil
             )
             do {
                 let data = try await APIClient.shared.requestData(.walletPass(slug: slug, memberId: memberId, design: design))
                 await MainActor.run {
-                    walletLoading = false
+                    walletErrorMessage = nil
                     walletPassData = data
                 }
             } catch APIError.notFound {
                 await MainActor.run {
-                    walletLoading = false
                     walletErrorMessage = "Pass non trouvé pour ce membre. Réessayez ou ajoutez un client."
                 }
             } catch {
                 await MainActor.run {
-                    walletLoading = false
                     walletErrorMessage = (error as? APIError)?.errorDescription ?? "Impossible de charger le pass. Réessayez plus tard."
-                }
-            }
-        }
-    }
-
-    // MARK: - Section personnalisation du design
-
-    private var designSection: some View {
-        VStack(alignment: .leading, spacing: AppTheme.Spacing.lg) {
-            Label("Personnaliser le design", systemImage: "paintbrush.fill")
-                .font(AppTheme.Fonts.title3())
-                .foregroundStyle(AppTheme.Colors.textPrimary)
-
-            VStack(alignment: .leading, spacing: AppTheme.Spacing.md) {
-                // Nom de la carte
-                VStack(alignment: .leading, spacing: AppTheme.Spacing.xs) {
-                    Text("Nom de la carte")
-                        .font(AppTheme.Fonts.caption())
-                        .foregroundStyle(AppTheme.Colors.textSecondary)
-                    TextField("Ex: Carte Café", text: $displayName)
-                        .textFieldStyle(.plain)
-                        .padding(.horizontal, AppTheme.Spacing.md)
-                        .padding(.vertical, AppTheme.Spacing.sm)
-                        .background(AppTheme.Colors.background)
-                        .clipShape(RoundedRectangle(cornerRadius: AppTheme.Radius.sm))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: AppTheme.Radius.sm)
-                                .strokeBorder(AppTheme.Colors.textSecondary.opacity(0.2), lineWidth: 1)
-                        )
-                        .autocorrectionDisabled()
-                }
-
-                // Logo
-                logoSection
-
-                // Nombre de tampons pour une récompense
-                VStack(alignment: .leading, spacing: AppTheme.Spacing.xs) {
-                    Text("Tampons pour une récompense")
-                        .font(AppTheme.Fonts.caption())
-                        .foregroundStyle(AppTheme.Colors.textSecondary)
-                    HStack {
-                        Text("\(requiredStamps)")
-                            .font(AppTheme.Fonts.title2())
-                            .foregroundStyle(AppTheme.Colors.primary)
-                            .frame(width: 36, alignment: .trailing)
-                        Slider(value: Binding(
-                            get: { Double(requiredStamps) },
-                            set: { requiredStamps = Int($0.rounded()) }
-                        ), in: 5...30, step: 1)
-                            .tint(AppTheme.Colors.primary)
-                    }
-                }
-
-                // Couleur principale
-                ColorPickerRow(
-                    title: "Couleur principale",
-                    subtitle: "Fond de la carte",
-                    hex: $primaryHex
-                )
-
-                // Couleur des points
-                ColorPickerRow(
-                    title: "Couleur des points",
-                    subtitle: "Tampons et compteur",
-                    hex: $accentHex
-                )
-
-                // Bouton enregistrer
-                Button {
-                    Task {
-                        await saveTemplate()
-                        triggerSavedFeedback()
-                    }
-                } label: {
-                    HStack(spacing: 8) {
-                        if savedFeedback {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundStyle(AppTheme.Colors.success)
-                        }
-                        Text(savedFeedback ? "Enregistré" : "Enregistrer le design")
-                            .fontWeight(.semibold)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, AppTheme.Spacing.md)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(savedFeedback ? AppTheme.Colors.success : AppTheme.Colors.primary)
-                .padding(.top, AppTheme.Spacing.sm)
-            }
-            .padding(AppTheme.Spacing.md)
-            .background(AppTheme.Colors.cardBackground)
-            .clipShape(RoundedRectangle(cornerRadius: AppTheme.Radius.lg))
-            .shadow(color: AppTheme.Colors.shadow, radius: 8, x: 0, y: 2)
-        }
-        .padding(.horizontal, AppTheme.Spacing.md)
-    }
-
-    private var logoSection: some View {
-        VStack(alignment: .leading, spacing: AppTheme.Spacing.sm) {
-            Text("Logo de la carte")
-                .font(AppTheme.Fonts.body())
-                .foregroundStyle(AppTheme.Colors.textPrimary)
-            Text("URL de l’image ou choisir une photo")
-                .font(AppTheme.Fonts.caption())
-                .foregroundStyle(AppTheme.Colors.textSecondary)
-
-            TextField("https://… ou laisser vide", text: $logoURL)
-                .textFieldStyle(.plain)
-                .padding(.horizontal, AppTheme.Spacing.md)
-                .padding(.vertical, AppTheme.Spacing.sm)
-                .background(AppTheme.Colors.background)
-                .clipShape(RoundedRectangle(cornerRadius: AppTheme.Radius.sm))
-                .overlay(
-                    RoundedRectangle(cornerRadius: AppTheme.Radius.sm)
-                        .strokeBorder(AppTheme.Colors.textSecondary.opacity(0.2), lineWidth: 1)
-                )
-                .keyboardType(.URL)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-
-            HStack(spacing: AppTheme.Spacing.sm) {
-                PhotosPicker(
-                    selection: $logoPhotoItem,
-                    matching: .images,
-                    photoLibrary: .shared()
-                ) {
-                    Label("Choisir une photo", systemImage: "photo.on.rectangle.angled")
-                        .font(AppTheme.Fonts.callout())
-                }
-                .onChange(of: logoPhotoItem) { _, new in
-                    Task { await loadLogoFromPicker(new) }
-                }
-
-                if !logoURL.isEmpty {
-                    Button(role: .destructive) {
-                        logoURL = ""
-                        logoPhotoItem = nil
-                    } label: {
-                        Label("Supprimer le logo", systemImage: "trash")
-                            .font(AppTheme.Fonts.caption())
-                    }
                 }
             }
         }
@@ -808,24 +582,98 @@ struct MyCardView: View {
         guard let item else { return }
         guard let data = try? await item.loadTransferable(type: Data.self),
               let image = UIImage(data: data) else { return }
+        await applyLogoImage(image)
+    }
+
+    private func loadLogoFromPhotoAsset(_ asset: PHAsset) async {
+        guard let image = await asset.myfid_exportUIImage() else { return }
+        await applyLogoImage(image)
+    }
+
+    private func applyLogoImage(_ image: UIImage) async {
         let path = CardLogoStorage.saveImage(image)
+        let colors = LogoColorExtractor.dominantColors(from: image, maxColors: 4).map { h in h.hasPrefix("#") ? h : "#" + h }
         await MainActor.run {
             logoURL = path ?? ""
+            logoDominantColors = colors
             if path != nil { logoPhotoItem = nil }
         }
+    }
+
+    /// Charge une UIImage depuis une URL (http) ou un chemin relatif (fichier local). Utilise le token pour l’API.
+    private func loadLogoImage(from urlOrPath: String) async -> UIImage? {
+        let trimmed = urlOrPath.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return nil }
+        if trimmed.lowercased().hasPrefix("http"), let url = URL(string: trimmed) {
+            if url.host() == APIConfig.baseURL.host(), url.path.contains("/logo") {
+                return try? await AuthenticatedMediaLoader.loadAuthenticatedImage(from: url)
+            }
+            let request = URLRequest(url: url)
+            guard let (data, resp) = try? await URLSession.shared.data(for: request),
+                  let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode),
+                  let image = UIImage(data: data) else { return nil }
+            return image
+        }
+        let fullPath: String
+        if trimmed.hasPrefix("/") || trimmed.hasPrefix("file:") {
+            fullPath = trimmed.hasPrefix("file:") ? (URL(string: trimmed)?.path ?? trimmed) : trimmed
+        } else {
+            guard let fp = CardLogoStorage.fullPath(forRelative: trimmed) else { return nil }
+            fullPath = fp
+        }
+        return UIImage(contentsOfFile: fullPath)
+    }
+
+    private func refreshLogoColors() async {
+        guard !logoURL.trimmingCharacters(in: .whitespaces).isEmpty else {
+            await MainActor.run { logoDominantColors = [] }
+            return
+        }
+        guard let image = await loadLogoImage(from: logoURL) else {
+            await MainActor.run { logoDominantColors = [] }
+            return
+        }
+        let colors = LogoColorExtractor.dominantColors(from: image, maxColors: 4).map { h in h.hasPrefix("#") ? h : "#" + h }
+        await MainActor.run { logoDominantColors = colors }
     }
 
     private func loadCardBackgroundFromPicker(_ item: PhotosPickerItem?) async {
         guard let item else { return }
         guard let data = try? await item.loadTransferable(type: Data.self),
               let image = UIImage(data: data) else { return }
+        await applyCardBackgroundImage(image)
+    }
+
+    private func loadCardBackgroundFromPhotoAsset(_ asset: PHAsset) async {
+        guard let image = await asset.myfid_exportUIImage() else { return }
+        await applyCardBackgroundImage(image)
+    }
+
+    private func applyCardBackgroundImage(_ image: UIImage) async {
         let path = CardLogoStorage.saveCardBackground(image)
         await MainActor.run {
             cardBackgroundImagePath = path
             if path != nil {
                 cardBackgroundPhotoItem = nil
                 cardBackgroundWasRemoved = false
+                cardBackgroundRemoteURL = nil
             }
+        }
+    }
+
+    private func loadStampIconFromPicker(_ item: PhotosPickerItem?) async {
+        guard let item else { return }
+        guard let data = try? await item.loadTransferable(type: Data.self),
+              let image = UIImage(data: data),
+              let jpeg = image.jpegData(compressionQuality: 0.85) else { return }
+        let b64 = jpeg.base64EncodedString()
+        let maxLen = 512 * 1024
+        guard jpeg.count <= maxLen else { return }
+        let payload = "data:image/jpeg;base64,\(b64)"
+        await MainActor.run {
+            stampIconPendingBase64 = payload
+            stampIconWasRemoved = false
+            stampIconPhotoItem = nil
         }
     }
 
@@ -837,61 +685,180 @@ struct MyCardView: View {
         accentHex = t.accentColorHex ?? "F59E0B"
         logoURL = t.logoURL ?? ""
         stampEmoji = t.stampEmoji ?? ""
-        previewStampsCount = min(3, requiredStamps)
+        previewStampsCount = min(3, max(0, requiredStamps))
     }
 
-    private func loadRulesFromAPI() async {
+    /// Restaure le dernier rendu connu du serveur (évite tampons vs points ou couleurs obsolètes le temps du GET).
+    private func applyDisplaySnapshot(_ s: CardPreviewDisplaySnapshot) {
+        programType = s.programType
+        if programType != "points" && programType != "stamps" { programType = "stamps" }
+        displayName = s.displayName.isEmpty ? displayName : s.displayName
+        primaryHex = s.primaryHex.isEmpty ? primaryHex : s.primaryHex
+        accentHex = s.accentHex.isEmpty ? accentHex : s.accentHex
+        labelHex = s.labelHex
+        stripDisplayMode = s.stripDisplayMode
+        if stripDisplayMode != "text" { stripDisplayMode = "logo" }
+        stripText = s.stripText
+        logoURL = s.logoURL
+        stampEmoji = s.stampEmoji
+        requiredStamps = max(1, s.requiredStamps)
+        headerRightText = s.headerRightText
+        labelMember = s.labelMember
+        stampRewardLabel = s.stampRewardLabel
+        let localBG = !(cardBackgroundImagePath ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if !localBG {
+            if s.hasRemoteCardBackground, let u = s.cardBackgroundRemoteURL?.trimmingCharacters(in: .whitespacesAndNewlines), !u.isEmpty {
+                cardBackgroundRemoteURL = u
+            } else {
+                cardBackgroundRemoteURL = nil
+            }
+        }
+        previewStampsCount = min(previewStampsCount, requiredStamps)
+        if previewStampsCount < 0 { previewStampsCount = 0 }
+    }
+
+    private func buildDisplaySnapshot(slug: String) -> CardPreviewDisplaySnapshot {
+        let hasBG = cardBackgroundRemoteURL?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        return CardPreviewDisplaySnapshot(
+            programType: programType,
+            displayName: displayName,
+            primaryHex: primaryHex,
+            accentHex: accentHex,
+            labelHex: labelHex,
+            stripHex: "",
+            stripDisplayMode: stripDisplayMode,
+            stripText: stripText,
+            logoURL: logoURL,
+            stampEmoji: stampEmoji,
+            requiredStamps: requiredStamps,
+            headerRightText: headerRightText,
+            labelMember: labelMember,
+            hasRemoteCardBackground: hasBG,
+            cardBackgroundRemoteURL: hasBG ? cardBackgroundRemoteURL : nil,
+            stampRewardLabel: stampRewardLabel
+        )
+    }
+
+    private func persistDisplaySnapshot(slug: String) {
+        CardPreviewDisplaySnapshotStore.save(buildDisplaySnapshot(slug: slug), slug: slug)
+    }
+
+    private func prefetchCardMediaURLs(logoURLString: String, backgroundURLString: String?) async {
+        let logo = logoURLString.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !logo.isEmpty, let u = URL(string: logo), u.host() == APIConfig.baseURL.host() {
+            await AuthenticatedMediaLoader.prefetch(url: u)
+        }
+        if let bg = backgroundURLString?.trimmingCharacters(in: .whitespacesAndNewlines), !bg.isEmpty,
+           let u = URL(string: bg), u.host() == APIConfig.baseURL.host() {
+            await AuthenticatedMediaLoader.prefetch(url: u)
+        }
+    }
+
+    private func prefetchCardMediaFromCurrentState() async {
+        await prefetchCardMediaURLs(logoURLString: logoURL, backgroundURLString: cardBackgroundRemoteURL)
+    }
+
+    /// Charge les réglages complets depuis l’API (design + règles) pour que l’aperçu et le pass « Tester dans l’Apple Wallet » reflètent les changements faits sur le SaaS ou ailleurs.
+    private func loadCardSettingsFromAPI() async {
         guard let slug = AuthStorage.currentBusinessSlug else { return }
         do {
             let settings = try await APIClient.shared.request(APIEndpoint.businessSettings(slug: slug)) as BusinessSettingsResponse
             await MainActor.run {
+                if let name = settings.organizationName, !name.isEmpty {
+                    displayName = name
+                }
+                if let bg = settings.backgroundColor, !bg.isEmpty {
+                    primaryHex = bg.hasPrefix("#") ? bg : "#" + bg
+                }
+                if let fg = settings.foregroundColor, !fg.isEmpty {
+                    accentHex = fg.hasPrefix("#") ? fg : "#" + fg
+                }
+                if let label = settings.labelColor, !label.isEmpty {
+                    labelHex = label.hasPrefix("#") ? label : "#" + label
+                } else {
+                    labelHex = ""
+                }
+                stripDisplayMode = (settings.stripDisplayMode ?? "logo").lowercased()
+                if stripDisplayMode != "text" { stripDisplayMode = "logo" }
+                stripText = settings.stripText ?? ""
                 programType = (settings.programType ?? "stamps").lowercased()
                 if programType != "points" && programType != "stamps" { programType = "stamps" }
+                if programType == "stamps" {
+                    requiredStamps = 10
+                } else if let rs = settings.requiredStamps, rs > 0 {
+                    requiredStamps = rs
+                }
                 pointsPerEuro = settings.pointsPerEuro ?? 1
                 pointsPerVisit = settings.pointsPerVisit ?? 0
                 pointsMinAmountEur = settings.pointsMinAmountEur.map { String(format: "%.2f", $0) } ?? ""
                 if let tiers = settings.pointsRewardTiers, !tiers.isEmpty {
-                    pointsRewardTiersText = tiers.map { "\($0.points):\($0.label)" }.joined(separator: "\n")
+                    let sorted = tiers.sorted { $0.points < $1.points }
+                    for i in 0..<5 {
+                        if i < sorted.count {
+                            tierPoints[i] = String(sorted[i].points)
+                            tierLabels[i] = sorted[i].label
+                        } else {
+                            tierPoints[i] = ""
+                            tierLabels[i] = ""
+                        }
+                    }
                 } else {
-                    pointsRewardTiersText = ""
+                    tierPoints = Array(repeating: "", count: 5)
+                    tierLabels = Array(repeating: "", count: 5)
                 }
                 stampRewardLabel = settings.stampRewardLabel ?? ""
+                let midSaved = settings.stampMidRewardLabel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                if midSaved.isEmpty {
+                    stampSkipMidReward = true
+                    stampMidRewardLabel = ""
+                } else {
+                    stampSkipMidReward = false
+                    stampMidRewardLabel = midSaved
+                }
                 expiryMonths = settings.expiryMonths.map { String($0) } ?? ""
                 sector = settings.sector ?? ""
+                backTerms = settings.backTerms ?? ""
+                backContact = settings.backContact ?? ""
+                labelRestants = settings.labelRestants ?? ""
+                labelMember = settings.labelMember ?? ""
+                headerRightText = settings.headerRightText ?? ""
+                notificationTitleOverride = settings.notificationTitleOverride ?? ""
+                notificationChangeMessage = settings.notificationChangeMessage ?? ""
+                stampIconWasRemoved = false
+                stampIconPendingBase64 = nil
+                let apiLogo = settings.logoUrl?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                logoURL = apiLogo
+                if settings.hasCardBackground == true {
+                    let base = APIConfig.baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                    let enc = slug.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? slug
+                    cardBackgroundRemoteURL = "\(base)/api/businesses/\(enc)/card-background"
+                    cardBackgroundWasRemoved = false
+                } else {
+                    cardBackgroundRemoteURL = nil
+                }
+                dashboardSettingsHydrated = true
                 rulesLoadedFromAPI = true
+                if let t = dataService.currentCardTemplate() {
+                    t.displayName = displayName
+                    t.primaryColorHex = primaryHex
+                    t.accentColorHex = accentHex
+                    t.logoURL = apiLogo.isEmpty ? nil : apiLogo
+                    try? viewContext.save()
+                }
+                persistDisplaySnapshot(slug: slug)
+                Task { await prefetchCardMediaFromCurrentState() }
             }
         } catch {
-            await MainActor.run { rulesLoadedFromAPI = true }
+            await MainActor.run {
+                rulesLoadedFromAPI = true
+                dashboardSettingsHydrated = false
+            }
         }
     }
 
-    /// Applique un design de la galerie à la carte, enregistre en local et pousse vers le backend (affiché dans le Wallet).
-    /// On met à jour le template Core Data tout de suite pour que loadCurrentTemplate() (onAppear au retour) ne réécrive pas avec d’anciennes données.
-    private func applyDesignFromGallery(_ preset: CardDesignPreset) {
-        displayName = preset.displayName
-        primaryHex = preset.primaryHex
-        accentHex = preset.accentHex
-        stampEmoji = preset.stampEmoji ?? ""
-        requiredStamps = Int(preset.requiredStamps)
-        if previewStampsCount > requiredStamps {
-            previewStampsCount = requiredStamps
-        }
-        let nameFinal = displayName.trimmingCharacters(in: .whitespaces).isEmpty ? "Ma Carte Fidélité" : displayName.trimmingCharacters(in: .whitespaces)
-        dataService.updateCardTemplate(
-            displayName: nameFinal,
-            requiredStamps: Int32(requiredStamps),
-            primaryColorHex: primaryHex,
-            accentColorHex: accentHex,
-            logoURL: logoURL.isEmpty ? nil : logoURL,
-            stampEmoji: stampEmoji.isEmpty ? nil : String(stampEmoji.prefix(8))
-        )
-        Task {
-            await saveTemplate()
-            await MainActor.run { triggerSavedFeedback() }
-        }
-    }
-
-    private func saveTemplate() async {
+    /// Retourne `false` si l’envoi des réglages au serveur a échoué (réseau, validation, etc.).
+    @discardableResult
+    private func saveTemplate() async -> Bool {
         let nameToSave = displayName.trimmingCharacters(in: .whitespaces)
         let nameFinal = nameToSave.isEmpty ? "Ma Carte Fidélité" : nameToSave
         let bgHex = primaryHex.hasPrefix("#") ? String(primaryHex.dropFirst()) : primaryHex
@@ -899,7 +866,7 @@ struct MyCardView: View {
 
         dataService.updateCardTemplate(
             displayName: nameFinal,
-            requiredStamps: Int32(requiredStamps),
+            requiredStamps: Int32(programType == "stamps" ? 10 : requiredStamps),
             primaryColorHex: primaryHex,
             accentColorHex: accentHex,
             logoURL: logoURL.isEmpty ? nil : logoURL,
@@ -907,71 +874,116 @@ struct MyCardView: View {
         )
         UserDefaults.standard.set(Date(), forKey: "myfidpass.templateLastSavedAt")
 
-        if let slug = AuthStorage.currentBusinessSlug {
-            var logoBase64: String? = nil
-            var logoUrl: String? = nil
-            var cardBackgroundBase64: String? = nil
-            if cardBackgroundWasRemoved {
-                cardBackgroundBase64 = ""
-            } else if let bgPath = cardBackgroundImagePath, !bgPath.isEmpty {
-                cardBackgroundBase64 = CardLogoStorage.compressedBase64FromFile(path: bgPath)
-            }
-            if !logoURL.isEmpty {
-                let trimmed = logoURL.trimmingCharacters(in: .whitespaces)
-                if trimmed.lowercased().hasPrefix("http://") || trimmed.lowercased().hasPrefix("https://") {
-                    let url = URL(string: trimmed)
-                    if let url, url.host() != APIConfig.baseURL.host() || !url.path.contains("/logo") {
-                        logoUrl = trimmed
-                    }
-                } else if trimmed.contains("CardLogos") || trimmed.hasPrefix("/") {
-                    logoBase64 = CardLogoStorage.compressedBase64FromFile(path: trimmed)
+        guard let slug = AuthStorage.currentBusinessSlug else {
+            return true
+        }
+        var logoBase64: String? = nil
+        var logoUrl: String? = nil
+        var cardBackgroundBase64: String? = nil
+        if cardBackgroundWasRemoved {
+            cardBackgroundBase64 = ""
+        } else if let bgPath = cardBackgroundImagePath, !bgPath.isEmpty {
+            cardBackgroundBase64 = CardLogoStorage.compressedBase64FromFile(path: bgPath)
+        }
+        if !logoURL.isEmpty {
+            let trimmed = logoURL.trimmingCharacters(in: .whitespaces)
+            if trimmed.lowercased().hasPrefix("http://") || trimmed.lowercased().hasPrefix("https://") {
+                let url = URL(string: trimmed)
+                if let url, url.host() != APIConfig.baseURL.host() || !url.path.contains("/logo") {
+                    logoUrl = trimmed
                 }
-            } else {
-                logoBase64 = ""
+            } else if trimmed.contains("CardLogos") || trimmed.hasPrefix("/") {
+                logoBase64 = CardLogoStorage.compressedBase64FromFile(path: trimmed)
             }
-            var rewardTiers: [PointsRewardTierPayload]? = nil
-            if !pointsRewardTiersText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                let lines = pointsRewardTiersText.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-                var tiers: [PointsRewardTierPayload] = []
-                for line in lines {
-                    if let colon = line.firstIndex(of: ":") {
-                        let ptsStr = String(line[..<colon]).trimmingCharacters(in: .whitespaces)
-                        let label = String(line[line.index(after: colon)...]).trimmingCharacters(in: .whitespaces)
-                        if let pts = Int(ptsStr), pts >= 0 {
-                            tiers.append(PointsRewardTierPayload(points: pts, label: label))
+        } else {
+            logoBase64 = ""
+        }
+        var rewardTiers: [PointsRewardTierPayload]? = nil
+        if programType == "points" {
+            var tiers: [PointsRewardTierPayload] = []
+            for i in 0..<5 {
+                let ptsStr = tierPoints[i].trimmingCharacters(in: .whitespaces)
+                let lab = tierLabels[i].trimmingCharacters(in: .whitespaces)
+                guard let pts = Int(ptsStr), pts >= 0, !lab.isEmpty else { continue }
+                tiers.append(PointsRewardTierPayload(points: pts, label: String(lab.prefix(120))))
+            }
+            tiers.sort { $0.points < $1.points }
+            if !tiers.isEmpty { rewardTiers = tiers }
+        }
+        let ptsMinEur: Double? = Double(pointsMinAmountEur.trimmingCharacters(in: .whitespaces)).flatMap { $0 >= 0 ? $0 : nil }
+        let sectorVal = sector.trimmingCharacters(in: .whitespaces)
+        do {
+                let labelHexNorm = labelHex.trimmingCharacters(in: .whitespaces)
+                let labelForAPI = labelHexNorm.isEmpty ? nil : (labelHexNorm.hasPrefix("#") ? String(labelHexNorm.dropFirst()) : labelHexNorm)
+                var patch = FullDashboardSettingsPatch()
+                patch.organizationName = nameFinal
+                patch.backgroundColor = bgHex
+                patch.foregroundColor = fgHex
+                patch.labelColor = labelForAPI
+                patch.requiredStamps = programType == "stamps" ? 10 : max(0, requiredStamps)
+                patch.logoBase64 = logoBase64
+                patch.logoUrl = logoUrl
+                patch.stampEmoji = stampEmoji.isEmpty ? nil : String(stampEmoji.prefix(8))
+                patch.cardBackgroundBase64 = cardBackgroundBase64
+                patch.programType = programType
+                patch.pointsPerEuro = programType == "points" ? pointsPerEuro : nil
+                patch.pointsPerVisit = programType == "points" ? pointsPerVisit : nil
+                patch.pointsMinAmountEur = programType == "points" ? ptsMinEur : nil
+                patch.pointsRewardTiers = programType == "points" ? rewardTiers : nil
+                patch.stampRewardLabel = stampRewardLabel.isEmpty ? nil : String(stampRewardLabel.prefix(120))
+                patch.sector = sectorVal.isEmpty ? nil : String(sectorVal.prefix(64))
+                patch.stripColor = bgHex
+                patch.stripDisplayMode = stripDisplayMode
+                patch.stripText = stripText.trimmingCharacters(in: .whitespaces)
+                if programType == "points" {
+                    patch.loyaltyMode = "points_cash"
+                }
+                if dashboardSettingsHydrated {
+                    patch.backTerms = backTerms
+                    patch.backContact = backContact
+                    if programType == "stamps" {
+                        if stampSkipMidReward {
+                            patch.stampMidRewardLabelIsExplicitNull = true
+                        } else {
+                            let mid = stampMidRewardLabel.trimmingCharacters(in: .whitespaces)
+                            if mid.isEmpty {
+                                patch.stampMidRewardLabelIsExplicitNull = true
+                            } else {
+                                patch.stampMidRewardLabel = String(mid.prefix(120))
+                            }
                         }
                     }
+                    patch.labelRestants = labelRestants.trimmingCharacters(in: .whitespaces).isEmpty
+                        ? ""
+                        : String(labelRestants.prefix(64))
+                    patch.labelMember = labelMember.trimmingCharacters(in: .whitespaces).isEmpty
+                        ? ""
+                        : String(labelMember.prefix(64))
+                    patch.headerRightText = headerRightText.trimmingCharacters(in: .whitespaces).isEmpty
+                        ? ""
+                        : String(headerRightText.prefix(64))
+                    patch.notificationTitleOverride = notificationTitleOverride.trimmingCharacters(in: .whitespaces).isEmpty
+                        ? ""
+                        : String(notificationTitleOverride.prefix(80))
+                    patch.notificationChangeMessage = notificationChangeMessage.trimmingCharacters(in: .whitespaces).isEmpty
+                        ? ""
+                        : String(notificationChangeMessage.prefix(200))
+                    if stampIconWasRemoved {
+                        patch.stampIconBase64 = ""
+                    } else if let pending = stampIconPendingBase64 {
+                        patch.stampIconBase64 = pending
+                    }
                 }
-                if !tiers.isEmpty { rewardTiers = tiers }
-            }
-            let ptsMinEur: Double? = Double(pointsMinAmountEur.trimmingCharacters(in: .whitespaces)).flatMap { $0 >= 0 ? $0 : nil }
-            let expMonths: Int? = Int(expiryMonths.trimmingCharacters(in: .whitespaces)).flatMap { $0 >= 0 ? $0 : nil }
-            let sectorVal = sector.trimmingCharacters(in: .whitespaces)
-            do {
-                _ = try await APIClient.shared.request(APIEndpoint.updateCardSettings(
-                    slug: slug,
-                    organizationName: nameFinal,
-                    backgroundColor: bgHex,
-                    foregroundColor: fgHex,
-                    requiredStamps: requiredStamps,
-                    logoBase64: logoBase64,
-                    logoUrl: logoUrl,
-                    locationAddress: nil,
-                    stampEmoji: stampEmoji.isEmpty ? nil : String(stampEmoji.prefix(8)),
-                    cardBackgroundBase64: cardBackgroundBase64,
-                    programType: programType,
-                    pointsPerEuro: pointsPerEuro,
-                    pointsPerVisit: pointsPerVisit,
-                    pointsMinAmountEur: ptsMinEur,
-                    pointsRewardTiers: rewardTiers,
-                    stampRewardLabel: stampRewardLabel.isEmpty ? nil : String(stampRewardLabel.prefix(120)),
-                    expiryMonths: expMonths,
-                    sector: sectorVal.isEmpty ? nil : sectorVal
-                )) as EmptyResponse
+                _ = try await APIClient.shared.request(APIEndpoint.patchDashboardSettings(slug: slug, patch: patch)) as EmptyResponse
                 await MainActor.run {
                     saveLogoError = nil
                     if cardBackgroundBase64 == "" { cardBackgroundWasRemoved = false }
+                    if stampIconWasRemoved || stampIconPendingBase64 != nil {
+                        stampIconWasRemoved = false
+                        stampIconPendingBase64 = nil
+                    }
                 }
+                await loadCardSettingsFromAPI()
                 if let sentBase64 = logoBase64, !sentBase64.isEmpty {
                     let base = APIConfig.baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
                     let apiLogoURL = "\(base)/api/businesses/\(slug)/logo"
@@ -985,19 +997,17 @@ struct MyCardView: View {
                     logoURL = apiLogoURL
                     UserDefaults.standard.set(Date(), forKey: SyncService.lastLogoUploadAtKey)
                 }
-            } catch {
-                await MainActor.run {
-                    saveLogoError = "Le logo n'a pas été synchronisé avec le logiciel. Vérifiez la connexion et réessayez."
-                }
+            return true
+        } catch {
+            await MainActor.run {
+                saveLogoError = "Impossible d'enregistrer la carte sur le serveur. Vérifiez la connexion puis réessayez."
             }
+            return false
         }
     }
 
     private func triggerSavedFeedback() {
-        withAnimation(.easeOut(duration: 0.2)) { savedFeedback = true }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-            withAnimation(.easeOut(duration: 0.2)) { savedFeedback = false }
-        }
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
     }
 }
 
@@ -1005,8 +1015,15 @@ struct MyCardView: View {
 
 struct ColorPickerRow: View {
     let title: String
-    let subtitle: String
+    /// Sous-titre optionnel (éviter les noms techniques type `background_color` en prod).
+    var subtitle: String? = nil
     @Binding var hex: String
+
+    private static func hexDigits(_ s: String) -> String {
+        s.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "#", with: "")
+            .uppercased()
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: AppTheme.Spacing.sm) {
@@ -1014,20 +1031,53 @@ struct ColorPickerRow: View {
                 Text(title)
                     .font(AppTheme.Fonts.body())
                     .foregroundStyle(AppTheme.Colors.textPrimary)
-                Text(subtitle)
-                    .font(AppTheme.Fonts.caption())
-                    .foregroundStyle(AppTheme.Colors.textSecondary)
+                if let subtitle, !subtitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text(subtitle)
+                        .font(AppTheme.Fonts.caption())
+                        .foregroundStyle(AppTheme.Colors.textSecondary)
+                }
             }
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: AppTheme.Spacing.sm) {
                     ForEach(MyCardPresetColors.all, id: \.hex) { preset in
-                        ColorPresetButton(hex: preset.hex, name: preset.name, isSelected: hex == preset.hex) {
-                            withAnimation(.easeOut(duration: 0.2)) { hex = preset.hex }
+                        let presetNorm = preset.hex.hasPrefix("#") ? preset.hex : "#" + preset.hex
+                        let selected = Self.hexDigits(hex) == Self.hexDigits(preset.hex)
+                        ColorPresetButton(hex: presetNorm, name: preset.name, isSelected: selected) {
+                            withAnimation(.easeOut(duration: 0.2)) {
+                                hex = presetNorm
+                            }
                         }
                     }
                 }
                 .padding(.vertical, 2)
             }
+
+            ColorPicker(selection: Binding(
+                get: {
+                    let d = Self.hexDigits(hex)
+                    let six = d.count == 6 ? d : "000000"
+                    return Color(hex: six)
+                },
+                set: { newColor in
+                    hex = newColor.toHexRGBString()
+                }
+            ), supportsOpacity: false) {
+                Label("Nuancier (toutes les couleurs)", systemImage: "eyedropper.halffull")
+                    .font(.subheadline)
+            }
+
+            TextField("#RRGGBB", text: $hex)
+                .textFieldStyle(.plain)
+                .font(.system(.body, design: .monospaced))
+                .textInputAutocapitalization(.characters)
+                .autocorrectionDisabled()
+                .padding(10)
+                .background(AppTheme.Colors.background)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .strokeBorder(AppTheme.Colors.textSecondary.opacity(0.2), lineWidth: 1)
+                )
         }
     }
 }
@@ -1062,7 +1112,6 @@ struct ColorPresetButton: View {
             }
             .frame(width: 56)
         }
-        .buttonStyle(.plain)
     }
 }
 
@@ -1089,5 +1138,5 @@ enum MyCardPresetColors {
 
 #Preview {
     MyCardView(context: PersistenceController.preview.container.viewContext)
-        .environmentObject(SyncService(context: PersistenceController.preview.container.viewContext))
+        .environmentObject(SyncService(container: PersistenceController.preview.container))
 }

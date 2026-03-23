@@ -26,4 +26,16 @@ enum APIConfig {
         return true
         #endif
     }
+
+    /// Page statique Vite `flyer-embed.html` : même rendu canvas que le SaaS (aperçu dans l’app).
+    static var flyerEmbedURL: URL {
+        #if DEBUG
+        if let raw = ProcessInfo.processInfo.environment["MYFIDPASS_WEB_URL"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty {
+            let base = raw.hasSuffix("/") ? String(raw.dropLast()) : raw
+            if let u = URL(string: base + "/flyer-embed.html") { return u }
+        }
+        #endif
+        return URL(string: "https://www.myfidpass.fr/flyer-embed.html")!
+    }
 }

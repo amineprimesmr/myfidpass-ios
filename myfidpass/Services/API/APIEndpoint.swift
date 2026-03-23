@@ -10,7 +10,9 @@ import Foundation
 enum APIEndpoint {
     // MARK: - Auth
     case authLogin(email: String, password: String)
-    case authRegister(email: String, password: String, name: String?)
+    case authRegister(email: String, password: String, name: String?, googlePlaceId: String?, establishmentName: String?)
+    /// Recherche d'établissements Google (même logique que le SaaS) — sans JWT.
+    case placesAutocomplete(input: String)
     case authForgotPassword(email: String)
     case authResetPassword(token: String, newPassword: String)
     case authGoogle(idToken: String)
@@ -61,10 +63,22 @@ enum APIEndpoint {
     case notifyClients(slug: String, message: String, categoryIds: [String]?)
 
     case patchDashboardSettings(slug: String, patch: FullDashboardSettingsPatch)
-    case updateLocationSettings(slug: String, locationLat: Double?, locationLng: Double?, locationRadiusMeters: Int?, locationRelevantText: String?, locationAddress: String?)
+    /// Préférences flyer QR (sync avec le SaaS).
+    case dashboardFlyerGet(slug: String)
+    case updateLocationSettings(
+        slug: String,
+        locationLat: Double?,
+        locationLng: Double?,
+        locationRadiusMeters: Int?,
+        locationRelevantText: String?,
+        locationAddress: String?,
+        walletPassIncludeLocations: Bool?
+    )
 
     /// Crédit membre (points directs, montant €, et/ou passage) — aligné POST .../members/:id/points.
     case creditMember(slug: String, memberId: String, points: Int?, amountEur: Double?, visit: Bool)
+    /// Retrait de points (correction erreur de caisse) — POST .../members/:id/points/remove.
+    case removeMemberPoints(slug: String, memberId: String, points: Int)
     case redeemReward(slug: String, memberId: String, type: RedeemType)
 
     // MARK: - Membres (import, détail public, tickets, récompenses)
@@ -81,6 +95,7 @@ enum APIEndpoint {
         switch self {
         case .authLogin: return "/api/auth/login"
         case .authRegister: return "/api/auth/register"
+        case .placesAutocomplete: return "/api/places/autocomplete"
         case .authForgotPassword: return "/api/auth/forgot-password"
         case .authResetPassword: return "/api/auth/reset-password"
         case .authGoogle: return "/api/auth/google"
@@ -117,8 +132,10 @@ enum APIEndpoint {
         case .walletPass(let slug, let memberId, _): return "/api/businesses/\(slug)/members/\(memberId)/pass"
         case .notifyClients(let slug, _, _): return "/api/businesses/\(slug)/notify"
         case .patchDashboardSettings(let slug, _): return "/api/businesses/\(slug)/dashboard/settings"
-        case .updateLocationSettings(let slug, _, _, _, _, _): return "/api/businesses/\(slug)/dashboard/settings"
+        case .dashboardFlyerGet(let slug): return "/api/businesses/\(slug)/dashboard/flyer"
+        case .updateLocationSettings(let slug, _, _, _, _, _, _): return "/api/businesses/\(slug)/dashboard/settings"
         case .creditMember(let slug, let memberId, _, _, _): return "/api/businesses/\(slug)/members/\(memberId)/points"
+        case .removeMemberPoints(let slug, let memberId, _): return "/api/businesses/\(slug)/members/\(memberId)/points/remove"
         case .redeemReward(let slug, let memberId, _): return "/api/businesses/\(slug)/members/\(memberId)/redeem"
         case .membersImport(let slug, _): return "/api/businesses/\(slug)/members/import"
         case .createMember(let slug, _, _): return "/api/businesses/\(slug)/members"
@@ -155,7 +172,7 @@ enum APIEndpoint {
         switch self {
         case .authLogin, .authRegister, .authForgotPassword, .authResetPassword, .authGoogle, .authApple,
              .scan, .deviceRegister, .notifyClients, .createCategory, .updateMemberCategories, .creditMember,
-             .redeemReward, .createBusiness, .paymentCheckout, .dashboardNotificationSend, .dashboardRemoveTestDevice,
+             .removeMemberPoints, .redeemReward, .createBusiness, .paymentCheckout, .dashboardNotificationSend, .dashboardRemoveTestDevice,
              .membersImport, .createMember, .memberTicketsConvert, .claimMemberReward:
             return "POST"
         case .patchDashboardSettings, .updateCategory, .updateLocationSettings, .dashboardPatchGame:
@@ -209,6 +226,8 @@ enum APIEndpoint {
             if let d = days { items.append(URLQueryItem(name: "days", value: "\(d)")) }
             if let t = type, !t.isEmpty { items.append(URLQueryItem(name: "type", value: t)) }
             components.queryItems = items.isEmpty ? nil : items
+        case .placesAutocomplete(let input):
+            components.queryItems = [URLQueryItem(name: "input", value: input)]
         case .scanLookup(_, let barcode):
             components.queryItems = [URLQueryItem(name: "barcode", value: barcode)]
         case .walletPass(_, _, let design):
@@ -234,8 +253,10 @@ enum APIEndpoint {
         switch self {
         case .authLogin(let email, let password):
             bodyData = try encoder.encode(LoginPayload(email: email, password: password))
-        case .authRegister(let email, let password, let name):
-            bodyData = try encoder.encode(AuthRegisterPayload(email: email, password: password, name: name))
+        case .authRegister(let email, let password, let name, let googlePlaceId, let establishmentName):
+            bodyData = try encoder.encode(
+                AuthRegisterPayload(email: email, password: password, name: name, googlePlaceId: googlePlaceId, establishmentName: establishmentName)
+            )
         case .authForgotPassword(let email):
             bodyData = try encoder.encode(ForgotPasswordPayload(email: email))
         case .authResetPassword(let token, let newPassword):
@@ -262,15 +283,18 @@ enum APIEndpoint {
             bodyData = try encoder.encode(UpdateMemberCategoriesPayload(categoryIds: categoryIds))
         case .creditMember(_, _, let points, let amountEur, let visit):
             bodyData = try encoder.encode(CreditMemberBody(points: points, amountEur: amountEur, visit: visit))
+        case .removeMemberPoints(_, _, let points):
+            bodyData = try encoder.encode(RemoveMemberPointsBody(points: points))
         case .redeemReward(_, _, let type):
             bodyData = try encoder.encode(RedeemPayload(type: type))
-        case .updateLocationSettings(_, let locationLat, let locationLng, let locationRadiusMeters, let locationRelevantText, let locationAddress):
+        case .updateLocationSettings(_, let locationLat, let locationLng, let locationRadiusMeters, let locationRelevantText, let locationAddress, let walletPassIncludeLocations):
             bodyData = try encoder.encode(UpdateLocationSettingsPayload(
                 locationLat: locationLat,
                 locationLng: locationLng,
                 locationRadiusMeters: locationRadiusMeters,
                 locationRelevantText: locationRelevantText,
-                locationAddress: locationAddress
+                locationAddress: locationAddress,
+                walletPassIncludeLocations: walletPassIncludeLocations
             ))
         case .patchDashboardSettings(_, let patch):
             bodyData = try encoder.encode(patch)
@@ -354,6 +378,10 @@ private struct CreditMemberBody: Encodable {
     }
 }
 
+private struct RemoveMemberPointsBody: Encodable {
+    let points: Int
+}
+
 private struct MemberTicketsConvertBody: Encodable {
     let pointsToConvert: Int
 
@@ -388,12 +416,35 @@ struct PointsRewardTierPayload: Encodable {
     let label: String
 }
 
+/// Body PATCH emplacement — clés snake_case comme le backend (`dashboard.js`).
 private struct UpdateLocationSettingsPayload: Encodable {
     let locationLat: Double?
     let locationLng: Double?
     let locationRadiusMeters: Int?
     let locationRelevantText: String?
     let locationAddress: String?
+    let walletPassIncludeLocations: Bool?
+
+    enum CK: String, CodingKey {
+        case locationLat = "location_lat"
+        case locationLng = "location_lng"
+        case locationRadiusMeters = "location_radius_meters"
+        case locationRelevantText = "location_relevant_text"
+        case locationAddress = "location_address"
+        case walletPassIncludeLocations = "wallet_pass_include_locations"
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CK.self)
+        try c.encodeIfPresent(locationLat, forKey: .locationLat)
+        try c.encodeIfPresent(locationLng, forKey: .locationLng)
+        try c.encodeIfPresent(locationRadiusMeters, forKey: .locationRadiusMeters)
+        try c.encodeIfPresent(locationRelevantText, forKey: .locationRelevantText)
+        try c.encodeIfPresent(locationAddress, forKey: .locationAddress)
+        if let w = walletPassIncludeLocations {
+            try c.encode(w ? 1 : 0, forKey: .walletPassIncludeLocations)
+        }
+    }
 }
 
 struct WalletPassDesign {
