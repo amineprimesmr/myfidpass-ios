@@ -38,6 +38,10 @@ enum APIEndpoint {
     case updateCategory(slug: String, categoryId: String, name: String?, colorHex: String?, sortOrder: Int?)
     case deleteCategory(slug: String, categoryId: String)
     case updateMemberCategories(slug: String, memberId: String, categoryIds: [String])
+    /// Supprime un membre et les données associées (pass, historique).
+    case deleteDashboardMember(slug: String, memberId: String)
+    /// Supprime tous les membres du commerce (confirmation côté serveur).
+    case deleteAllDashboardMembers(slug: String)
 
     // MARK: - Jeux & engagement (dashboard)
     case dashboardGames(slug: String)
@@ -117,15 +121,17 @@ enum APIEndpoint {
         case .updateCategory(let slug, let categoryId, _, _, _): return "/api/businesses/\(slug)/dashboard/categories/\(categoryId)"
         case .deleteCategory(let slug, let categoryId): return "/api/businesses/\(slug)/dashboard/categories/\(categoryId)"
         case .updateMemberCategories(let slug, let memberId, _): return "/api/businesses/\(slug)/dashboard/members/\(memberId)/categories"
+        case .deleteDashboardMember(let slug, let memberId): return "/api/businesses/\(slug)/dashboard/members/\(memberId)"
+        case .deleteAllDashboardMembers(let slug): return "/api/businesses/\(slug)/dashboard/members/delete-all"
         case .dashboardGames(let slug): return "/api/businesses/\(slug)/dashboard/games"
         case .dashboardPatchGame(let slug, let gameCode, _): return "/api/businesses/\(slug)/dashboard/games/\(gameCode)"
         case .dashboardGameRewardsGet(let slug, let gameCode): return "/api/businesses/\(slug)/dashboard/games/\(gameCode)/rewards"
         case .dashboardGameRewardsPut(let slug, let gameCode, _): return "/api/businesses/\(slug)/dashboard/games/\(gameCode)/rewards"
-        case .dashboardNotificationSend(let slug, _): return "/api/businesses/\(slug)/dashboard/notifications/send"
-        case .dashboardNotificationSegments(let slug): return "/api/businesses/\(slug)/dashboard/notifications/campaign-segments"
-        case .dashboardNotificationStats(let slug): return "/api/businesses/\(slug)/dashboard/notifications/stats"
-        case .dashboardTestPasskit(let slug): return "/api/businesses/\(slug)/dashboard/notifications/test-passkit"
-        case .dashboardRemoveTestDevice(let slug): return "/api/businesses/\(slug)/dashboard/notifications/remove-test-device"
+        case .dashboardNotificationSend(let slug, _): return "/api/businesses/\(slug)/notifications/send"
+        case .dashboardNotificationSegments(let slug): return "/api/businesses/\(slug)/notifications/campaign-segments"
+        case .dashboardNotificationStats(let slug): return "/api/businesses/\(slug)/notifications/stats"
+        case .dashboardTestPasskit(let slug): return "/api/businesses/\(slug)/notifications/test-passkit"
+        case .dashboardRemoveTestDevice(let slug): return "/api/businesses/\(slug)/notifications/remove-test-device"
         case .scanLookup(let slug, _): return "/api/businesses/\(slug)/integration/lookup"
         case .scan(let slug, _, _, _, _): return "/api/businesses/\(slug)/integration/scan"
         case .deviceRegister: return "/api/device/register"
@@ -148,13 +154,10 @@ enum APIEndpoint {
         }
     }
 
-    var isAuth: Bool {
-        switch self {
-        case .authLogin, .authGoogle, .authApple, .authRegister, .authForgotPassword, .authResetPassword:
-            return true
-        default:
-            return false
-        }
+    /// Seul `POST /api/auth/login` renvoie 404 pour « aucun compte » — pas l’inscription ni les autres routes auth.
+    var is404NoAccountLogin: Bool {
+        if case .authLogin = self { return true }
+        return false
     }
 
     /// En-têtes additionnels (ex. idempotency).
@@ -173,11 +176,11 @@ enum APIEndpoint {
         case .authLogin, .authRegister, .authForgotPassword, .authResetPassword, .authGoogle, .authApple,
              .scan, .deviceRegister, .notifyClients, .createCategory, .updateMemberCategories, .creditMember,
              .removeMemberPoints, .redeemReward, .createBusiness, .paymentCheckout, .dashboardNotificationSend, .dashboardRemoveTestDevice,
-             .membersImport, .createMember, .memberTicketsConvert, .claimMemberReward:
+             .membersImport, .createMember, .memberTicketsConvert, .claimMemberReward, .deleteAllDashboardMembers:
             return "POST"
         case .patchDashboardSettings, .updateCategory, .updateLocationSettings, .dashboardPatchGame:
             return "PATCH"
-        case .deleteCategory, .authDeleteAccount:
+        case .deleteCategory, .authDeleteAccount, .deleteDashboardMember:
             return "DELETE"
         case .dashboardGameRewardsPut:
             return "PUT"
@@ -243,6 +246,12 @@ enum APIEndpoint {
                 if let st = d.stripText, !st.isEmpty { items.append(URLQueryItem(name: "strip_text", value: st)) }
                 if !d.stampEmoji.isEmpty { items.append(URLQueryItem(name: "stamp_emoji", value: d.stampEmoji)) }
                 if d.requiredStamps > 0 { items.append(URLQueryItem(name: "required_stamps", value: "\(d.requiredStamps)")) }
+                if let lab = d.labelColor?.trimmingCharacters(in: .whitespacesAndNewlines), !lab.isEmpty {
+                    items.append(URLQueryItem(name: "label_color", value: lab.hasPrefix("#") ? String(lab.dropFirst()) : lab))
+                }
+                if let pp = d.previewPoints, pp >= 0, pp <= 9_999_999 {
+                    items.append(URLQueryItem(name: "preview_points", value: "\(pp)"))
+                }
             }
             components.queryItems = items
         default:
@@ -310,6 +319,8 @@ enum APIEndpoint {
             bodyData = try encoder.encode(CreateMemberPayload(email: email, name: name))
         case .memberTicketsConvert(_, _, let pointsToConvert, _):
             bodyData = try encoder.encode(MemberTicketsConvertBody(pointsToConvert: pointsToConvert))
+        case .deleteAllDashboardMembers:
+            bodyData = try encoder.encode(DeleteAllMembersConfirmBody())
         default:
             break
         }
@@ -317,6 +328,14 @@ enum APIEndpoint {
         request.httpMethod = method
         request.httpBody = bodyData
         return request
+    }
+}
+
+private struct DeleteAllMembersConfirmBody: Encodable {
+    let confirm: String
+
+    init() {
+        self.confirm = "SUPPRIMER tous les membres"
     }
 }
 
@@ -458,6 +477,10 @@ struct WalletPassDesign {
     var stripDisplayMode: String?
     var stripText: String?
     var template: String?
+    /// Couleur libellés Wallet (alignée `label_color` SaaS / Ma carte).
+    var labelColor: String? = nil
+    /// Solde affiché sur le pass comme dans l’aperçu (requête dashboard uniquement ; sinon points réels membre).
+    var previewPoints: Int? = nil
 }
 
 private struct ScanPayload: Encodable {
