@@ -2,574 +2,647 @@
 //  ProfileView.swift
 //  myfidpass
 //
-//  Profil du commerçant : établissement (nom, logo, adresse), coordonnées, notifications.
+//  Onglet Commerce : identité commerçant, formulaire établissement, accès Réglages.
 //
 
 import SwiftUI
 import CoreData
 import UIKit
-import PhotosUI
+
+private struct CommerceSetupMetrics {
+    let step1Done: Bool
+    let step2Done: Bool
+}
+
+/// Navigation vers le hub Flyer QR depuis l’onglet Commerce (plus d’onglet Flyer dédié).
+private enum CommerceFlyerDestination: Hashable {
+    case flyer
+    case flyerAndMyCard
+    /// Assistant IA : formulaire vierge pour une nouvelle création (confirmé dans l’alerte Commerce).
+    case flyerRecreate
+}
 
 struct ProfileView: View {
     @Environment(\.managedObjectContext) private var viewContext
+    @Environment(\.colorScheme) private var colorScheme
     @EnvironmentObject var authService: AuthService
     @EnvironmentObject var syncService: SyncService
+    @EnvironmentObject private var tabRouter: MainTabRouter
     @StateObject private var dataService: DataService
     @State private var organizationName: String = ""
-    @State private var email: String = ""
-    @State private var phone: String = ""
-    @State private var address: String = ""
     @State private var logoURL: String = ""
-    @State private var logoPhotoItem: PhotosPickerItem?
-    @State private var showLogoutConfirmation = false
-    @State private var isSaving = false
-    @State private var savedMessage: String?
-    @State private var notificationMessage: String = ""
-    @State private var isSendingNotification = false
-    @State private var notifyResultMessage: String?
-    @State private var notifyResultSuccess: Bool = false
+    @State private var settingsSnapshot: BusinessSettingsResponse?
+    @State private var flyerLooksCustomized = false
+    /// Étape 2 : valeur de secours tant que `settingsSnapshot` n’est pas arrivé (hydratée depuis le cache disque).
+    @State private var cachedEngagementStepDone = false
+    /// Alimentés par `GET …/dashboard/flyer` pour le bloc « Flyer enregistré » sur la checklist Commerce.
+    @State private var commerceFlyerShareURL: String = ""
+    @State private var commerceFlyerCustomBgDataURL: String?
+    /// JSON embed base64 (même source que l’éditeur) pour miniature **composite** (QR, roue, textes), pas seulement le fond IA.
+    @State private var commerceFlyerBootstrapPreviewB64: String?
+    @State private var showSettingsSheet = false
+    @State private var showCommercePublicQRSheet = false
+    @State private var showCommerceSavedFlyerLarge = false
+    @State private var commerceNavPath = NavigationPath()
 
     init(context: NSManagedObjectContext) {
         _dataService = StateObject(wrappedValue: DataService(context: context))
     }
 
+    private var profileCanvas: Color {
+        DashboardRevolutPalette(colorScheme: colorScheme).canvas
+    }
+
+    /// Même URL que la page client (SaaS « Lien et QR ») : `GET …/dashboard/flyer` puis repli `myfidpass.fr/fidelity/{slug}`.
+    private var commercePublicPageURLString: String {
+        let s = commerceFlyerShareURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !s.isEmpty { return s }
+        guard let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines), !slug.isEmpty else {
+            return ""
+        }
+        return LegalURLs.fidelityCardPage(slug: slug)?.absoluteString ?? ""
+    }
+
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(spacing: AppTheme.Spacing.lg) {
-                    heroSection
-                    establishmentSection
-                    notificationsSection
-                    locationCardSection
-                    walletSection
-                    logoutSection
-                }
-                .padding(AppTheme.Spacing.md)
-            }
-            .background(AppTheme.Colors.background)
-            .navigationTitle("Profil")
-            .navigationBarTitleDisplayMode(.large)
-            .onAppear { loadProfile() }
-            .refreshable {
-                await syncService.syncIfNeeded()
-                loadProfile()
-            }
-            .overlay {
-                if syncService.isSyncing && organizationName.isEmpty {
-                    ProgressView()
-                        .scaleEffect(1.2)
-                        .tint(AppTheme.Colors.primary)
-                }
-            }
-            .confirmationDialog("Déconnexion", isPresented: $showLogoutConfirmation) {
-                Button("Se déconnecter", role: .destructive) {
-                    authService.logout()
-                }
-                Button("Annuler", role: .cancel) {}
-            } message: {
-                Text("Voulez-vous vous déconnecter de votre compte ?")
-            }
-        }
-    }
-
-    // MARK: - Hero : commerce en gros (logo + nom + email compte)
-
-    private var heroSection: some View {
-        VStack(spacing: AppTheme.Spacing.lg) {
-            BusinessLogoView(logoURL: logoURL.isEmpty ? nil : logoURL, size: 96, cornerRadius: 24)
-                .shadow(color: AppTheme.Colors.shadow, radius: 12, x: 0, y: 4)
-
-            VStack(spacing: AppTheme.Spacing.xs) {
-                Text(organizationName.isEmpty ? "Mon établissement" : organizationName)
-                    .font(AppTheme.Fonts.title())
-                    .foregroundStyle(AppTheme.Colors.textPrimary)
-                    .multilineTextAlignment(.center)
-                    .lineLimit(2)
-
-                if let accountEmail = authService.currentUserEmail {
-                    Text(accountEmail)
-                        .font(AppTheme.Fonts.caption())
-                        .foregroundStyle(AppTheme.Colors.textSecondary)
-                }
-            }
-
-            Text("Votre espace commerçant")
-                .font(AppTheme.Fonts.caption())
-                .foregroundStyle(AppTheme.Colors.primary)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, AppTheme.Spacing.xl)
-        .padding(.horizontal, AppTheme.Spacing.lg)
-        .background(
-            LinearGradient(
-                colors: [
-                    AppTheme.Colors.cardBackground,
-                    AppTheme.Colors.background
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-        )
-        .clipShape(RoundedRectangle(cornerRadius: AppTheme.Radius.xl))
-        .shadow(color: AppTheme.Colors.shadow, radius: 8, x: 0, y: 2)
-    }
-
-    // MARK: - Mon établissement (nom, logo optionnel, adresse avec recherche, tél, email)
-
-    private var establishmentSection: some View {
-        VStack(alignment: .leading, spacing: AppTheme.Spacing.lg) {
-            HStack {
-                Image(systemName: "storefront.fill")
-                    .font(.title3)
-                    .foregroundStyle(AppTheme.Colors.primary)
-                Text("Mon établissement")
-                    .font(AppTheme.Fonts.title3())
-                    .foregroundStyle(AppTheme.Colors.textPrimary)
-            }
-
-            VStack(alignment: .leading, spacing: AppTheme.Spacing.sm) {
-                Text("Nom de votre établissement")
-                    .font(AppTheme.Fonts.caption())
-                    .foregroundStyle(AppTheme.Colors.textSecondary)
-                TextField("Ex. Café de la Gare", text: $organizationName)
-                    .textFieldStyle(.roundedBorder)
-                    .font(AppTheme.Fonts.body())
-                    .foregroundStyle(AppTheme.Colors.textPrimary)
-            }
-
-            VStack(alignment: .leading, spacing: AppTheme.Spacing.sm) {
-                Text("Logo de l’établissement")
-                    .font(AppTheme.Fonts.caption())
-                    .foregroundStyle(AppTheme.Colors.textSecondary)
-                HStack(spacing: AppTheme.Spacing.md) {
-                    BusinessLogoView(logoURL: logoURL.isEmpty ? nil : logoURL, size: 56, cornerRadius: 12)
-                    PhotosPicker(
-                        selection: $logoPhotoItem,
-                        matching: .images,
-                        photoLibrary: .shared()
-                    ) {
-                        Label("Changer le logo", systemImage: "photo.badge.plus")
-                            .font(AppTheme.Fonts.subheadline())
-                    }
-                    .onChange(of: logoPhotoItem) { _, new in
-                        guard new != nil else { return }
-                        Task { await loadLogoFromPicker(new) }
-                    }
-                    Spacer(minLength: 0)
-                }
-            }
-
-            VStack(alignment: .leading, spacing: AppTheme.Spacing.sm) {
-                Text("Adresse du commerce")
-                    .font(AppTheme.Fonts.caption())
-                    .foregroundStyle(AppTheme.Colors.textSecondary)
-                AddressSearchField(text: $address, placeholder: "Rechercher une adresse ou un établissement…")
-            }
-
-            VStack(alignment: .leading, spacing: AppTheme.Spacing.sm) {
-                Text("Téléphone")
-                    .font(AppTheme.Fonts.caption())
-                    .foregroundStyle(AppTheme.Colors.textSecondary)
-                TextField("06 12 34 56 78", text: $phone)
-                    .textFieldStyle(.roundedBorder)
-                    .font(AppTheme.Fonts.body())
-                    .foregroundStyle(AppTheme.Colors.textPrimary)
-                    .keyboardType(.phonePad)
-            }
-
-            VStack(alignment: .leading, spacing: AppTheme.Spacing.sm) {
-                Text("Email de contact")
-                    .font(AppTheme.Fonts.caption())
-                    .foregroundStyle(AppTheme.Colors.textSecondary)
-                TextField("contact@exemple.fr", text: $email)
-                    .textFieldStyle(.roundedBorder)
-                    .font(AppTheme.Fonts.body())
-                    .foregroundStyle(AppTheme.Colors.textPrimary)
-                    .keyboardType(.emailAddress)
-                    .textInputAutocapitalization(.never)
-            }
-
-            if let msg = savedMessage {
-                HStack(spacing: 6) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(AppTheme.Colors.success)
-                    Text(msg)
-                        .font(AppTheme.Fonts.caption())
-                        .foregroundStyle(AppTheme.Colors.success)
-                }
-            }
-
-            Button {
-                Task { await saveProfile() }
-            } label: {
-                HStack {
-                    if isSaving {
-                        ProgressView()
-                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                    } else {
-                        Image(systemName: "checkmark.circle.fill")
-                        Text("Enregistrer")
-                    }
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, AppTheme.Spacing.md)
-                .font(AppTheme.Fonts.headline())
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(AppTheme.Colors.primary)
-            .disabled(isSaving)
-        }
-        .padding(AppTheme.Spacing.lg)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(AppTheme.Colors.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: AppTheme.Radius.xl))
-        .shadow(color: AppTheme.Colors.shadow, radius: 8, x: 0, y: 2)
-    }
-
-    // MARK: - Notifications
-
-    private var notificationsSection: some View {
-        VStack(alignment: .leading, spacing: AppTheme.Spacing.lg) {
-            HStack {
-                Image(systemName: "bell.badge.fill")
-                    .font(.title3)
-                    .foregroundStyle(AppTheme.Colors.primary)
-                Text("Notifications")
-                    .font(AppTheme.Fonts.title3())
-                    .foregroundStyle(AppTheme.Colors.textPrimary)
-            }
-
-            VStack(alignment: .leading, spacing: AppTheme.Spacing.sm) {
-                Text("Sur cet appareil")
-                    .font(AppTheme.Fonts.headline())
-                    .foregroundStyle(AppTheme.Colors.textPrimary)
-                Text("Alertes commerçant : nouveaux membres, scans, etc.")
-                    .font(AppTheme.Fonts.caption())
-                    .foregroundStyle(AppTheme.Colors.textSecondary)
-                HStack {
-                    Image(systemName: NotificationsService.shared.isAuthorized ? "checkmark.circle.fill" : "bell.slash.fill")
-                        .foregroundStyle(NotificationsService.shared.isAuthorized ? AppTheme.Colors.success : AppTheme.Colors.textSecondary)
-                    Text(NotificationsService.shared.isAuthorized ? "Activées" : "Désactivées")
-                        .font(AppTheme.Fonts.body())
-                        .foregroundStyle(AppTheme.Colors.textSecondary)
+        NavigationStack(path: $commerceNavPath) {
+            ZStack(alignment: .top) {
+                profileCanvas.ignoresSafeArea()
+                VStack(spacing: 0) {
+                    Color.black
+                        .frame(height: 140)
                     Spacer()
-                    Button("Réglages iOS") {
-                        if let url = URL(string: UIApplication.openSettingsURLString) {
-                            UIApplication.shared.open(url)
+                }
+                .ignoresSafeArea()
+
+                VStack(spacing: 0) {
+                    commerceTopBar
+                    ZStack {
+                        AppTheme.Colors.cardBackground
+                            .clipShape(TopRoundedShape(radius: 22))
+                            .ignoresSafeArea(edges: .bottom)
+
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 16) {
+                                commerceSetupChecklistCard
+                                    .padding(.top, 10)
+                                Color.clear.frame(height: 20)
+                            }
+                            .padding(.horizontal, 14)
+                            .padding(.bottom, 100)
+                        }
+                        .background(Color.clear)
+                        .scrollIndicators(.hidden)
+                        .refreshable {
+                            await syncService.syncAfterServerMutation()
+                            loadProfile()
+                            await loadProfileFromServer()
                         }
                     }
-                    .font(AppTheme.Fonts.caption())
                 }
-                .padding(AppTheme.Spacing.md)
-                .background(AppTheme.Colors.background)
-                .clipShape(RoundedRectangle(cornerRadius: AppTheme.Radius.md))
-            }
 
-            VStack(alignment: .leading, spacing: AppTheme.Spacing.sm) {
-                Text("Notifier vos clients")
-                    .font(AppTheme.Fonts.headline())
-                    .foregroundStyle(AppTheme.Colors.textPrimary)
-                Text("Message envoyé à tous les clients ayant votre carte dans l’Apple Wallet (écran de verrouillage).")
-                    .font(AppTheme.Fonts.caption())
-                    .foregroundStyle(AppTheme.Colors.textSecondary)
-                ZStack(alignment: .topLeading) {
-                    if notificationMessage.isEmpty {
-                        Text("Ex. Nouvelle offre ce week-end !")
-                            .foregroundStyle(AppTheme.Colors.textSecondary.opacity(0.7))
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 12)
+                if syncService.isSyncing && organizationName.isEmpty {
+                    VStack {
+                        ProgressView()
+                            .scaleEffect(1.2)
+                            .tint(AppTheme.Colors.primary)
+                        Spacer()
                     }
-                    TextEditor(text: $notificationMessage)
-                        .padding(AppTheme.Spacing.sm)
-                        .frame(minHeight: 80, maxHeight: 120)
-                        .scrollContentBackground(.hidden)
-                        .font(AppTheme.Fonts.body())
-                        .foregroundStyle(AppTheme.Colors.textPrimary)
+                    .padding(.top, 120)
                 }
-                .background(AppTheme.Colors.background)
-                .clipShape(RoundedRectangle(cornerRadius: AppTheme.Radius.md))
-                .overlay(
-                    RoundedRectangle(cornerRadius: AppTheme.Radius.md)
-                        .strokeBorder(AppTheme.Colors.textSecondary.opacity(0.2), lineWidth: 1)
+            }
+            .toolbar(.hidden, for: .navigationBar)
+            .onAppear {
+                syncMerchantFlyerHubPresentation()
+                loadProfile()
+                hydrateCommerceFromDiskCache()
+                Task { await loadProfileFromServer() }
+            }
+            .sheet(isPresented: $showSettingsSheet) {
+                NavigationStack {
+                    SettingsView()
+                        .environmentObject(authService)
+                        .environmentObject(syncService)
+                        .environment(\.managedObjectContext, viewContext)
+                }
+            }
+            .sheet(isPresented: $showCommercePublicQRSheet) {
+                CommercePublicQRSheet(urlString: commercePublicPageURLString)
+            }
+            .fullScreenCover(isPresented: $showCommerceSavedFlyerLarge) {
+                CommerceSavedFlyerLargePreviewView(
+                    shareURL: commerceFlyerShareURL,
+                    customBgDataURL: commerceFlyerCustomBgDataURL,
+                    bootstrapPreviewBase64: commerceFlyerBootstrapPreviewB64,
+                    businessSlug: AuthStorage.currentBusinessSlug,
+                    onDismiss: { showCommerceSavedFlyerLarge = false }
                 )
-                if let msg = notifyResultMessage {
-                    Text(msg)
-                        .font(AppTheme.Fonts.caption())
-                        .foregroundStyle(notifyResultSuccess ? AppTheme.Colors.success : AppTheme.Colors.error)
-                }
-                Button {
-                    sendNotificationToClients()
-                } label: {
-                    HStack {
-                        if isSendingNotification {
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                        } else {
-                            Image(systemName: "paperplane.fill")
-                            Text("Envoyer la notification")
+            }
+            .navigationDestination(for: CommerceFlyerDestination.self) { dest in
+                MerchantProgramHubView(
+                    context: viewContext,
+                    seedOpenMyCard: dest == .flyerAndMyCard,
+                    seedRecreateFlyer: dest == .flyerRecreate,
+                    forceRefreshFlyerFromServer: dest == .flyer || dest == .flyerRecreate,
+                    onFlyerSaveSuccessReturnToCommerce: {
+                        if !commerceNavPath.isEmpty {
+                            commerceNavPath.removeLast()
                         }
                     }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, AppTheme.Spacing.sm)
+                )
+                .environmentObject(syncService)
+                .environmentObject(authService)
+            }
+            .onChange(of: commerceNavPath) { _, newPath in
+                syncMerchantFlyerHubPresentation()
+                // Refresh flyer status when user returns from MerchantProgramHubView
+                if newPath.isEmpty {
+                    Task { await loadProfileFromServer() }
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(AppTheme.Colors.primary)
-                .disabled(notificationMessage.trimmingCharacters(in: .whitespaces).isEmpty || isSendingNotification)
+            }
+            .onChange(of: tabRouter.selectedTab) { _, newTab in
+                syncMerchantFlyerHubPresentation()
+                if newTab == 2 {
+                    Task { await loadProfileFromServer() }
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .myfidpassRemoteSyncDidMerge)) { _ in
+                guard tabRouter.selectedTab == 2 else { return }
+                Task { await loadProfileFromServer() }
             }
         }
-        .padding(AppTheme.Spacing.lg)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(AppTheme.Colors.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: AppTheme.Radius.xl))
-        .shadow(color: AppTheme.Colors.shadow, radius: 8, x: 0, y: 2)
     }
 
-    // MARK: - Localisation (adresse + carte)
+    /// Masque la pastille d’essai dans `ContentView` tant que le hub Flyer est affiché (Commerce + navigation).
+    private func syncMerchantFlyerHubPresentation() {
+        tabRouter.isMerchantFlyerHubPresented = tabRouter.selectedTab == 2 && !commerceNavPath.isEmpty
+    }
 
-    private var locationCardSection: some View {
-        VStack(alignment: .leading, spacing: AppTheme.Spacing.md) {
-            HStack {
-                Image(systemName: "mappin.circle.fill")
-                    .font(.title3)
-                    .foregroundStyle(AppTheme.Colors.primary)
-                Text("Localisation du commerce")
-                    .font(AppTheme.Fonts.title3())
-                    .foregroundStyle(AppTheme.Colors.textPrimary)
+    /// Même source que la page Notifs : `GET …/notification-icon` (icône dédiée), pas le logo Ma Carte.
+    private var commerceNotificationIconURL: String? {
+        let t = settingsSnapshot?.notificationIconUrl?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !t.isEmpty else { return nil }
+        guard let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines), !slug.isEmpty else { return nil }
+        let base = APIConfig.baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let enc = slug.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? slug
+        return "\(base)/api/businesses/\(enc)/notification-icon"
+    }
+
+    @ViewBuilder
+    private var commerceTopBarLeadingAvatar: some View {
+        if let url = commerceNotificationIconURL {
+            BusinessLogoView(
+                logoURL: url,
+                logoAssetContext: .campaignNotificationIcon,
+                size: 34,
+                cornerRadius: 10
+            )
+            .id(settingsSnapshot?.notificationIconUpdatedAt ?? "notification-icon")
+        } else {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.green.opacity(0.9))
+                .frame(width: 34, height: 34)
+                .overlay {
+                    Text(storeInitials)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.black.opacity(0.9))
+                }
+        }
+    }
+
+    private var commerceTopBar: some View {
+        HStack(spacing: 12) {
+            commerceTopBarLeadingAvatar
+            Text(organizationName.isEmpty ? "Ma boutique" : organizationName)
+                .font(.system(.headline, design: .rounded, weight: .semibold))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+            Spacer(minLength: 6)
+            Button {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                showCommercePublicQRSheet = true
+            } label: {
+                Image(systemName: "qrcode")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 34, height: 34)
             }
-            Text("Utilisée dans le pass Wallet (Relevant locations). Quand un client est proche de votre commerce, son iPhone peut afficher votre carte sur l’écran de verrouillage.")
-                .font(AppTheme.Fonts.caption())
+            .modifier(TopBarLiquidGlassButtonModifier())
+            .accessibilityLabel("Afficher le QR code de la page fidélité")
+            Button {
+                showSettingsSheet = true
+            } label: {
+                Image(systemName: "gearshape.fill")
+                    .font(.system(size: 15, weight: .semibold))
+                    .frame(width: 34, height: 34)
+                    .foregroundStyle(.white)
+            }
+            .modifier(TopBarLiquidGlassButtonModifier())
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 8)
+        .padding(.bottom, 12)
+        .background(Color.black)
+    }
+
+    private var commerceSetupMetrics: CommerceSetupMetrics {
+        let step2: Bool = {
+            if let settings = settingsSnapshot {
+                return engagementStepDone(from: settings)
+            }
+            return cachedEngagementStepDone
+        }()
+
+        return CommerceSetupMetrics(
+            step1Done: flyerLooksCustomized,
+            step2Done: step2
+        )
+    }
+
+    private func engagementStepDone(from settings: BusinessSettingsResponse) -> Bool {
+        guard let e = settings.engagementRewards else { return false }
+        let googleOk = (e.googleReview?.enabled == true)
+            && !(e.googleReview?.placeId ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let others: [EngagementChannelDTO?] = {
+            if EngagementTemporaryVisibility.hideSecondaryReviewNetworks {
+                return [e.instagramFollow, e.tiktokFollow, e.facebookFollow, e.youtubeFollow]
+            }
+            return [
+                e.instagramFollow, e.tiktokFollow, e.facebookFollow,
+                e.twitterFollow, e.snapchatFollow, e.linkedinFollow, e.youtubeFollow,
+                e.trustpilotReview, e.tripadvisorReview,
+            ]
+        }()
+        let otherOk = others.contains {
+            ($0?.enabled == true) && !(($0?.url ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+        return googleOk || otherOk
+    }
+
+    /// Réhydrate flyer + bootstrap + lien depuis le dernier GET réussi (affichage instantané sans flash).
+    private func hydrateCommerceFromDiskCache() {
+        guard let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines), !slug.isEmpty else { return }
+        guard let cached = CommerceFlyerStateCache.load(slug: slug) else { return }
+        flyerLooksCustomized = cached.flyerRegistered
+        cachedEngagementStepDone = cached.engagementStepDone
+        commerceFlyerShareURL = cached.shareURL
+        if let b = cached.bootstrapPreviewB64, !b.isEmpty {
+            commerceFlyerBootstrapPreviewB64 = b
+        }
+        commerceFlyerCustomBgDataURL = cached.customBgDataURL
+    }
+
+    private var commerceSetupChecklistCard: some View {
+        let m = commerceSetupMetrics
+        let completed = [m.step1Done, m.step2Done].filter { $0 }.count
+
+        return VStack(alignment: .leading, spacing: 14) {
+            Text("Préparez-vous à lancer")
+                .font(.system(.title3, design: .rounded, weight: .bold))
+                .foregroundStyle(AppTheme.Colors.textPrimary)
+
+            Text("\(completed) sur 2 étapes terminées")
+                .font(.caption.weight(.semibold))
                 .foregroundStyle(AppTheme.Colors.textSecondary)
-            if !address.trimmingCharacters(in: .whitespaces).isEmpty {
-                HStack(alignment: .top, spacing: AppTheme.Spacing.sm) {
-                    Image(systemName: "location.fill")
-                        .font(.caption)
-                        .foregroundStyle(AppTheme.Colors.primary)
-                    Text(address)
-                        .font(AppTheme.Fonts.body())
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(AppTheme.Colors.primary.opacity(0.1), in: Capsule())
+                .animation(.spring(response: 0.35, dampingFraction: 0.85), value: completed)
+
+            VStack(spacing: 0) {
+                Group {
+                    if m.step1Done {
+                        CommerceFlyerSavedBlockView(
+                            customBgDataURL: commerceFlyerCustomBgDataURL,
+                            bootstrapPreviewBase64: commerceFlyerBootstrapPreviewB64,
+                            businessSlug: AuthStorage.currentBusinessSlug,
+                            onOpenFlyerHub: {
+                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                showCommerceSavedFlyerLarge = true
+                            }
+                        )
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 6)
+                    } else {
+                        commerceSetupRow(
+                            step: 1,
+                            title: "Créer le flyer QR",
+                            done: false,
+                            systemImage: "qrcode"
+                        ) {
+                            commerceNavPath.append(CommerceFlyerDestination.flyer)
+                        }
+                    }
+                }
+                .animation(.spring(response: 0.42, dampingFraction: 0.86), value: m.step1Done)
+
+                commerceSetupDivider
+
+                VStack(alignment: .leading, spacing: 12) {
+                    commerceSetupStepHeader(
+                        step: 2,
+                        title: "",
+                        done: m.step2Done,
+                        systemImage: "bubble.left.and.bubble.right.fill"
+                    )
+                    MerchantEstablishmentForm(context: viewContext, sections: .engagementOnlyCommerceInline)
+                        .environmentObject(syncService)
+                }
+                .padding(.horizontal, 4)
+                .padding(.vertical, 6)
+            }
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(AppTheme.Colors.background.opacity(0.55))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(AppTheme.Colors.textSecondary.opacity(0.18), lineWidth: 1)
+            )
+        }
+        .padding(16)
+    }
+
+    private var commerceSetupDivider: some View {
+        Divider().padding(.leading, 52)
+    }
+
+    /// En-tête d’étape (non cliquable) — même style que `commerceSetupRow` sans chevron.
+    private func commerceSetupStepHeader(
+        step: Int,
+        title: String,
+        done: Bool,
+        systemImage: String
+    ) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            ZStack {
+                Circle()
+                    .fill(done ? AppTheme.Colors.success.opacity(0.18) : AppTheme.Colors.textSecondary.opacity(0.12))
+                    .frame(width: 36, height: 36)
+                if done {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(AppTheme.Colors.success)
+                } else {
+                    Text("\(step)")
+                        .font(.system(.subheadline, design: .rounded, weight: .bold))
+                        .foregroundStyle(AppTheme.Colors.textSecondary)
+                }
+            }
+
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: systemImage)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(AppTheme.Colors.primary.opacity(0.9))
+                if !title.isEmpty {
+                    Text(title)
+                        .font(.body.weight(.semibold))
                         .foregroundStyle(AppTheme.Colors.textPrimary)
+                        .multilineTextAlignment(.leading)
                 }
-                Button {
-                    openAddressInMaps(address)
-                } label: {
-                    Label("Voir sur la carte", systemImage: "map.fill")
-                        .font(AppTheme.Fonts.callout())
-                }
-                .padding(.top, 4)
-            } else {
-                Text("Renseignez l’adresse ci-dessus et enregistrez.")
-                    .font(AppTheme.Fonts.caption())
-                    .foregroundStyle(AppTheme.Colors.textSecondary)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(AppTheme.Spacing.lg)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(AppTheme.Colors.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: AppTheme.Radius.xl))
-        .shadow(color: AppTheme.Colors.shadow, radius: 8, x: 0, y: 2)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
     }
 
-    // MARK: - Carte Wallet & clients
-
-    private var walletSection: some View {
-        VStack(alignment: .leading, spacing: AppTheme.Spacing.sm) {
-            HStack {
-                Image(systemName: "wallet.pass.fill")
-                    .font(.title3)
-                    .foregroundStyle(AppTheme.Colors.primary)
-                Text("Carte Wallet & clients")
-                    .font(AppTheme.Fonts.title3())
-                    .foregroundStyle(AppTheme.Colors.textPrimary)
-            }
-            Text("Personnalisez le design (nom, couleurs, logo, tampons) dans l’onglet **Ma Carte**. Le design s’applique à tous les clients.")
-                .font(AppTheme.Fonts.caption())
-                .foregroundStyle(AppTheme.Colors.textSecondary)
-        }
-        .padding(AppTheme.Spacing.lg)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(AppTheme.Colors.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: AppTheme.Radius.xl))
-        .shadow(color: AppTheme.Colors.shadow, radius: 8, x: 0, y: 2)
-    }
-
-    // MARK: - Déconnexion
-
-    private var logoutSection: some View {
+    private func commerceSetupRow(
+        step: Int,
+        title: String,
+        done: Bool,
+        systemImage: String,
+        action: @escaping () -> Void
+    ) -> some View {
         Button {
-            showLogoutConfirmation = true
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            action()
         } label: {
-            Label("Se déconnecter", systemImage: "rectangle.portrait.and.arrow.right")
-                .font(AppTheme.Fonts.body())
-                .foregroundStyle(AppTheme.Colors.error)
-                .frame(maxWidth: .infinity)
-                .padding(AppTheme.Spacing.md)
+            HStack(alignment: .top, spacing: 12) {
+                ZStack {
+                    Circle()
+                        .fill(done ? AppTheme.Colors.success.opacity(0.18) : AppTheme.Colors.textSecondary.opacity(0.12))
+                        .frame(width: 36, height: 36)
+                    if done {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(AppTheme.Colors.success)
+                    } else {
+                        Text("\(step)")
+                            .font(.system(.subheadline, design: .rounded, weight: .bold))
+                            .foregroundStyle(AppTheme.Colors.textSecondary)
+                    }
+                }
+
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Image(systemName: systemImage)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(AppTheme.Colors.primary.opacity(0.9))
+                    Text(title)
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(AppTheme.Colors.textPrimary)
+                        .multilineTextAlignment(.leading)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(AppTheme.Colors.textSecondary.opacity(0.7))
+                    .padding(.top, 2)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 14)
+            .contentShape(Rectangle())
         }
-        .buttonStyle(.bordered)
-        .tint(AppTheme.Colors.error)
-        .padding(.top, AppTheme.Spacing.sm)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .buttonStyle(PressableScaleButtonStyle())
     }
 
-    // MARK: - Actions
+    private var storeInitials: String {
+        let source = organizationName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if source.isEmpty { return "Mb" }
+        let words = source.split(separator: " ").prefix(2)
+        let letters = words.compactMap { $0.first }.map(String.init).joined()
+        return letters.isEmpty ? "Mb" : letters
+    }
 
-    private func openAddressInMaps(_ address: String) {
-        let encoded = address.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? address
-        if let url = URL(string: "maps://?q=\(encoded)") {
-            UIApplication.shared.open(url)
-        }
+    private var userInitials: String {
+        let mail = authService.currentUserEmail?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !mail.isEmpty else { return "ME" }
+        let local = mail.split(separator: "@").first.map(String.init) ?? mail
+        let parts = local.split(whereSeparator: { $0 == "." || $0 == "_" || $0 == "-" }).prefix(2)
+        let letters = parts.compactMap { $0.first }.map { String($0).uppercased() }.joined()
+        return letters.isEmpty ? "ME" : letters
     }
 
     private func loadProfile() {
         let business = dataService.createOrGetCurrentBusiness()
         let template = dataService.currentCardTemplate()
         organizationName = template?.displayName ?? business.name ?? "Mon établissement"
-        email = business.email ?? ""
-        phone = business.phone ?? ""
-        address = business.address ?? ""
-        logoURL = template?.logoURL ?? business.logoURL ?? ""
+        let cardLogo = template?.logoURL ?? business.logoURL ?? ""
+        let icon = template?.logoIconURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        logoURL = icon.isEmpty ? cardLogo : icon
     }
 
-    private func saveProfile() async {
-        isSaving = true
-        savedMessage = nil
-        _ = dataService.createOrGetCurrentBusiness()
-        let template = dataService.currentCardTemplate()
-        let nameFinal = organizationName.trimmingCharacters(in: .whitespaces)
-        let finalName = nameFinal.isEmpty ? "Mon établissement" : nameFinal
-
-        dataService.updateBusiness(
-            name: finalName,
-            email: email.isEmpty ? nil : email,
-            phone: phone.isEmpty ? nil : phone,
-            address: address.isEmpty ? nil : address,
-            logoURL: logoURL.isEmpty ? nil : logoURL
-        )
-        if let t = template {
-            t.displayName = finalName
-            if !logoURL.isEmpty { t.logoURL = logoURL }
-            t.updatedAt = Date()
-            try? viewContext.save()
-        }
-
-        if let slug = AuthStorage.currentBusinessSlug, let t = template {
-            let bgHex = t.primaryColorHex ?? "2563EB"
-            let fgHex = t.accentColorHex ?? "F59E0B"
-            let requiredStamps = Int(t.requiredStamps)
-            var logoBase64: String? = nil
-            var logoUrl: String? = nil
-            let trimmedLogo = logoURL.trimmingCharacters(in: .whitespaces)
-            if !trimmedLogo.isEmpty {
-                if trimmedLogo.lowercased().hasPrefix("http://") || trimmedLogo.lowercased().hasPrefix("https://") {
-                    let url = URL(string: trimmedLogo)
-                    if let url, url.host() != APIConfig.baseURL.host() || !url.path.contains("/logo") {
-                        logoUrl = trimmedLogo
-                    }
-                } else if trimmedLogo.contains("CardLogos") || trimmedLogo.hasPrefix("/") {
-                    logoBase64 = CardLogoStorage.compressedBase64FromFile(path: trimmedLogo)
+    private func loadProfileFromServer() async {
+        guard let slug = AuthStorage.currentBusinessSlug else { return }
+        do {
+            // Parallélise les deux GET (settings + flyer) — économise 1-3 s de latence séquentielle.
+            async let settingsTask: BusinessSettingsResponse = APIClient.shared.request(APIEndpoint.businessSettings(slug: slug))
+            async let flyerTask: DashboardFlyerGetResponse = APIClient.shared.request(APIEndpoint.dashboardFlyerGet(slug: slug))
+            let (settings, flyer) = try await (settingsTask, flyerTask)
+            await MainActor.run {
+                settingsSnapshot = settings
+                if let st = flyer.flyerPrefs?.state {
+                    flyerLooksCustomized = st != .default
+                } else {
+                    flyerLooksCustomized = false
                 }
-            }
-            // Si vide : on n'envoie pas (nil) pour ne pas effacer le logo côté serveur
-            do {
-                _ = try await APIClient.shared.request(APIEndpoint.updateCardSettings(
+                let trimmedShare = (flyer.shareUrl ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                if trimmedShare.isEmpty {
+                    commerceFlyerShareURL = LegalURLs.fidelityCardPage(slug: slug)?.absoluteString ?? ""
+                } else {
+                    commerceFlyerShareURL = trimmedShare
+                }
+                commerceFlyerCustomBgDataURL = flyer.flyerPrefs?.customBgDataUrl
+                commerceFlyerBootstrapPreviewB64 = FlyerBootstrapPreviewPayloadBuilder.base64(from: flyer, businessSlug: slug)
+                let engagement = engagementStepDone(from: settings)
+                cachedEngagementStepDone = engagement
+                CommerceFlyerStateCache.save(
                     slug: slug,
-                    organizationName: finalName,
-                    backgroundColor: bgHex,
-                    foregroundColor: fgHex,
-                    requiredStamps: requiredStamps,
-                    logoBase64: logoBase64,
-                    logoUrl: logoUrl,
-                    locationAddress: address.isEmpty ? nil : address.trimmingCharacters(in: .whitespaces),
-                    stampEmoji: t.stampEmoji.flatMap { $0.isEmpty ? nil : $0 },
-                    cardBackgroundBase64: nil,
-                    programType: nil,
-                    pointsPerEuro: nil,
-                    pointsPerVisit: nil,
-                    pointsMinAmountEur: nil,
-                    pointsRewardTiers: nil,
-                    stampRewardLabel: nil,
-                    expiryMonths: nil,
-                    sector: nil
-                )) as EmptyResponse
-                // Après envoi réussi du logo : utiliser l’URL API pour affichage persistant (plus de dépendance au chemin local).
-                if logoBase64 != nil {
-                    let base = APIConfig.baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-                    let apiLogoURL = "\(base)/api/businesses/\(slug)/logo"
-                    t.logoURL = apiLogoURL
-                    let b = dataService.createOrGetCurrentBusiness()
-                    b.logoURL = apiLogoURL
-                    try? viewContext.save()
-                    logoURL = apiLogoURL
-                    UserDefaults.standard.set(Date(), forKey: SyncService.lastLogoUploadAtKey)
-                }
-            } catch {
-                // Enregistré en local
-            }
-        }
-
-        await MainActor.run {
-            isSaving = false
-            savedMessage = "Enregistré"
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
-                savedMessage = nil
-            }
-        }
-    }
-
-    private func loadLogoFromPicker(_ item: PhotosPickerItem?) async {
-        guard let item else { return }
-        guard let data = try? await item.loadTransferable(type: Data.self),
-              let image = UIImage(data: data) else { return }
-        let path = CardLogoStorage.saveImage(image)
-        await MainActor.run {
-            logoURL = path ?? ""
-            logoPhotoItem = nil
-            if let p = path {
-                dataService.updateBusiness(name: nil, email: nil, phone: nil, address: nil, logoURL: p)
-                if let t = dataService.currentCardTemplate() {
-                    t.logoURL = p
-                    t.updatedAt = Date()
-                    try? viewContext.save()
-                }
-            }
-        }
-    }
-
-    private func sendNotificationToClients() {
-        let msg = notificationMessage.trimmingCharacters(in: .whitespaces)
-        guard !msg.isEmpty else { return }
-        guard let slug = AuthStorage.currentBusinessSlug else {
-            notifyResultSuccess = false
-            notifyResultMessage = "Aucun commerce. Rechargez l’app."
-            return
-        }
-        isSendingNotification = true
-        notifyResultMessage = nil
-        Task {
-            do {
-                _ = try await APIClient.shared.request(APIEndpoint.notifyClients(slug: slug, message: msg, categoryIds: nil)) as EmptyResponse
-                await MainActor.run {
-                    isSendingNotification = false
-                    notifyResultSuccess = true
-                    notifyResultMessage = "Notification envoyée."
-                    notificationMessage = ""
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                        notifyResultMessage = nil
+                    flyerRegistered: flyerLooksCustomized,
+                    shareURL: commerceFlyerShareURL,
+                    bootstrapB64: commerceFlyerBootstrapPreviewB64,
+                    engagementStepDone: engagement,
+                    customBgDataURL: commerceFlyerCustomBgDataURL
+                )
+                MerchantLogoAssetCache.applyMerchantLogoTimestamps(from: settings)
+                CampaignNotificationImageCache.applyPreviewTimestamps(from: settings)
+                if let name = settings.organizationName, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    organizationName = name
+                    if let t = dataService.currentCardTemplate() {
+                        t.displayName = name
                     }
                 }
-            } catch {
-                await MainActor.run {
-                    isSendingNotification = false
-                    notifyResultSuccess = false
-                    notifyResultMessage = (error as? APIError)?.errorDescription ?? "Erreur lors de l’envoi."
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
-                        notifyResultMessage = nil
+                let b = dataService.createOrGetCurrentBusiness()
+                if let name = settings.organizationName, !name.isEmpty { b.name = name }
+                let tpl = dataService.currentCardTemplate()
+                if let u = settings.logoUrl?.trimmingCharacters(in: .whitespacesAndNewlines), !u.isEmpty {
+                    let cur = tpl?.logoURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    if !CardLogoStorage.isLocalPendingLogoReference(cur) {
+                        tpl?.logoURL = u
                     }
+                }
+                if let u = settings.logoIconUrl?.trimmingCharacters(in: .whitespacesAndNewlines), !u.isEmpty {
+                    let cur = tpl?.logoIconURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    if !CardLogoStorage.isLocalPendingLogoIconReference(cur) {
+                        tpl?.logoIconURL = u
+                    }
+                }
+                try? viewContext.save()
+                loadProfile()
+            }
+        } catch {}
+    }
+}
+
+private struct PressableScaleButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.985 : 1)
+            .opacity(configuration.isPressed ? 0.92 : 1)
+            .animation(.spring(response: 0.22, dampingFraction: 0.8), value: configuration.isPressed)
+    }
+}
+
+private struct TopRoundedShape: Shape {
+    let radius: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        var p = Path()
+        let r = min(radius, min(rect.width, rect.height) / 2)
+        p.move(to: CGPoint(x: 0, y: rect.height))
+        p.addLine(to: CGPoint(x: 0, y: r))
+        p.addQuadCurve(to: CGPoint(x: r, y: 0), control: CGPoint(x: 0, y: 0))
+        p.addLine(to: CGPoint(x: rect.width - r, y: 0))
+        p.addQuadCurve(to: CGPoint(x: rect.width, y: r), control: CGPoint(x: rect.width, y: 0))
+        p.addLine(to: CGPoint(x: rect.width, y: rect.height))
+        p.closeSubpath()
+        return p
+    }
+}
+
+private struct CommercePublicQRSheet: View {
+    let urlString: String
+    @Environment(\.dismiss) private var dismiss
+
+    private var qrLogicalSide: CGFloat { min(UIScreen.main.bounds.width - 48, 340) }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 24) {
+                    Text("Clients : ils scannent et arrivent sur votre page fidélité.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal)
+
+                    if urlString.isEmpty {
+                        ContentUnavailableView(
+                            "Lien indisponible",
+                            systemImage: "link.badge.plus",
+                            description: Text("Connectez un commerce ou réessayez dans un instant.")
+                        )
+                    } else if let img = QRCodeGenerator.generateQR(from: urlString, size: qrLogicalSide * UIScreen.main.scale) {
+                        Image(uiImage: img)
+                            .interpolation(.none)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: qrLogicalSide, height: qrLogicalSide)
+                            .padding(20)
+                            .background(RoundedRectangle(cornerRadius: 20).fill(.white))
+                            .shadow(color: .black.opacity(0.2), radius: 20, y: 8)
+
+                        Text(urlString)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(4)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal)
+
+                        Button {
+                            UIPasteboard.general.string = urlString
+                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        } label: {
+                            Label("Copier le lien", systemImage: "doc.on.doc")
+                        }
+                        .buttonStyle(.borderedProminent)
+                    } else {
+                        ContentUnavailableView(
+                            "QR indisponible",
+                            systemImage: "exclamationmark.triangle",
+                            description: Text("Réessayez dans un instant.")
+                        )
+                    }
+                }
+                .padding(.vertical, 24)
+                .frame(maxWidth: .infinity)
+            }
+            .navigationTitle("QR code fidélité")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Fermer") { dismiss() }
                 }
             }
         }
+        .presentationDetents([.large])
     }
 }
 
 #Preview {
     ProfileView(context: PersistenceController.preview.container.viewContext)
         .environmentObject(AuthService())
-        .environmentObject(SyncService(context: PersistenceController.preview.container.viewContext))
+        .environmentObject(SyncService(container: PersistenceController.preview.container))
+        .environmentObject(MainTabRouter())
 }
