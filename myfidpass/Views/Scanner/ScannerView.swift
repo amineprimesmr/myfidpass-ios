@@ -14,6 +14,7 @@ struct ScannerView: View {
     @EnvironmentObject private var syncService: SyncService
     @EnvironmentObject private var appState: AppState
     @StateObject private var dataService: DataService
+    @StateObject private var receiptCoordinator = ReceiptValidationCoordinator()
     @State private var isScanning = false
     @State private var isLookupInProgress = false
     @State private var isCreditInProgress = false
@@ -28,6 +29,10 @@ struct ScannerView: View {
     @State private var isRedeemInProgress = false
     @State private var pointsToRedeemText = ""
     @State private var lastActionWasRedeem = false
+    @State private var programType = "points"
+    @State private var pointsPerEuro = 1
+    @State private var pointsPerVisit = 0
+    @FocusState private var amountFocused: Bool
 
     init(context: NSManagedObjectContext) {
         _dataService = StateObject(wrappedValue: DataService(context: context))
@@ -35,6 +40,12 @@ struct ScannerView: View {
 
     private var isChoiceVisible: Bool {
         pendingBarcode != nil && lookedUpMemberName != nil && !showSuccess
+    }
+
+    private var pointsFromAmount: Int {
+        let s = amountText.replacingOccurrences(of: ",", with: ".").trimmingCharacters(in: .whitespaces)
+        guard let a = Double(s), a > 0 else { return 0 }
+        return Int(a) * pointsPerEuro
     }
 
     var body: some View {
@@ -87,7 +98,7 @@ struct ScannerView: View {
                     )
                         .transition(.scale.combined(with: .opacity))
                         .onAppear {
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                                 withAnimation {
                                     showSuccess = false
                                     scannedPointsAdded = nil
@@ -100,6 +111,11 @@ struct ScannerView: View {
                                 }
                             }
                         }
+                }
+            }
+            .fullScreenCover(item: $receiptCoordinator.session) { session in
+                ReceiptTicketValidationView(session: session) { token in
+                    receiptCoordinator.complete(with: token)
                 }
             }
         }
@@ -147,42 +163,96 @@ struct ScannerView: View {
                         .font(AppTheme.Fonts.caption())
                         .foregroundStyle(AppTheme.Colors.textSecondary)
                 }
-                Text("Enregistrer un passage ou un montant (€), ou utiliser une récompense.")
-                    .font(AppTheme.Fonts.caption())
-                    .foregroundStyle(AppTheme.Colors.textSecondary)
-                    .multilineTextAlignment(.center)
+                if programType == "stamps" {
+                    Text("Ajoutez 1 tampon ou utilisez une récompense.")
+                        .font(AppTheme.Fonts.caption())
+                        .foregroundStyle(AppTheme.Colors.textSecondary)
+                        .multilineTextAlignment(.center)
+                } else {
+                    Text("Montant du panier (€) = points. Ou 1 passage.")
+                        .font(AppTheme.Fonts.caption())
+                        .foregroundStyle(AppTheme.Colors.textSecondary)
+                        .multilineTextAlignment(.center)
+                }
 
                 Divider()
                     .padding(.vertical, 4)
 
-                Button {
-                    creditVisitOnly()
-                } label: {
-                    Label("1 passage", systemImage: "person.fill.checkmark")
-                        .font(AppTheme.Fonts.headline())
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, AppTheme.Spacing.md)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(AppTheme.Colors.primary)
-                .disabled(isCreditInProgress)
-
-                HStack(spacing: AppTheme.Spacing.sm) {
-                    TextField("Montant (€)", text: $amountText)
-                        .keyboardType(.decimalPad)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(maxWidth: .infinity)
+                if programType == "stamps" {
                     Button {
-                        creditAmount()
+                        creditVisitOnly()
                     } label: {
-                        Text("Enregistrer")
+                        Label("Ajouter 1 tampon", systemImage: "plus.circle.fill")
                             .font(AppTheme.Fonts.headline())
-                            .padding(.horizontal, AppTheme.Spacing.lg)
+                            .frame(maxWidth: .infinity)
                             .padding(.vertical, AppTheme.Spacing.md)
                     }
                     .buttonStyle(.borderedProminent)
-                    .tint(AppTheme.Colors.accent)
-                    .disabled(isCreditInProgress || amountText.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .tint(AppTheme.Colors.primary)
+                    .disabled(isCreditInProgress)
+                } else {
+                    VStack(alignment: .center, spacing: AppTheme.Spacing.md) {
+                        Text("Montant du panier")
+                            .font(AppTheme.Fonts.callout())
+                            .foregroundStyle(AppTheme.Colors.textSecondary)
+                        Button {
+                            amountFocused = true
+                        } label: {
+                            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                                Text(amountText.isEmpty ? "0" : amountText)
+                                    .font(.system(size: 48, weight: .bold, design: .rounded))
+                                    .foregroundStyle(amountText.isEmpty ? AppTheme.Colors.textSecondary.opacity(0.5) : AppTheme.Colors.primary)
+                                Text("€")
+                                    .font(.system(size: 28, weight: .semibold, design: .rounded))
+                                    .foregroundStyle(AppTheme.Colors.textSecondary)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .contentShape(Rectangle())
+                        }
+                        TextField("Montant", text: $amountText)
+                            .keyboardType(.decimalPad)
+                            .textFieldStyle(.plain)
+                            .focused($amountFocused)
+                            .frame(width: 1, height: 1)
+                            .opacity(0.01)
+                        if pointsFromAmount > 0 {
+                            Text("= \(pointsFromAmount) point\(pointsFromAmount > 1 ? "s" : "")")
+                                .font(AppTheme.Fonts.headline())
+                                .foregroundStyle(AppTheme.Colors.accent)
+                                .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                        }
+                        Button {
+                            creditAmount()
+                        } label: {
+                            Text("Enregistrer")
+                                .font(AppTheme.Fonts.headline())
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, AppTheme.Spacing.md)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(AppTheme.Colors.accent)
+                        .disabled(isCreditInProgress || amountText.trimmingCharacters(in: .whitespaces).isEmpty)
+                    }
+                    .animation(.easeOut(duration: 0.25), value: amountText)
+                    .animation(.easeOut(duration: 0.25), value: pointsFromAmount)
+                    .onAppear {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                            amountFocused = true
+                        }
+                    }
+                    if pointsPerVisit > 0 {
+                        Button {
+                            creditVisitOnly()
+                        } label: {
+                            Label("1 passage (+\(pointsPerVisit) pt)", systemImage: "person.fill.checkmark")
+                                .font(AppTheme.Fonts.callout())
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, AppTheme.Spacing.sm)
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(AppTheme.Colors.primary)
+                        .disabled(isCreditInProgress)
+                    }
                 }
 
                 Divider()
@@ -244,11 +314,16 @@ struct ScannerView: View {
             defer { Task { @MainActor in isLookupInProgress = false } }
             do {
                 let response: ScanLookupResponse = try await APIClient.shared.request(.scanLookup(slug: slug, barcode: code))
+                let settings: BusinessSettingsResponse? = try? await APIClient.shared.request(.businessSettings(slug: slug)) as BusinessSettingsResponse
                 await MainActor.run {
                     pendingBarcode = code
                     lookedUpMemberName = response.member.name ?? "Client"
                     lookedUpMemberPoints = response.member.points
                     amountText = ""
+                    programType = (settings?.programType ?? "points").lowercased()
+                    if programType != "points" && programType != "stamps" { programType = "points" }
+                    pointsPerEuro = settings?.pointsPerEuro ?? 1
+                    pointsPerVisit = settings?.pointsPerVisit ?? 0
                     withAnimation(.spring(response: 0.3)) {}
                 }
             } catch APIError.notFound {
@@ -285,19 +360,40 @@ struct ScannerView: View {
             await MainActor.run { isCreditInProgress = true }
             defer { Task { @MainActor in isCreditInProgress = false } }
             do {
+                var receiptTok: String?
+                if !visit, let amt = amountEur, amt > 0 {
+                    let settings: BusinessSettingsResponse
+                    if let c = ScanFlowSettingsCache.cached(for: slug) {
+                        settings = c
+                    } else {
+                        settings = try await APIClient.shared.request(.businessSettings(slug: slug)) as BusinessSettingsResponse
+                        ScanFlowSettingsCache.store(settings, for: slug)
+                    }
+                    if (settings.requireReceiptQrValidation ?? 0) == 1 {
+                        guard let t = try await receiptCoordinator.requestValidatedToken(slug: slug, amountEur: amt) else {
+                            await MainActor.run {
+                                showError = "Scan du ticket de caisse annulé."
+                                appState.showError(showError ?? "")
+                            }
+                            return
+                        }
+                        receiptTok = t
+                    }
+                }
                 let response: ScanResponse = try await APIClient.shared.request(.scan(
                     slug: slug,
                     barcode: barcode,
                     visit: visit,
                     points: nil,
-                    amountEur: amountEur
+                    amountEur: amountEur,
+                    receiptValidationToken: receiptTok
                 ))
                 await MainActor.run {
-                    scannedClientName = response.member.name ?? lookedUpMemberName ?? "Client"
+                    scannedClientName = response.member?.name ?? lookedUpMemberName ?? "Client"
                     scannedPointsAdded = response.pointsAdded
                     withAnimation(.spring(response: 0.3)) { showSuccess = true }
                 }
-                await syncService.syncIfNeeded()
+                await syncService.syncAfterServerMutation()
             } catch APIError.notFound {
                 await MainActor.run {
                     showError = "Code non reconnu."
@@ -329,7 +425,7 @@ struct ScannerView: View {
                     lastActionWasRedeem = true
                     withAnimation(.spring(response: 0.3)) { showSuccess = true }
                 }
-                await syncService.syncIfNeeded()
+                await syncService.syncAfterServerMutation()
             } catch {
                 let msg = (error as? APIError)?.errorDescription ?? "Impossible d'utiliser la récompense."
                 await MainActor.run { showError = msg; appState.showError(msg) }
@@ -357,7 +453,7 @@ struct ScannerView: View {
                     lastActionWasRedeem = true
                     withAnimation(.spring(response: 0.3)) { showSuccess = true }
                 }
-                await syncService.syncIfNeeded()
+                await syncService.syncAfterServerMutation()
             } catch {
                 let msg = (error as? APIError)?.errorDescription ?? "Impossible d'utiliser les points."
                 await MainActor.run { showError = msg; appState.showError(msg) }
@@ -465,10 +561,17 @@ final class QRScannerViewController: UIViewController, AVCaptureMetadataOutputOb
 
     private func setupCaptureSession() {
         let session = AVCaptureSession()
-        guard let device = AVCaptureDevice.default(for: .video),
+        let discovery = AVCaptureDevice.DiscoverySession(deviceTypes: [.builtInWideAngleCamera], mediaType: .video, position: .back)
+        guard let device = discovery.devices.first,
               let input = try? AVCaptureDeviceInput(device: device),
               session.canAddInput(input) else { return }
+        session.sessionPreset = .high
         session.addInput(input)
+        try? device.lockForConfiguration()
+        if device.maxAvailableVideoZoomFactor > 1.0 {
+            device.videoZoomFactor = min(1.35, device.maxAvailableVideoZoomFactor)
+        }
+        device.unlockForConfiguration()
 
         let output = AVCaptureMetadataOutput()
         guard session.canAddOutput(output) else { return }
@@ -501,6 +604,6 @@ final class QRScannerViewController: UIViewController, AVCaptureMetadataOutputOb
 
 #Preview {
     ScannerView(context: PersistenceController.preview.container.viewContext)
-        .environmentObject(SyncService(context: PersistenceController.preview.container.viewContext))
+        .environmentObject(SyncService(container: PersistenceController.preview.container))
         .environmentObject(AppState.shared)
 }

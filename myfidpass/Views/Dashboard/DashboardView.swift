@@ -2,23 +2,40 @@
 //  DashboardView.swift
 //  myfidpass
 //
-//  Tableau de bord : stats (Cartes actives → liste membres, Scans aujourd'hui → activité), scan, notifications.
+//  Accueil commerçant : en-tête glass (profil + carte), historique ;
+//  scan QR et notifications membres en bas.
 //
 
 import SwiftUI
 import CoreData
+import UIKit
 
 enum DashboardRoute: Hashable {
-    case members
-    case scansToday
+    /// Hub unifié membres + activité (filtre initial selon l’entrée tableau de bord).
+    case membersActivity(MemberActivityFilter)
+    /// Personnalisation carte fidélité (plein écran, pas une sheet).
+    case myCard
+    /// Fiche membre depuis une ligne d’activité (dernières transactions).
+    case memberDetail(NSManagedObjectID)
+}
+
+// MARK: - Accueil : chrome partiel
+
+private enum DashboardHomeChrome {
+    /// Barre profil + scanner au-dessus de la carte : désactivée (profil = onglet du bas, scanner = bouton « Dernières transactions »).
+    static let showMinimalTopBar = false
+    /// Ancienne barre du bas (notification membres, menu catégories) + `CustomMenuView` autour du `NavigationStack`.
+    static let showLegacyBottomNotificationChrome = false
 }
 
 struct DashboardView: View {
     @Environment(\.managedObjectContext) private var viewContext
+    @Environment(\.colorScheme) private var colorScheme
     @EnvironmentObject private var syncService: SyncService
     @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var tabRouter: MainTabRouter
     @StateObject private var dataService: DataService
-    @State private var isAnimating = false
+
     @State private var showScanner: Bool = false
     @State private var showToast: Bool = false
     @State private var successToast: Toast = .example1
@@ -28,21 +45,37 @@ struct DashboardView: View {
     @State private var isSendingNotification = false
     @State private var notifyResultMessage: String?
     @State private var menuConfig: MenuConfig = MenuConfig(symbolImage: "person.2.fill")
-    /// Catégories sélectionnées pour l'envoi de notification (vide = tous les membres).
     @State private var selectedCategoryIdsForNotify: [String] = []
     @State private var showCategoriesManagement = false
     @State private var navigationPath = NavigationPath()
-    @State private var titleAppeared = false
-    /// Après scan : si programme points, afficher la sheet pour saisir le montant du panier.
+    @State private var contentAppeared = false
     @State private var scanResultSheet: ScanResultSheetData?
     @State private var isScanAmountSubmitting = false
+    @StateObject private var receiptCoordinator = ReceiptValidationCoordinator()
+    /// Incrémenté quand `CardPreviewDisplaySnapshotStore` change pour forcer le re-rendu de l’aperçu carte (autre `DataService` que Ma carte).
+    @State private var cardPreviewDisplayRefresh = 0
+
+    private var palette: DashboardRevolutPalette { DashboardRevolutPalette(colorScheme: colorScheme) }
 
     init(context: NSManagedObjectContext) {
         _dataService = StateObject(wrappedValue: DataService(context: context))
     }
 
-    private var totalClients: Int { dataService.totalClientCardsCount() }
-    private var stampsToday: Int { dataService.stampsCountToday() }
+    private var activityFeed: [DashboardActivityEntry] {
+        /// Uniquement les **scans** : évite la répétition « inscription + scan » pour un même client dans « Dernières transactions ».
+        dataService.dashboardActivityFeed(limit: 40, includeNewCardEvents: false)
+    }
+
+    private var activityPreview: [DashboardActivityEntry] {
+        Array(activityFeed.prefix(8))
+    }
+
+    /// Type de programme fidélité pour l’accueil (snapshot « Ma carte », défaut tampons).
+    private var homeProgramIsPoints: Bool {
+        let slug = AuthStorage.currentBusinessSlug ?? ""
+        let raw = slug.isEmpty ? nil : CardPreviewDisplaySnapshotStore.load(slug: slug)?.programType
+        return (raw ?? "points").lowercased() == "points"
+    }
 
     private var menuActions: [MenuAction] {
         var list: [MenuAction] = []
@@ -67,49 +100,50 @@ struct DashboardView: View {
         return list
     }
 
-    var body: some View {
-        CustomMenuView(config: $menuConfig, actions: menuActions) {
-        NavigationStack(path: $navigationPath) {
-            ZStack(alignment: .top) {
-                ScrollView {
-                    VStack(spacing: AppTheme.Spacing.lg) {
-                        statsSection
-                    }
-                    .padding(AppTheme.Spacing.md)
-                    .padding(.bottom, 120)
-                    .opacity(titleAppeared ? 1 : 0)
-                    .offset(y: titleAppeared ? 0 : 16)
-                }
-                .background(AppTheme.Colors.background)
-                .onAppear {
-                    withAnimation(.easeOut(duration: 0.55).delay(0.08)) {
-                        titleAppeared = true
-                    }
-                }
-                .refreshable {
-                    await syncService.syncIfNeeded(force: true)
-                }
-                .qrScanner(isScanning: $showScanner) { code in
-                    handleQRScanned(code)
-                }
-                .dynamicIslandToast(isPresented: $showToast, value: successToast)
-                .alert("Erreur scan", isPresented: .constant(scanError != nil)) {
-                    Button("OK") { scanError = nil }
-                } message: {
-                    if let msg = scanError { Text(msg) }
-                }
+    /// Contenu principal de l’accueil (ZStack + modificateurs navigation / scan).
+    @ViewBuilder
+    private var dashboardHomeRoot: some View {
+        ZStack(alignment: .top) {
+            palette.canvas.ignoresSafeArea()
 
-                if syncService.isSyncing {
-                    VStack {
-                        ProgressView()
-                            .scaleEffect(1.2)
-                            .tint(AppTheme.Colors.primary)
-                            .padding(.top, 12)
-                        Spacer()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        fintechHomeTopAndCard
+                        fintechTransactionsSection
+                            .padding(.top, -12)
                     }
                 }
+                .padding(.horizontal, DashboardHomeLayoutMetrics.scrollHorizontalPadding)
+                .padding(.top, DashboardHomeChrome.showMinimalTopBar ? 4 : 0)
+                .padding(.bottom, DashboardHomeChrome.showLegacyBottomNotificationChrome ? 280 : 100)
+                .opacity(contentAppeared ? 1 : 0)
+                .offset(y: contentAppeared ? 0 : 14)
+            }
+            .scrollIndicators(.hidden)
+            .refreshable {
+                await syncService.syncIfNeeded(force: true)
+            }
 
-                // Barre en bas : chips + barre message (destinataires / envoyer)
+            if DashboardHomeChrome.showMinimalTopBar {
+                VStack(spacing: 0) {
+                    DashboardHomeMinimalTopBar(
+                        palette: palette,
+                        onOpenProfile: { tabRouter.selectedTab = 2 },
+                        onOpenScan: { showScanner = true }
+                    )
+                    .padding(.horizontal, DashboardHomeLayoutMetrics.topBarHorizontalInset)
+                    .padding(.top, 6)
+                    Color.clear
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .allowsHitTesting(false)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            }
+
+            syncOverlay
+
+            if DashboardHomeChrome.showLegacyBottomNotificationChrome {
                 VStack(spacing: 0) {
                     Spacer(minLength: 0)
                     notificationRecipientChips
@@ -119,29 +153,85 @@ struct DashboardView: View {
                 .padding(.horizontal, 15)
                 .padding(.bottom, 10)
             }
-            .navigationTitle("Tableau de bord")
-            .navigationBarTitleDisplayMode(.large)
-            .toolbarBackground(AppTheme.Colors.background, for: .navigationBar)
-            .toolbarColorScheme(.light, for: .navigationBar)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        showScanner = true
-                    } label: {
-                        Label("Scanner", systemImage: "qrcode.viewfinder")
-                    }
-                    .foregroundStyle(AppTheme.Colors.primary)
+        }
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .navigationBar)
+        .navigationDestination(for: DashboardRoute.self) { route in
+            switch route {
+            case .membersActivity(let initialFilter):
+                DashboardActivityFullView(context: viewContext, initialFilter: initialFilter)
+                    .environmentObject(syncService)
+            case .myCard:
+                MyCardView(context: viewContext)
+                    .environmentObject(syncService)
+            case .memberDetail(let oid):
+                if let card = viewContext.object(with: oid) as? ClientCard {
+                    MemberDetailView(card: card, context: viewContext)
+                        .environmentObject(syncService)
+                        .environmentObject(dataService)
+                } else {
+                    ContentUnavailableView(
+                        "Membre introuvable",
+                        systemImage: "person.crop.circle.badge.questionmark",
+                        description: Text("Cette fiche n’est plus disponible.")
+                    )
                 }
             }
-            .alert("Notification", isPresented: Binding(
-                get: { notifyResultMessage != nil },
-                set: { if !$0 { notifyResultMessage = nil } }
-            )) {
-                Button("OK") { notifyResultMessage = nil }
-            } message: {
-                if let msg = notifyResultMessage { Text(msg) }
+        }
+        .onAppear {
+            withAnimation(.easeOut(duration: 0.5).delay(0.06)) {
+                contentAppeared = true
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .myfidpassOpenHomeScanner)) { _ in
+            navigationPath = NavigationPath()
+            showScanner = true
+        }
+        .qrScanner(isScanning: $showScanner) { code in
+            handleQRScanned(code)
+        }
+        .dynamicIslandToast(isPresented: $showToast, value: successToast)
+        .alert("Erreur scan", isPresented: .constant(scanError != nil)) {
+            Button("OK") { scanError = nil }
+        } message: {
+            if let msg = scanError { Text(msg) }
+        }
+        .alert("Notification", isPresented: Binding(
+            get: { notifyResultMessage != nil },
+            set: { if !$0 { notifyResultMessage = nil } }
+        )) {
+            Button("OK") { notifyResultMessage = nil }
+        } message: {
+            if let msg = notifyResultMessage { Text(msg) }
+        }
+    }
+
+    var body: some View {
+        let _ = dataService.updateTrigger
+        Group {
+            if !DashboardHomeChrome.showLegacyBottomNotificationChrome {
+                NavigationStack(path: $navigationPath) {
+                    dashboardHomeRoot
+                }
+            } else {
+                CustomMenuView(config: $menuConfig, actions: menuActions) {
+                    NavigationStack(path: $navigationPath) {
+                        dashboardHomeRoot
+                    }
+                }
+            }
+        }
+        .onChange(of: navigationPath) { _, path in
+            tabRouter.isDashboardAtRoot = path.isEmpty
+        }
+        .onAppear {
+            tabRouter.isDashboardAtRoot = navigationPath.isEmpty
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .myfidpassRemoteSyncDidMerge)) { _ in
+            dataService.bumpRefreshAfterRemoteMerge()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .myfidpassCardPreviewDisplayDidChange)) { _ in
+            cardPreviewDisplayRefresh += 1
         }
         .sheet(isPresented: $showCategoriesManagement) {
             CategoriesManagementView(context: viewContext)
@@ -150,68 +240,192 @@ struct DashboardView: View {
                 .presentationDragIndicator(.visible)
                 .modifier(LiquidGlassSheetModifier())
         }
-        .sheet(item: $scanResultSheet) { data in
-            ScanAmountSheet(
-                memberName: data.memberName,
-                barcode: data.barcode,
-                pointsPerEuro: data.pointsPerEuro,
-                isSubmitting: $isScanAmountSubmitting,
-                onDismiss: { scanResultSheet = nil },
-                onSubmit: { amountEur in
-                    await submitScanAmount(slug: data.slug, barcode: data.barcode, amountEur: amountEur)
-                    scanResultSheet = nil
-                    showToast = true
-                }
-            )
-            .presentationDetents([.medium, .large])
-            .presentationDragIndicator(.visible)
-            .modifier(LiquidGlassSheetModifier())
+        .fullScreenCover(item: $scanResultSheet) { data in
+            scanAddPointsSheet(for: data)
         }
     }
 
-    /// Barre de saisie en bas : icône destinataires quand vide/fermée, icône envoyer dès qu’il y a du texte.
+    /// Évite le ternaire `onRedeemTier` dans `body` (échec d’inférence Swift / « Failed to produce diagnostic »).
+    @ViewBuilder
+    private func scanAddPointsSheet(for data: ScanResultSheetData) -> some View {
+        AddPointsAmountSheet(
+            memberName: data.memberName,
+            barcode: data.barcode,
+            pointsPerEuro: data.pointsPerEuro,
+            memberPoints: data.memberPoints,
+            rewardTiers: data.rewardTiers,
+            pointsMinAmountEur: data.pointsMinAmountEur,
+            isSubmitting: $isScanAmountSubmitting,
+            receiptCoordinator: receiptCoordinator,
+            onDismiss: { scanResultSheet = nil },
+            onSubmit: { amountEur in
+                await submitScanAmount(slug: data.slug, barcode: data.barcode, amountEur: amountEur)
+            },
+            onRedeemTier: scanRedeemHandler(for: data)
+        )
+    }
+
+    private func scanRedeemHandler(for data: ScanResultSheetData) -> ((ScanRewardTier, Double) async -> Int?)? {
+        guard !data.rewardTiers.isEmpty else { return nil }
+        return { tier, amount in
+            await redeemOrCreditScan(tier: tier, amountEur: amount, data: data)
+        }
+    }
+
+    // MARK: - Accueil type fintech (carte + transactions)
+
+    private var fintechHomeTopAndCard: some View {
+        VStack(alignment: .leading, spacing: DashboardHomeChrome.showMinimalTopBar ? 18 : 8) {
+            Color.clear
+                .frame(height: DashboardHomeChrome.showMinimalTopBar ? 72 : 8)
+                .accessibilityHidden(true)
+
+            if let model = DashboardHomeCardModel.resolve(dataService: dataService) {
+                Button {
+                    navigationPath.append(DashboardRoute.myCard)
+                } label: {
+                    FintechHomeLoyaltyCardBlock(
+                        model: model,
+                        palette: palette
+                    )
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Ma carte")
+                .accessibilityHint("Ouvre la personnalisation de la carte fidélité.")
+            } else {
+                Button {
+                    navigationPath.append(DashboardRoute.myCard)
+                } label: {
+                    RoundedRectangle(cornerRadius: 36, style: .continuous)
+                        .fill(palette.card)
+                        .frame(height: 200)
+                        .overlay(
+                            VStack(spacing: 10) {
+                                Image(systemName: "creditcard")
+                                    .font(.largeTitle)
+                                    .foregroundStyle(palette.tertiaryText)
+                                Text("Synchronisez pour afficher votre carte")
+                                    .font(.subheadline.weight(.medium))
+                                    .foregroundStyle(palette.secondaryText)
+                                    .multilineTextAlignment(.center)
+                                Text("Ouvrir Ma carte")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(palette.accentBlue)
+                            }
+                            .padding()
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 36, style: .continuous)
+                                .strokeBorder(palette.cardStroke, lineWidth: 1)
+                        )
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Ma carte")
+                .accessibilityHint("Ouvre la personnalisation de la carte fidélité.")
+            }
+        }
+        .id(cardPreviewDisplayRefresh)
+    }
+
+    private var fintechTransactionsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            FintechTransactionsSectionHeader(
+                palette: palette,
+                onSeeAll: { navigationPath.append(DashboardRoute.membersActivity(.all)) },
+                onOpenScanner: { showScanner = true }
+            )
+
+            if activityPreview.isEmpty {
+                VStack(spacing: 12) {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.title2)
+                        .foregroundStyle(palette.tertiaryText)
+                    Text("Aucune transaction récente")
+                        .font(.body.weight(.bold))
+                        .foregroundStyle(palette.onCanvasPrimary)
+                    Text("Tirez vers le bas pour synchroniser. Les transactions (scans) apparaissent ici après enregistrement.")
+                        .font(.subheadline)
+                        .foregroundStyle(palette.secondaryText)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 28)
+                .padding(.horizontal, 18)
+                .background(palette.transactionPillBG, in: RoundedRectangle(cornerRadius: 32, style: .continuous))
+            } else {
+                VStack(spacing: 10) {
+                    ForEach(activityPreview) { entry in
+                        Button {
+                            navigationPath.append(DashboardRoute.memberDetail(entry.cardObjectID))
+                        } label: {
+                            FintechTransactionRow(entry: entry, palette: palette, isPointsProgram: homeProgramIsPoints)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Ouvrir la fiche de \(entry.clientName)")
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, DashboardHomeLayoutMetrics.transactionsSectionExtraHorizontal)
+    }
+
+    @ViewBuilder
+    private var syncOverlay: some View {
+        if syncService.isSyncing {
+            VStack {
+                ProgressView()
+                    .scaleEffect(1.15)
+                    .tint(palette.onCanvasPrimary)
+                    .padding(.top, 10)
+                Spacer()
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .allowsHitTesting(false)
+        }
+    }
+
+    // MARK: - Notification bas d’écran
+
     private var notificationBottomBar: some View {
-        let fillColor = Color.gray.opacity(0.15)
+        let fillColor = palette.barButtonFill
         let hasText = !notificationMessage.trimmingCharacters(in: .whitespaces).isEmpty
         return AnimatedBottomBar(
-            hint: "Message pour tous les membres…",
-            tint: AppTheme.Colors.primary,
+            hint: "Message pour vos membres…",
+            tint: palette.accentBlue,
             text: $notificationMessage,
             isFocused: $isNotificationFieldFocused,
             leadingAction: {
                 recipientsButtonView(fillColor: fillColor)
             },
             trailingAction: {
-                // Barre ouverte : bouton bleu = envoyer tout de suite (pas de reconfirmation), puis replier.
                 if isNotificationFieldFocused {
                     Button {
-                        if hasText {
-                            sendNotificationToAll()
-                        }
+                        if hasText { sendNotificationToAll() }
                         isNotificationFieldFocused = false
                     } label: {
                         Image(systemName: "checkmark")
                             .fontWeight(.medium)
                             .foregroundStyle(Color.white)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .background(AppTheme.Colors.primary.gradient, in: .circle)
+                            .background(palette.accentBlue.gradient, in: .circle)
                     }
+                    .buttonStyle(.borderless)
                 } else {
                     Color.clear
                         .frame(width: 35, height: 35)
                 }
             },
             mainAction: {
-                // Dès qu’il y a du texte : icône envoyer. Sinon (barre fermée ou champ vide) : icône destinataires (menu).
                 if isNotificationFieldFocused && hasText {
                     Button {
                         sendNotificationToAll()
                     } label: {
                         Image(systemName: "paperplane.fill")
                             .font(.body)
-                            .foregroundStyle(Color.primary)
+                            .foregroundStyle(Color.white)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
+                    .buttonStyle(.borderless)
                     .disabled(isSendingNotification)
                 } else {
                     recipientsButtonView(fillColor: fillColor)
@@ -220,38 +434,40 @@ struct DashboardView: View {
         )
     }
 
-    /// Chips pour choisir les destinataires de la notification (tous ou par catégorie).
     @ViewBuilder
     private var notificationRecipientChips: some View {
         let cats = categoriesForNotify
-        if !cats.isEmpty {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                RecipientChip(
-                    title: "Tous les membres",
-                    isSelected: selectedCategoryIdsForNotify.isEmpty,
-                    color: AppTheme.Colors.primary
-                ) {
-                    selectedCategoryIdsForNotify = []
-                }
-                ForEach(cats, id: \.serverId) { category in
-                    let isSelected = selectedCategoryIdsForNotify.contains(category.serverId ?? "")
-                    RecipientChip(
-                        title: category.name ?? "",
-                        isSelected: isSelected,
-                        color: (category.colorHex.flatMap { Color(hex: $0) }) ?? AppTheme.Colors.primary
+        if isNotificationFieldFocused, !cats.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    RecipientCategoryChip(
+                        title: "Tous",
+                        isSelected: selectedCategoryIdsForNotify.isEmpty,
+                        color: palette.accentBlue,
+                        palette: palette
                     ) {
-                        if isSelected {
-                            selectedCategoryIdsForNotify.removeAll { $0 == category.serverId }
-                        } else {
-                            if let id = category.serverId { selectedCategoryIdsForNotify.append(id) }
+                        selectedCategoryIdsForNotify = []
+                    }
+                    ForEach(cats, id: \.objectID) { category in
+                        let sid = category.serverId ?? ""
+                        let isSelected = !sid.isEmpty && selectedCategoryIdsForNotify.contains(sid)
+                        RecipientCategoryChip(
+                            title: category.name ?? "",
+                            isSelected: isSelected,
+                            color: (category.colorHex.flatMap { Color(hex: $0) }) ?? palette.accentBlue,
+                            palette: palette
+                        ) {
+                            if isSelected {
+                                selectedCategoryIdsForNotify.removeAll { $0 == sid }
+                            } else if !sid.isEmpty {
+                                selectedCategoryIdsForNotify.append(sid)
+                            }
                         }
                     }
                 }
+                .padding(.vertical, 6)
             }
-            .padding(.vertical, 6)
-        }
-        .padding(.bottom, 4)
+            .padding(.bottom, 4)
         }
     }
 
@@ -265,7 +481,7 @@ struct DashboardView: View {
         MenuSourceButton(config: $menuConfig) {
             Image(systemName: "person.2.fill")
                 .fontWeight(.medium)
-                .foregroundStyle(Color.primary)
+                .foregroundStyle(palette.onCanvasPrimary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(fillColor, in: .circle)
         } onTap: {
@@ -293,15 +509,16 @@ struct DashboardView: View {
                     let n = result.sent ?? 0
                     notifyResultMessage = n > 0 ? "Notification envoyée (\(n) appareil(s))." : "Aucun appareil cible (Wallet / Web). Message enregistré."
                     notificationMessage = ""
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                         notifyResultMessage = nil
                     }
                 }
+                await syncService.syncAfterServerMutation()
             } catch {
                 await MainActor.run {
                     isSendingNotification = false
-                    notifyResultMessage = (error as? APIError)?.errorDescription ?? "Erreur lors de l'envoi."
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+                    notifyResultMessage = (error as? APIError)?.errorDescription ?? "Erreur lors de l’envoi."
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
                         notifyResultMessage = nil
                     }
                 }
@@ -309,7 +526,6 @@ struct DashboardView: View {
         }
     }
 
-    /// Extrait l’ID membre (UUID) du code scanné (brut ou contenu dans une URL).
     private func normalizeBarcodeToMemberId(_ raw: String) -> String {
         let s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if s.isEmpty { return raw }
@@ -321,7 +537,16 @@ struct DashboardView: View {
         return s
     }
 
-    /// Lookup client puis, selon le type de programme (tampons vs points), soit on enregistre 1 tampon, soit on affiche la sheet pour saisir le montant du panier.
+    /// Plein écran montant € (comme la fiche membre) : `program_type == points`, ou champ absent avec mode caisse / points_per_euro.
+    private func shouldPresentEuroPointsSheetAfterScan(_ settings: BusinessSettingsResponse) -> Bool {
+        let pt = (settings.programType ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if pt == "stamps" { return false }
+        if pt == "points" { return true }
+        let lm = (settings.loyaltyMode ?? "").lowercased()
+        if lm.contains("point") || lm.contains("cash") { return true }
+        return (settings.pointsPerEuro ?? 0) > 0
+    }
+
     private func handleQRScanned(_ code: String) {
         guard let slug = AuthStorage.currentBusinessSlug else {
             appState.showError("Aucun commerce. Reconnectez-vous.")
@@ -332,32 +557,63 @@ struct DashboardView: View {
         Task {
             do {
                 async let lookupTask = APIClient.shared.request(.scanLookup(slug: slug, barcode: barcode)) as ScanLookupResponse
-                async let settingsTask = APIClient.shared.request(.businessSettings(slug: slug)) as BusinessSettingsResponse
+
+                let settings: BusinessSettingsResponse
+                if let cached = ScanFlowSettingsCache.cached(for: slug) {
+                    settings = cached
+                    Task.detached(priority: .utility) {
+                        do {
+                            let fresh = try await APIClient.shared.request(.businessSettings(slug: slug)) as BusinessSettingsResponse
+                            ScanFlowSettingsCache.store(fresh, for: slug)
+                        } catch { /* ignore */ }
+                    }
+                } else {
+                    settings = try await APIClient.shared.request(.businessSettings(slug: slug)) as BusinessSettingsResponse
+                    ScanFlowSettingsCache.store(settings, for: slug)
+                }
+
                 let lookup = try await lookupTask
-                let settings = try await settingsTask
                 let memberName = lookup.member.name ?? "Client"
-                let programType = (settings.programType ?? "stamps").lowercased()
                 let pointsPerEuro = settings.pointsPerEuro ?? 1
 
-                if programType == "points" {
+                if shouldPresentEuroPointsSheetAfterScan(settings) {
+                    let tierDTOs = settings.pointsRewardTiers ?? []
+                    let rewardTiers = tierDTOs
+                        .filter { $0.points > 0 }
+                        .map { ScanRewardTier(points: $0.points, label: $0.label.isEmpty ? "Récompense" : $0.label) }
+                        .sorted { $0.points < $1.points }
+                    let sheetData = ScanResultSheetData(
+                        slug: slug,
+                        memberName: memberName,
+                        barcode: barcode,
+                        pointsPerEuro: pointsPerEuro,
+                        memberPoints: lookup.member.points,
+                        rewardTiers: rewardTiers,
+                        pointsMinAmountEur: settings.pointsMinAmountEur
+                    )
                     await MainActor.run {
-                        scanResultSheet = ScanResultSheetData(
-                            slug: slug,
-                            memberName: memberName,
-                            barcode: barcode,
-                            pointsPerEuro: pointsPerEuro
-                        )
+                        var tx = Transaction()
+                        tx.disablesAnimations = true
+                        withTransaction(tx) {
+                            scanResultSheet = sheetData
+                        }
                     }
                     return
                 }
 
-                // Programme tampons : enregistrer 1 passage (1 tampon) immédiatement.
-                let response: ScanResponse = try await APIClient.shared.request(.scan(slug: slug, barcode: barcode, visit: true, points: nil, amountEur: nil))
+                let response: ScanResponse = try await APIClient.shared.request(
+                    .scan(slug: slug, barcode: barcode, visit: true, points: nil, amountEur: nil, receiptValidationToken: nil)
+                )
                 await MainActor.run {
-                    successToast = Toast.scanStampSuccess(memberName: response.member.name ?? memberName)
+                    successToast = Toast.scanStampSuccess(
+                        memberName: response.member?.name ?? memberName,
+                        pointsCapped: response.pointsCapped == true,
+                        pointsRequested: response.pointsRequested,
+                        pointsAdded: response.pointsAdded
+                    )
                     showToast = true
                 }
-                await syncService.syncIfNeeded()
+                Task { await syncService.syncAfterServerMutation() }
             } catch APIError.notFound {
                 await MainActor.run {
                     scanError = "Code non reconnu pour ce commerce. Scannez le QR affiché sur la carte dans le Wallet du client (pas le lien « Ajouter à Wallet »)."
@@ -373,282 +629,202 @@ struct DashboardView: View {
         }
     }
 
-    private func submitScanAmount(slug: String, barcode: String, amountEur: Double) async {
+    @discardableResult
+    private func submitScanAmount(slug: String, barcode: String, amountEur: Double) async -> Bool {
         isScanAmountSubmitting = true
         defer { Task { @MainActor in isScanAmountSubmitting = false } }
         do {
-            let response: ScanResponse = try await APIClient.shared.request(.scan(slug: slug, barcode: barcode, visit: false, points: nil, amountEur: amountEur))
+            let settings: BusinessSettingsResponse
+            if let c = ScanFlowSettingsCache.cached(for: slug) {
+                settings = c
+            } else {
+                settings = try await APIClient.shared.request(.businessSettings(slug: slug)) as BusinessSettingsResponse
+                ScanFlowSettingsCache.store(settings, for: slug)
+            }
+            var receiptTok: String?
+            if (settings.requireReceiptQrValidation ?? 0) == 1, amountEur > 0 {
+                guard let t = try await receiptCoordinator.requestValidatedToken(slug: slug, amountEur: amountEur) else {
+                    await MainActor.run {
+                        scanError = "Scan du ticket de caisse annulé."
+                        appState.showError(scanError ?? "")
+                    }
+                    return false
+                }
+                receiptTok = t
+            }
+            let response: ScanResponse = try await APIClient.shared.request(
+                .scan(
+                    slug: slug,
+                    barcode: barcode,
+                    visit: false,
+                    points: nil,
+                    amountEur: amountEur,
+                    receiptValidationToken: receiptTok
+                )
+            )
             await MainActor.run {
                 successToast = Toast.scanSuccess(
-                    memberName: response.member.name ?? "Client",
-                    pointsAdded: response.pointsAdded
+                    memberName: response.member?.name ?? "Client",
+                    pointsAdded: response.pointsAdded,
+                    pointsCapped: response.pointsCapped == true,
+                    pointsRequested: response.pointsRequested
                 )
+                var tx = Transaction()
+                tx.disablesAnimations = true
+                withTransaction(tx) {
+                    scanResultSheet = nil
+                }
+                showToast = true
             }
-            await syncService.syncIfNeeded()
+            Task { await syncService.syncAfterServerMutation() }
+            return true
         } catch {
             await MainActor.run {
                 scanError = (error as? APIError)?.errorDescription ?? "Erreur lors de l'enregistrement."
                 appState.showError(scanError ?? "Erreur")
             }
+            return false
         }
     }
 
-    private var statsSection: some View {
-        HStack(spacing: AppTheme.Spacing.md) {
-            NavigationLink(value: DashboardRoute.members) {
-                StatCard(
-                    title: "Cartes actives",
-                    value: "\(totalClients)",
-                    icon: "person.2.fill",
-                    color: AppTheme.Colors.primary
+    /// Même logique que la fiche membre : redeem immédiat ou crédit panier puis redeem (scan QR).
+    private func redeemOrCreditScan(tier: ScanRewardTier, amountEur: Double, data: ScanResultSheetData) async -> Int? {
+        let slug = data.slug
+        let barcode = data.barcode
+        let before = data.memberPoints ?? 0
+        let ppe = max(1, data.pointsPerEuro)
+        var earned = 0
+        if amountEur > 0 {
+            if let minEur = data.pointsMinAmountEur, amountEur < minEur - 1e-9 {
+                await MainActor.run {
+                    scanError = "Montant sous le minimum défini pour ce commerce."
+                    appState.showError(scanError ?? "")
+                }
+                return nil
+            }
+            earned = Int(floor(amountEur * Double(ppe)))
+        }
+        let after = before + earned
+
+        func performRedeem() async throws -> RedeemResponse {
+            try await APIClient.shared.request(
+                .redeemReward(slug: slug, memberId: barcode, type: .points(pointsToDeduct: tier.points))
+            ) as RedeemResponse
+        }
+
+        do {
+            if before >= tier.points {
+                let response = try await performRedeem()
+                let newP = response.newPoints ?? max(0, before - tier.points)
+                await MainActor.run {
+                    successToast = Toast(
+                        symbol: "gift.fill",
+                        symbolFont: .system(size: 32, weight: .semibold),
+                        symbolForegroundStyle: (.white, Color(red: 1, green: 0.55, blue: 0.2)),
+                        title: "Récompense offerte",
+                        message: "\(data.memberName) — \(tier.label). Solde : \(newP) pts."
+                    )
+                    showToast = true
+                }
+                Task { await syncService.syncAfterServerMutation() }
+                return newP
+            }
+            if earned > 0, after >= tier.points {
+                let settings: BusinessSettingsResponse
+                if let c = ScanFlowSettingsCache.cached(for: slug) {
+                    settings = c
+                } else {
+                    settings = try await APIClient.shared.request(.businessSettings(slug: slug)) as BusinessSettingsResponse
+                    ScanFlowSettingsCache.store(settings, for: slug)
+                }
+                var receiptTok: String?
+                if (settings.requireReceiptQrValidation ?? 0) == 1, amountEur > 0 {
+                    guard let t = try await receiptCoordinator.requestValidatedToken(slug: slug, amountEur: amountEur) else {
+                        await MainActor.run {
+                            scanError = "Scan du ticket de caisse annulé."
+                            appState.showError(scanError ?? "")
+                        }
+                        return nil
+                    }
+                    receiptTok = t
+                }
+                let creditResponse: ScanResponse = try await APIClient.shared.request(
+                    .scan(
+                        slug: slug,
+                        barcode: barcode,
+                        visit: false,
+                        points: nil,
+                        amountEur: amountEur,
+                        receiptValidationToken: receiptTok
+                    )
                 )
-            }
-            .buttonStyle(.plain)
-            .scaleEffect(isAnimating ? 1 : 0.95)
-            .animation(.spring(response: 0.5, dampingFraction: 0.7), value: isAnimating)
-
-            NavigationLink(value: DashboardRoute.scansToday) {
-                StatCard(
-                    title: "Scans aujourd'hui",
-                    value: "\(stampsToday)",
-                    icon: "qrcode.viewfinder",
-                    color: AppTheme.Colors.accent
-                )
-            }
-            .buttonStyle(.plain)
-            .scaleEffect(isAnimating ? 1 : 0.95)
-            .animation(.spring(response: 0.5, dampingFraction: 0.7).delay(0.1), value: isAnimating)
-        }
-        .onAppear { isAnimating = true }
-        .navigationDestination(for: DashboardRoute.self) { route in
-            switch route {
-            case .members:
-                MembersListView(context: viewContext)
-                    .environmentObject(syncService)
-            case .scansToday:
-                ScansTodayView(context: viewContext)
-                    .environmentObject(syncService)
-            }
-        }
-    }
-
-}
-
-// MARK: - Sheet montant du panier (programme points)
-private struct ScanResultSheetData: Identifiable {
-    let id = UUID()
-    let slug: String
-    let memberName: String
-    let barcode: String
-    let pointsPerEuro: Int
-}
-
-private struct ScanAmountSheet: View {
-    let memberName: String
-    let barcode: String
-    let pointsPerEuro: Int
-    @Binding var isSubmitting: Bool
-    var onDismiss: () -> Void
-    var onSubmit: (Double) async -> Void
-
-    @State private var amountText = ""
-    @FocusState private var amountFocused: Bool
-
-    private var amountValue: Double? {
-        let s = amountText.replacingOccurrences(of: ",", with: ".").trimmingCharacters(in: .whitespaces)
-        return Double(s)
-    }
-
-    private var pointsFromAmount: Int {
-        guard let a = amountValue, a > 0 else { return 0 }
-        return Int(floor(a * Double(pointsPerEuro)))
-    }
-
-    var body: some View {
-        NavigationStack {
-            VStack(spacing: AppTheme.Spacing.xl) {
-                Text("Client reconnu")
-                    .font(AppTheme.Fonts.caption())
-                    .foregroundStyle(AppTheme.Colors.textSecondary)
-                Text(memberName)
-                    .font(AppTheme.Fonts.title3())
-                    .foregroundStyle(AppTheme.Colors.primary)
-
-                Text("Montant du panier")
-                    .font(AppTheme.Fonts.callout())
-                    .foregroundStyle(AppTheme.Colors.textSecondary)
-
-                Button {
-                    amountFocused = true
-                } label: {
-                    HStack(alignment: .firstTextBaseline, spacing: 4) {
-                        Text(amountText.isEmpty ? "0" : amountText)
-                            .font(.system(size: 56, weight: .bold, design: .rounded))
-                            .foregroundStyle(amountText.isEmpty ? AppTheme.Colors.textSecondary.opacity(0.5) : AppTheme.Colors.primary)
-                        Text("€")
-                            .font(.system(size: 32, weight: .semibold, design: .rounded))
-                            .foregroundStyle(AppTheme.Colors.textSecondary)
+                let credited = creditResponse.newBalance
+                    ?? creditResponse.member?.points
+                    ?? (before + (creditResponse.pointsAdded ?? earned))
+                guard credited >= tier.points else {
+                    await MainActor.run {
+                        scanError = "Solde encore insuffisant après crédit."
+                        appState.showError(scanError ?? "")
                     }
-                    .frame(maxWidth: .infinity)
-                    .contentShape(Rectangle())
+                    Task { await syncService.syncAfterServerMutation() }
+                    return nil
                 }
-                .buttonStyle(.plain)
-                .accessibilityHint("Appuyez pour saisir le montant")
-
-                TextField("Montant", text: $amountText)
-                    .keyboardType(.decimalPad)
-                    .textFieldStyle(.plain)
-                    .focused($amountFocused)
-                    .frame(width: 1, height: 1)
-                    .opacity(0.01)
-
-                if pointsFromAmount > 0 {
-                    Text("= \(pointsFromAmount) point\(pointsFromAmount > 1 ? "s" : "")")
-                        .font(AppTheme.Fonts.title3())
-                        .foregroundStyle(AppTheme.Colors.accent)
-                        .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                let redeemResponse = try await performRedeem()
+                let finalP = redeemResponse.newPoints ?? max(0, credited - tier.points)
+                await MainActor.run {
+                    successToast = Toast(
+                        symbol: "gift.fill",
+                        symbolFont: .system(size: 32, weight: .semibold),
+                        symbolForegroundStyle: (.white, Color(red: 1, green: 0.55, blue: 0.2)),
+                        title: "Panier crédité et récompense offerte",
+                        message: "\(data.memberName) — \(tier.label). Solde : \(finalP) pts."
+                    )
+                    showToast = true
                 }
-
-                Button {
-                    guard let amount = amountValue, amount > 0 else { return }
-                    Task {
-                        await onSubmit(amount)
-                    }
-                } label: {
-                    if isSubmitting {
-                        ProgressView()
-                            .tint(.white)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, AppTheme.Spacing.md)
-                    } else {
-                        Text("Enregistrer")
-                            .font(AppTheme.Fonts.headline())
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, AppTheme.Spacing.md)
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(AppTheme.Colors.primary)
-                .disabled(amountValue == nil || amountValue ?? 0 <= 0 || isSubmitting)
+                Task { await syncService.syncAfterServerMutation() }
+                return finalP
             }
-            .padding(AppTheme.Spacing.xl)
-            .animation(.easeOut(duration: 0.25), value: amountText)
-            .animation(.easeOut(duration: 0.25), value: pointsFromAmount)
-            .onAppear {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                    amountFocused = true
-                }
+            await MainActor.run {
+                scanError = "Créditez d’abord assez de points pour ce palier (\(tier.points) pts), ou augmentez le montant du panier."
+                appState.showError(scanError ?? "")
             }
-            .navigationTitle("Ajouter des points")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Annuler") { onDismiss() }
-                }
+            return nil
+        } catch {
+            await MainActor.run {
+                let msg = (error as? APIError)?.errorDescription ?? "Impossible d’appliquer la récompense."
+                scanError = msg
+                appState.showError(msg)
             }
+            return nil
         }
     }
 }
 
-private struct StatCard: View {
-    let title: String
-    let value: String
-    let icon: String
-    let color: Color
+// MARK: - Chips destinataires (clair / sombre)
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: AppTheme.Spacing.sm) {
-            Image(systemName: icon)
-                .font(.title2)
-                .foregroundStyle(color)
-            Text(value)
-                .font(AppTheme.Fonts.largeTitle())
-                .foregroundStyle(AppTheme.Colors.textPrimary)
-            Text(title)
-                .font(AppTheme.Fonts.caption())
-                .foregroundStyle(AppTheme.Colors.textSecondary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(AppTheme.Spacing.md)
-        .background(AppTheme.Colors.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: AppTheme.Radius.lg))
-        .shadow(color: AppTheme.Colors.shadow, radius: 6, x: 0, y: 2)
-    }
-}
-
-private struct RecipientChip: View {
+private struct RecipientCategoryChip: View {
     let title: String
     let isSelected: Bool
     let color: Color
+    let palette: DashboardRevolutPalette
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
             Text(title)
-                .font(AppTheme.Fonts.caption())
-                .fontWeight(isSelected ? .semibold : .regular)
-                .foregroundStyle(isSelected ? .white : AppTheme.Colors.textSecondary)
+                .font(.caption.weight(isSelected ? .semibold : .regular))
+                .foregroundStyle(isSelected ? palette.chipSelectedFG : palette.chipUnselectedFG)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
-                .background(isSelected ? color : Color.gray.opacity(0.15), in: Capsule())
+                .background(isSelected ? color : palette.chipUnselectedBG, in: Capsule())
         }
-        .buttonStyle(.plain)
-    }
-}
-
-private struct MemberRow: View {
-    let name: String
-    let points: Int
-
-    var body: some View {
-        HStack {
-            Image(systemName: "person.circle.fill")
-                .foregroundStyle(AppTheme.Colors.primary)
-            Text(name)
-                .font(AppTheme.Fonts.body())
-                .foregroundStyle(AppTheme.Colors.textPrimary)
-            Spacer()
-            Text("\(points) pt\(points > 1 ? "s" : "")")
-                .font(AppTheme.Fonts.caption())
-                .foregroundStyle(AppTheme.Colors.textSecondary)
-        }
-        .padding(AppTheme.Spacing.sm)
-        .background(AppTheme.Colors.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: AppTheme.Radius.sm))
-    }
-}
-
-private struct RecentStampRow: View {
-    let clientName: String
-    let date: Date
-
-    private var formattedDate: String {
-        let f = RelativeDateTimeFormatter()
-        f.unitsStyle = .abbreviated
-        f.locale = Locale(identifier: "fr_FR")
-        return f.localizedString(for: date, relativeTo: Date())
-    }
-
-    var body: some View {
-        HStack {
-            Image(systemName: "checkmark.circle.fill")
-                .foregroundStyle(AppTheme.Colors.success)
-            Text(clientName)
-                .font(AppTheme.Fonts.body())
-                .foregroundStyle(AppTheme.Colors.textPrimary)
-            Spacer()
-            Text(formattedDate)
-                .font(AppTheme.Fonts.caption())
-                .foregroundStyle(AppTheme.Colors.textSecondary)
-        }
-        .padding(AppTheme.Spacing.sm)
-        .background(AppTheme.Colors.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: AppTheme.Radius.sm))
+        .buttonStyle(.borderless)
     }
 }
 
 #Preview {
     DashboardView(context: PersistenceController.preview.container.viewContext)
-        .environmentObject(SyncService(context: PersistenceController.preview.container.viewContext))
+        .environmentObject(SyncService(container: PersistenceController.preview.container))
         .environmentObject(AppState.shared)
+        .environmentObject(MainTabRouter())
 }
