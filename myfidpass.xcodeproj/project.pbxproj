@@ -11,6 +11,9 @@
 		677770B62F51B695009FC324 /* MyFidpassHomeScanExtension.swift in Sources */ = {isa = PBXBuildFile; fileRef = 677770B22F51B695009FC324 /* MyFidpassHomeScanExtension.swift */; };
 		677770B72F51B695009FC324 /* HomeScannerLiveActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 677770B32F51B695009FC324 /* HomeScannerLiveActivity.swift */; };
 		677770B82F51B695009FC324 /* MyFidpassHomeScanExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 677770A22F51B695009FC324 /* MyFidpassHomeScanExtension.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		6B0001002F51B695009FC324 /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B0005002F51B695009FC324 /* NotificationService.swift */; };
+		6B0002002F51B695009FC324 /* MyfidpassNotificationServiceExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 6B0004002F51B695009FC324 /* MyfidpassNotificationServiceExtension.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		6B0011002F51B695009FC324 /* logonotif.png in Resources */ = {isa = PBXBuildFile; fileRef = 6B0010002F51B695009FC324 /* logonotif.png */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -21,15 +24,14 @@
 			remoteGlobalIDString = 677770A12F51B695009FC324;
 			remoteInfo = MyFidpassHomeScanExtension;
 		};
-/* End PBXContainerItemProxy section */
-
-/* Begin PBXTargetDependency section */
-		677770AE2F51B695009FC324 /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = 677770A12F51B695009FC324 /* MyFidpassHomeScanExtension */;
-			targetProxy = 677770AF2F51B695009FC324 /* PBXContainerItemProxy */;
+		6B0003002F51B695009FC324 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 676750B32F51B695009FC324 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 6B0008002F51B695009FC324;
+			remoteInfo = MyfidpassNotificationServiceExtension;
 		};
-/* End PBXTargetDependency section */
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
 		677770A42F51B695009FC324 /* Embed Foundation Extensions */ = {
@@ -39,6 +41,7 @@
 			dstSubfolderSpec = 13;
 			files = (
 				677770B82F51B695009FC324 /* MyFidpassHomeScanExtension.appex in Embed Foundation Extensions */,
+				6B0002002F51B695009FC324 /* MyfidpassNotificationServiceExtension.appex in Embed Foundation Extensions */,
 			);
 			name = "Embed Foundation Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -52,6 +55,9 @@
 		677770B22F51B695009FC324 /* MyFidpassHomeScanExtension.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyFidpassHomeScanExtension.swift; sourceTree = "<group>"; };
 		677770B32F51B695009FC324 /* HomeScannerLiveActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeScannerLiveActivity.swift; sourceTree = "<group>"; };
 		677770B42F51B695009FC324 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		6B0004002F51B695009FC324 /* MyfidpassNotificationServiceExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = MyfidpassNotificationServiceExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		6B0005002F51B695009FC324 /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
+		6B0006002F51B695009FC324 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -62,12 +68,37 @@
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
+/* Begin PBXFrameworksBuildPhase section */
+		676750B82F51B695009FC324 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		677770A82F51B695009FC324 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		6B000A002F51B695009FC324 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
 /* Begin PBXGroup section */
 		676750B22F51B695009FC324 = {
 			isa = PBXGroup;
 			children = (
 				676750BD2F51B695009FC324 /* myfidpass */,
 				677770A32F51B695009FC324 /* MyFidpassHomeScanExtension */,
+				6B0007002F51B695009FC324 /* MyfidpassNotificationServiceExtension */,
 				676750BC2F51B695009FC324 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -77,6 +108,7 @@
 			children = (
 				676750BB2F51B695009FC324 /* myfidpass.app */,
 				677770A22F51B695009FC324 /* MyFidpassHomeScanExtension.appex */,
+				6B0004002F51B695009FC324 /* MyfidpassNotificationServiceExtension.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -90,6 +122,17 @@
 				677770B42F51B695009FC324 /* Info.plist */,
 			);
 			path = MyFidpassHomeScanExtension;
+			sourceTree = "<group>";
+		};
+		6B0010002F51B695009FC324 /* logonotif.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = logonotif.png; sourceTree = "<group>"; };
+		6B0007002F51B695009FC324 /* MyfidpassNotificationServiceExtension */ = {
+			isa = PBXGroup;
+			children = (
+				6B0005002F51B695009FC324 /* NotificationService.swift */,
+				6B0006002F51B695009FC324 /* Info.plist */,
+				6B0010002F51B695009FC324 /* logonotif.png */,
+			);
+			path = MyfidpassNotificationServiceExtension;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -108,6 +151,7 @@
 			);
 			dependencies = (
 				677770AE2F51B695009FC324 /* PBXTargetDependency */,
+				6B000C002F51B695009FC324 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				676750BD2F51B695009FC324 /* myfidpass */,
@@ -138,6 +182,25 @@
 			productReference = 677770A22F51B695009FC324 /* MyFidpassHomeScanExtension.appex */;
 			productType = "com.apple.product-type.app-extension";
 		};
+		6B0008002F51B695009FC324 /* MyfidpassNotificationServiceExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 6B000F002F51B695009FC324 /* Build configuration list for PBXNativeTarget "MyfidpassNotificationServiceExtension" */;
+			buildPhases = (
+				6B0009002F51B695009FC324 /* Sources */,
+				6B000A002F51B695009FC324 /* Frameworks */,
+				6B000B002F51B695009FC324 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = MyfidpassNotificationServiceExtension;
+			packageProductDependencies = (
+			);
+			productName = MyfidpassNotificationServiceExtension;
+			productReference = 6B0004002F51B695009FC324 /* MyfidpassNotificationServiceExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -146,12 +209,15 @@
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
 				LastSwiftUpdateCheck = 2630;
-				LastUpgradeCheck = 2630;
+				LastUpgradeCheck = 2640;
 				TargetAttributes = {
 					676750BA2F51B695009FC324 = {
 						CreatedOnToolsVersion = 26.3;
 					};
 					677770A12F51B695009FC324 = {
+						CreatedOnToolsVersion = 26.3;
+					};
+					6B0008002F51B695009FC324 = {
 						CreatedOnToolsVersion = 26.3;
 					};
 				};
@@ -172,26 +238,10 @@
 			targets = (
 				676750BA2F51B695009FC324 /* myfidpass */,
 				677770A12F51B695009FC324 /* MyFidpassHomeScanExtension */,
+				6B0008002F51B695009FC324 /* MyfidpassNotificationServiceExtension */,
 			);
 		};
 /* End PBXProject section */
-
-/* Begin PBXFrameworksBuildPhase section */
-		676750B82F51B695009FC324 /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		677770A82F51B695009FC324 /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-/* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXResourcesBuildPhase section */
 		676750B92F51B695009FC324 /* Resources */ = {
@@ -205,6 +255,14 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		6B000B002F51B695009FC324 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				6B0011002F51B695009FC324 /* logonotif.png in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -228,7 +286,28 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		6B0009002F51B695009FC324 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				6B0001002F51B695009FC324 /* NotificationService.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		677770AE2F51B695009FC324 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 677770A12F51B695009FC324 /* MyFidpassHomeScanExtension */;
+			targetProxy = 677770AF2F51B695009FC324 /* PBXContainerItemProxy */;
+		};
+		6B000C002F51B695009FC324 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 6B0008002F51B695009FC324 /* MyfidpassNotificationServiceExtension */;
+			targetProxy = 6B0003002F51B695009FC324 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		676750C92F51B696009FC324 /* Debug */ = {
@@ -354,16 +433,16 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = "myfidpass/myfidpass-Debug.entitlements";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = F2CJGJ69XU;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = MyFidpass;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
-				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
-				INFOPLIST_KEY_NSCameraUsageDescription = "MyFidpass active la caméra uniquement dans l’onglet Scanner pour lire le QR code affiché sur la carte fidélité Apple Wallet du client et enregistrer son passage ou ses points. Aucun enregistrement vidéo n’est envoyé hors de cet usage.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "MyFidpass utilise la caméra pour scanner les QR codes (passage, points) et pour prendre en photo un logo ou une image de carte à personnaliser votre fidélité. Aucune vidéo n’est enregistrée en dehors de ces usages.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "MyFidpass accède à vos photos uniquement lorsque vous choisissez une image (logo de l’établissement, visuel de carte ou icône de tampon) depuis votre bibliothèque pour personnaliser la carte fidélité et l’aperçu du pass.";
+				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
@@ -374,9 +453,9 @@
 				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphonesimulator*]" = UIStatusBarStyleDefault;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.0.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.myfidpass;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -398,16 +477,16 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = myfidpass/myfidpass.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = F2CJGJ69XU;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = MyFidpass;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
-				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
-				INFOPLIST_KEY_NSCameraUsageDescription = "MyFidpass active la caméra uniquement dans l’onglet Scanner pour lire le QR code affiché sur la carte fidélité Apple Wallet du client et enregistrer son passage ou ses points. Aucun enregistrement vidéo n’est envoyé hors de cet usage.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "MyFidpass utilise la caméra pour scanner les QR codes (passage, points) et pour prendre en photo un logo ou une image de carte à personnaliser votre fidélité. Aucune vidéo n’est enregistrée en dehors de ces usages.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "MyFidpass accède à vos photos uniquement lorsque vous choisissez une image (logo de l’établissement, visuel de carte ou icône de tampon) depuis votre bibliothèque pour personnaliser la carte fidélité et l’aperçu du pass.";
+				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
@@ -418,9 +497,9 @@
 				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphonesimulator*]" = UIStatusBarStyleDefault;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.0.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.myfidpass;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -440,20 +519,20 @@
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = F2CJGJ69XU;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = MyFidpassHomeScanExtension/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Scanner accueil";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.0.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.myfidpass.MyFidpassHomeScanExtension;
 				PRODUCT_BUNDLE_PACKAGE_TYPE = "XPC!";
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -474,20 +553,20 @@
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = F2CJGJ69XU;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = MyFidpassHomeScanExtension/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Scanner accueil";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.0.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.myfidpass.MyFidpassHomeScanExtension;
 				PRODUCT_BUNDLE_PACKAGE_TYPE = "XPC!";
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -498,6 +577,60 @@
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		6B000D002F51B695009FC324 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 2;
+				DEVELOPMENT_TEAM = F2CJGJ69XU;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = MyfidpassNotificationServiceExtension/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.myfidpass.MyfidpassNotificationServiceExtension;
+				PRODUCT_BUNDLE_PACKAGE_TYPE = "XPC!";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		6B000E002F51B695009FC324 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 2;
+				DEVELOPMENT_TEAM = F2CJGJ69XU;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = MyfidpassNotificationServiceExtension/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.myfidpass.MyfidpassNotificationServiceExtension;
+				PRODUCT_BUNDLE_PACKAGE_TYPE = "XPC!";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -529,6 +662,15 @@
 			buildConfigurations = (
 				677770C12F51B695009FC324 /* Debug */,
 				677770C22F51B695009FC324 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		6B000F002F51B695009FC324 /* Build configuration list for PBXNativeTarget "MyfidpassNotificationServiceExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				6B000D002F51B695009FC324 /* Debug */,
+				6B000E002F51B695009FC324 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
