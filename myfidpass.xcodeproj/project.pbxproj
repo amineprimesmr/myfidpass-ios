@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		6747383E2F94DF7300A490E0 /* RevenueCat in Frameworks */ = {isa = PBXBuildFile; productRef = 76FCB1AE2F51B695009FC002 /* RevenueCat */; };
+		6747383F2F94DF7300A490E0 /* RevenueCatUI in Frameworks */ = {isa = PBXBuildFile; productRef = 76FCB1AF2F51B695009FC003 /* RevenueCatUI */; };
 		677770B52F51B695009FC324 /* HomeScannerActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 677770AD2F51B695009FC324 /* HomeScannerActivityAttributes.swift */; };
 		677770B62F51B695009FC324 /* MyFidpassHomeScanExtension.swift in Sources */ = {isa = PBXBuildFile; fileRef = 677770B22F51B695009FC324 /* MyFidpassHomeScanExtension.swift */; };
 		677770B72F51B695009FC324 /* HomeScannerLiveActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 677770B32F51B695009FC324 /* HomeScannerLiveActivity.swift */; };
@@ -58,6 +60,7 @@
 		6B0004002F51B695009FC324 /* MyfidpassNotificationServiceExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = MyfidpassNotificationServiceExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		6B0005002F51B695009FC324 /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
 		6B0006002F51B695009FC324 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		6B0010002F51B695009FC324 /* logonotif.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = logonotif.png; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -73,6 +76,8 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				6747383F2F94DF7300A490E0 /* RevenueCatUI in Frameworks */,
+				6747383E2F94DF7300A490E0 /* RevenueCat in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -124,7 +129,6 @@
 			path = MyFidpassHomeScanExtension;
 			sourceTree = "<group>";
 		};
-		6B0010002F51B695009FC324 /* logonotif.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = logonotif.png; sourceTree = "<group>"; };
 		6B0007002F51B695009FC324 /* MyfidpassNotificationServiceExtension */ = {
 			isa = PBXGroup;
 			children = (
@@ -158,6 +162,8 @@
 			);
 			name = myfidpass;
 			packageProductDependencies = (
+				76FCB1AE2F51B695009FC002 /* RevenueCat */,
+				76FCB1AF2F51B695009FC003 /* RevenueCatUI */,
 			);
 			productName = myfidpass;
 			productReference = 676750BB2F51B695009FC324 /* myfidpass.app */;
@@ -231,6 +237,9 @@
 			);
 			mainGroup = 676750B22F51B695009FC324;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				76FCB1AD2F51B695009FC001 /* XCRemoteSwiftPackageReference "purchases-ios-spm" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 676750BC2F51B695009FC324 /* Products */;
 			projectDirPath = "";
@@ -433,7 +442,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = "myfidpass/myfidpass-Debug.entitlements";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = F2CJGJ69XU;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -455,7 +464,7 @@
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
-				MARKETING_VERSION = 1.0.1;
+				MARKETING_VERSION = 1.0.3;
 				PRODUCT_BUNDLE_IDENTIFIER = com.myfidpass;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -477,7 +486,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = myfidpass/myfidpass.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = F2CJGJ69XU;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -499,7 +508,7 @@
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
-				MARKETING_VERSION = 1.0.1;
+				MARKETING_VERSION = 1.0.3;
 				PRODUCT_BUNDLE_IDENTIFIER = com.myfidpass;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -519,7 +528,7 @@
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = F2CJGJ69XU;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = MyFidpassHomeScanExtension/Info.plist;
@@ -532,7 +541,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.0.1;
+				MARKETING_VERSION = 1.0.3;
 				PRODUCT_BUNDLE_IDENTIFIER = com.myfidpass.MyFidpassHomeScanExtension;
 				PRODUCT_BUNDLE_PACKAGE_TYPE = "XPC!";
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -553,7 +562,7 @@
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = F2CJGJ69XU;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = MyFidpassHomeScanExtension/Info.plist;
@@ -566,7 +575,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.0.1;
+				MARKETING_VERSION = 1.0.3;
 				PRODUCT_BUNDLE_IDENTIFIER = com.myfidpass.MyFidpassHomeScanExtension;
 				PRODUCT_BUNDLE_PACKAGE_TYPE = "XPC!";
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -586,7 +595,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = F2CJGJ69XU;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = MyfidpassNotificationServiceExtension/Info.plist;
@@ -596,7 +605,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.0.1;
+				MARKETING_VERSION = 1.0.3;
 				PRODUCT_BUNDLE_IDENTIFIER = com.myfidpass.MyfidpassNotificationServiceExtension;
 				PRODUCT_BUNDLE_PACKAGE_TYPE = "XPC!";
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -613,7 +622,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = F2CJGJ69XU;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = MyfidpassNotificationServiceExtension/Info.plist;
@@ -623,7 +632,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.0.1;
+				MARKETING_VERSION = 1.0.3;
 				PRODUCT_BUNDLE_IDENTIFIER = com.myfidpass.MyfidpassNotificationServiceExtension;
 				PRODUCT_BUNDLE_PACKAGE_TYPE = "XPC!";
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -676,6 +685,30 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		76FCB1AD2F51B695009FC001 /* XCRemoteSwiftPackageReference "purchases-ios-spm" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/RevenueCat/purchases-ios-spm.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 5.0.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		76FCB1AE2F51B695009FC002 /* RevenueCat */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 76FCB1AD2F51B695009FC001 /* XCRemoteSwiftPackageReference "purchases-ios-spm" */;
+			productName = RevenueCat;
+		};
+		76FCB1AF2F51B695009FC003 /* RevenueCatUI */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 76FCB1AD2F51B695009FC001 /* XCRemoteSwiftPackageReference "purchases-ios-spm" */;
+			productName = RevenueCatUI;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 676750B32F51B695009FC324 /* Project object */;
 }

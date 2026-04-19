@@ -12,29 +12,40 @@ import CoreData
 struct myfidpassApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     let persistenceController = PersistenceController.shared
-    @StateObject private var authService = AuthService()
-    @StateObject private var syncService: SyncService = SyncService(context: PersistenceController.shared.container.viewContext)
+    @StateObject private var authService: AuthService
+    @StateObject private var syncService: SyncService
+    @StateObject private var revenueCatSubscriptionState: RevenueCatSubscriptionState
     @StateObject private var appState = AppState.shared
 
-    @State private var showFirstLaunchOnboarding = !FirstLaunchOnboarding.hasCompleted
+    init() {
+        RevenueCatBootstrap.configureIfNeeded()
+
+        let auth = AuthService()
+        _authService = StateObject(wrappedValue: auth)
+        _syncService = StateObject(
+            wrappedValue: SyncService(container: PersistenceController.shared.container, authService: auth)
+        )
+        _revenueCatSubscriptionState = StateObject(wrappedValue: RevenueCatSubscriptionState())
+    }
 
     var body: some Scene {
         WindowGroup {
-            Group {
-                if showFirstLaunchOnboarding {
-                    FirstLaunchOnboardingView {
-                        showFirstLaunchOnboarding = false
-                    }
-                } else {
-                    RootView()
-                        .overlay(alignment: .top) { errorBanner }
-                }
-            }
+            RootView()
+                .overlay(alignment: .top) { errorBanner }
             .environmentObject(authService)
             .environmentObject(syncService)
+            .environmentObject(revenueCatSubscriptionState)
             .environmentObject(appState)
             .environment(\.managedObjectContext, persistenceController.container.viewContext)
             .preferredColorScheme(.light)
+            .task(id: authService.currentScreen) {
+                switch authService.currentScreen {
+                case .welcome:
+                    await revenueCatSubscriptionState.logOutRevenueCat()
+                case .authenticated:
+                    await revenueCatSubscriptionState.syncWithAppAccount()
+                }
+            }
         }
     }
 

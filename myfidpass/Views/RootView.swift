@@ -8,19 +8,27 @@
 import SwiftUI
 import CoreData
 
-/// Établissement sélectionné → auth buttons. Sinon → recherche établissement.
-/// Réactif : se remet à zéro dès que `placeId` est effacé (logout, suppression compte).
+/// Accueil : renseigner l'établissement si la phase `merchantPremises` n'est pas terminée
+/// (premier lancement explicite ou après suppression de compte), sinon écran connexion / inscription.
 private struct WelcomeFlow: View {
-    @State private var ready = FirstLaunchOnboarding.readPendingEstablishment().placeId != nil
+    @EnvironmentObject private var authService: AuthService
+
+    /// Snapshot au montage (et à chaque incrément de `firstLaunchOnboardingRestartEpoch` via `.id`).
+    @State private var needsMerchantPremises: Bool = !FirstLaunchOnboarding.hasCompleted
 
     var body: some View {
-        if ready {
-            OnboardingChoiceView()
-        } else {
-            MyfidpassMerchantOnboardingRootView {
-                ready = true
+        Group {
+            if needsMerchantPremises {
+                FirstLaunchOnboardingView(onComplete: {
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        needsMerchantPremises = false
+                    }
+                })
+            } else {
+                OnboardingChoiceView()
             }
         }
+        .id("welcome-flow-\(authService.firstLaunchOnboardingRestartEpoch)")
     }
 }
 
@@ -49,8 +57,14 @@ struct RootView: View {
                             await authService.refreshBusinessesIfNeeded()
                         }
                     } else {
-                        ContentView()
-                            .environment(\.managedObjectContext, viewContext)
+                        Group {
+                            if authService.isPlatformAdmin && !authService.adminShowsMerchantWorkspace {
+                                PlatformAdminRootView()
+                            } else {
+                                ContentView()
+                            }
+                        }
+                        .environment(\.managedObjectContext, viewContext)
                     }
                 }
             }
@@ -64,8 +78,10 @@ struct RootView: View {
 }
 
 #Preview {
+    RevenueCatBootstrap.configureIfNeeded()
     RootView()
         .environmentObject(AuthService())
         .environmentObject(SyncService(container: PersistenceController.preview.container))
+        .environmentObject(RevenueCatSubscriptionState())
         .environment(\.managedObjectContext, PersistenceController.preview.container.viewContext)
 }
