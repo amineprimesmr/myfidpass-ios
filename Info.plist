@@ -2,6 +2,16 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>remote-notification</string>
+	</array>
+	<key>UIUserInterfaceStyle</key>
+	<string>Light</string>
+	<key>RevenueCatPublicAPIKey</key>
+	<string>appl_RFGGBrpEtFSSMMqeNCuTHAaliRU</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>MyFidpass utilise votre position lorsque vous appuyez sur « Utiliser ma position » sur la carte du périmètre : pour placer votre commerce et définir le rayon des notifications de proximité affichées sur la carte Wallet de vos clients. La position n’est pas collectée en arrière-plan pour d’autres usages.</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>

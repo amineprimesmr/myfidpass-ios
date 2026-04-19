@@ -100,7 +100,7 @@ struct ToastView: View {
             let scaleY: CGFloat = isExpanded ? 1 : (dynamicIslandHeight / expandedHeight)
 
             ZStack {
-                ConcentricRectangle(corners: .concentric(minimum: .fixed(30)), isUniform: true)
+                MFConcentricShapeFallback(minimumCorner: 30)
                     .fill(.black)
                     .overlay {
                         ToastContent(haveDynamicIsland)

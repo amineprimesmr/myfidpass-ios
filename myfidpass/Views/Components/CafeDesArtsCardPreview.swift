@@ -48,45 +48,108 @@ struct CafeDesArtsCardPreview: View {
     var cardBackgroundRemoteURL: String? = nil
     var labelColorHex: String? = nil
     var headerRightText: String? = nil
-    var rewardPreviewText: String? = nil
     var memberPreviewText: String? = nil
-    var rewardColumnTitle: String = "RÉCOMPENSE"
     var memberColumnTitle: String = "MEMBRE"
-    /// Libellé « Restants » (face avant pass tampons), ex. pour la ligne `Restants = N` avec image de fond.
+    /// Libellés récompenses (SaaS / Ma carte) — valeur affichée sous « Dans x passages ».
+    var stampMidRewardLabel: String = ""
+    var stampRewardLabel: String = ""
+    /// Libellé colonne gauche (face avant pass tampons avec image) — affiché en capitales comme « MEMBRE » ; valeur = tampons obtenus.
     var restantsCaption: String = "Restants"
     var compact: Bool = false
     var onEditZoneTap: ((CardPreviewEditZone) -> Void)? = nil
     /// URL encodée dans le QR (page carte fidélité). Si `nil`, QR de démonstration.
     var fidelityQRPayloadURL: String? = nil
+    /// Pastilles « Configurer » (complétion Ma carte).
+    var completionHighlightZones: Set<CardPreviewEditZone> = []
 
     private var primaryColor: Color { Color(hex: primaryColorHex) }
-    private var accentColor: Color { Color(hex: accentColorHex) }
-    private var labelColor: Color? { labelColorHex.flatMap { Color(hex: $0) } }
     private var bandeauColor: Color { stripColorHex.flatMap { Color(hex: $0) } ?? primaryColor }
+
+    /// PassKit `foregroundColor` — identique au .pkpass.
+    private var passForegroundExact: Color { Color(hex: accentColorHex) }
+    /// PassKit `labelColor`.
+    private var passLabelExact: Color {
+        let t = labelColorHex?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !t.isEmpty { return Color(hex: t) }
+        return primaryColor.isDark ? Color.white.opacity(0.78) : Color.black.opacity(0.78)
+    }
 
     private var headerBarColor: Color {
         hasCardBackground ? primaryColor : bandeauColor
     }
 
-    private var hasCardBackground: Bool {
-        let local = cardBackgroundImagePath.map { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? false
-        let rem = cardBackgroundRemoteURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return local || (!rem.isEmpty && URL(string: rem).map { Self.isAPICardBackgroundURL($0) } ?? false)
-    }
+    /// L’image de fond carte est réservée au mode **points** ; l’aperçu tampons n’affiche jamais ce bandeau photo.
+    private var hasCardBackground: Bool { false }
 
     private var headerRightDisplay: String {
         let t = headerRightText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return t.isEmpty ? "Récompenses ↗" : t
     }
 
-    private var rewardDisplay: String {
-        let t = rewardPreviewText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return t.isEmpty ? "Paliers en magasin" : t
-    }
-
     private var memberDisplay: String {
         let t = memberPreviewText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return t.isEmpty ? "Prévisualisation" : t
+    }
+
+    /// Colonne gauche (avec image de fond) : libellé type PassKit + **tampons obtenus** (comme « TAMPONS » / « 0 » sur le pass), pas une seule ligne « Restants = n ».
+    private var stampsMetricColumnLabel: String {
+        let t = restantsCaption.trimmingCharacters(in: .whitespacesAndNewlines)
+        let base: String
+        if t.isEmpty {
+            base = "Tampons"
+        } else if t.compare("Restants", options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame {
+            // Défaut API / feuille Ma carte : « Restants » décrivait l’ancien libellé une ligne ; la colonne affiche le compte obtenu → libellé « Tampons ».
+            base = "Tampons"
+        } else {
+            base = t
+        }
+        return base.uppercased(with: Locale(identifier: "fr_FR"))
+    }
+
+    private var stampsMetricColumnValue: String {
+        let total = max(0, Int(requiredStamps))
+        let filled = min(max(0, Int(stampsCount)), total)
+        return "\(filled)"
+    }
+
+    /// Libellé type PassKit (petites capitales) : « DANS X PASSAGES » — aligné sur le pass Wallet généré côté serveur.
+    private var nextRewardDansPassagesLabel: String {
+        let total = max(1, Int(requiredStamps))
+        let filled = min(max(0, Int(stampsCount)), total)
+        if filled >= total {
+            return "OBJECTIF ATTEINT"
+        }
+        if total <= 5 {
+            return Self.upperDansPassages(need: total - filled)
+        }
+        if filled < 5 {
+            return Self.upperDansPassages(need: 5 - filled)
+        }
+        return Self.upperDansPassages(need: total - filled)
+    }
+
+    /// Seule la récompense marchand (ex. « -50 % »), comme sur le Wallet.
+    private var nextRewardMerchantValueOnly: String {
+        let mid = stampMidRewardLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fin = stampRewardLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+        let total = max(1, Int(requiredStamps))
+        let filled = min(max(0, Int(stampsCount)), total)
+        if filled >= total {
+            return fin.isEmpty ? "—" : fin
+        }
+        if total <= 5 {
+            return fin.isEmpty ? "Récompense" : fin
+        }
+        if filled < 5 {
+            return mid.isEmpty ? "Récompense au 5ᵉ passage" : mid
+        }
+        return fin.isEmpty ? "Récompense à la carte complète" : fin
+    }
+
+    private static func upperDansPassages(need: Int) -> String {
+        if need <= 0 { return "OBJECTIF ATTEINT" }
+        if need == 1 { return "DANS 1 PASSAGE" }
+        return "DANS \(need) PASSAGES"
     }
 
     var body: some View {
@@ -98,6 +161,18 @@ struct CafeDesArtsCardPreview: View {
             cardContent(cardWidth: w)
                 .frame(width: w, height: h)
                 .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
+                .overlay {
+                    if !completionHighlightZones.isEmpty, let onTap = onEditZoneTap {
+                        CardPreviewCompletionPillsOverlay(
+                            cardWidth: w,
+                            totalHeight: h,
+                            compact: compact,
+                            zones: completionHighlightZones,
+                            layoutStyle: .stampsBannerMetrics,
+                            onTapZone: onTap
+                        )
+                    }
+                }
                 .overlay(
                     RoundedRectangle(cornerRadius: corner, style: .continuous)
                         .strokeBorder(.white.opacity(0.35), lineWidth: 1)
@@ -109,59 +184,68 @@ struct CafeDesArtsCardPreview: View {
         .animation(.easeOut(duration: 0.25), value: primaryColorHex)
         .animation(.easeOut(duration: 0.2), value: stampsCount)
         .animation(.easeOut(duration: 0.2), value: requiredStamps)
+        .animation(.easeOut(duration: 0.2), value: stampMidRewardLabel)
+        .animation(.easeOut(duration: 0.2), value: stampRewardLabel)
         .animation(.easeOut(duration: 0.2), value: logoURL)
         .animation(.easeOut(duration: 0.2), value: stampEmoji)
         .animation(.easeOut(duration: 0.25), value: cardBackgroundRemoteURL)
+        .animation(.easeOut(duration: 0.2), value: completionHighlightZones.count)
     }
 
     private func cardContent(cardWidth: CGFloat) -> some View {
         VStack(spacing: 0) {
+            // zIndex : bandeau image au-dessus du corps si le layout chevauche (évite tampons / texte « par-dessus » la photo).
             headerSection(cardWidth: cardWidth)
-                .zIndex(1)
+                .zIndex(2)
             cardBackgroundBannerSection(cardWidth: cardWidth)
-                .zIndex(0)
+                .zIndex(1)
             stampsBodySection(cardWidth: cardWidth)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .zIndex(0)
-            qrSection()
+            qrSection(cardWidth: cardWidth)
                 .zIndex(0)
         }
     }
 
+    private func cafeBannerHeight(cardWidth: CGFloat) -> CGFloat {
+        max(1, cardWidth / walletCardBackgroundBannerAspect)
+    }
+
     private func headerSection(cardWidth: CGFloat) -> some View {
         let logoSlot = walletLogoSlotSize(cardWidth: cardWidth, compact: compact)
-        let headerTopInset: CGFloat = compact ? 6 : 11
+        let scale = AppTheme.CardPreviewLayout.widthScale(cardWidth: cardWidth)
+        let headerTopInset: CGFloat = compact ? 7 : 12
         let headerBottomInset: CGFloat = compact ? 6 : 8
-        let headerH: CGFloat = compact ? 64 : 92
+        let headerH: CGFloat = compact ? 70 : 100
         return ZStack(alignment: .topLeading) {
             headerBarColor
             VStack(spacing: 0) {
                 Color.clear
                     .frame(height: headerTopInset)
-                HStack(alignment: .center, spacing: 0) {
+                HStack(alignment: .top, spacing: 0) {
                     CardPreviewTappableZone(
                         zone: .logoBand,
                         accessibilityLabel: "Modifier le logo ou le texte du bandeau",
                         onEditZoneTap: onEditZoneTap
                     ) {
-                        logoInStrip(maxWidth: logoSlot.maxWidth, maxHeight: logoSlot.maxHeight)
+                        logoInStrip(maxWidth: logoSlot.maxWidth, maxHeight: logoSlot.maxHeight, cardWidth: cardWidth)
                             .frame(maxWidth: logoSlot.maxWidth, maxHeight: logoSlot.maxHeight, alignment: .topLeading)
                             .clipped()
                     }
                     Spacer(minLength: compact ? 4 : 8)
                     CardPreviewTappableZone(
                         zone: .headerRight,
-                        accessibilityLabel: "Modifier le texte en haut à droite",
+                        accessibilityLabel: "Modifier les récompenses",
                         onEditZoneTap: onEditZoneTap
                     ) {
                         Text(headerRightDisplay)
-                            .font(.system(size: compact ? 11 : 16, weight: .semibold))
-                            .foregroundStyle(labelColor ?? .white.opacity(0.95))
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.7)
+                            .font(.system(size: AppTheme.CardPreviewLayout.scaledFont(base: compact ? 10 : 13, cardWidth: cardWidth), weight: .semibold))
+                            .foregroundStyle(passForegroundExact)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.trailing)
+                            .minimumScaleFactor(0.62 * scale)
                     }
                 }
-                .offset(y: compact ? -2 : -4)
                 .frame(maxWidth: .infinity)
                 .padding(.leading, compact ? 12 : 16)
                 .padding(.trailing, compact ? 10 : 12)
@@ -174,25 +258,23 @@ struct CafeDesArtsCardPreview: View {
         .clipped()
     }
 
+    /// Avec image : bandeau photo ; sans image (mode tampons) : **grille de tampons** dans la zone 750×246 — pas l’aperçu photo « banner » du mode points.
     @ViewBuilder
     private func cardBackgroundBannerSection(cardWidth: CGFloat) -> some View {
+        let bannerHeight = cafeBannerHeight(cardWidth: cardWidth)
         if hasCardBackground {
-            let bannerHeight = max(1, cardWidth / walletCardBackgroundBannerAspect)
             let banner = Color.clear
                 .frame(maxWidth: .infinity)
                 .frame(height: bannerHeight)
                 .overlay {
                     Group {
-                        if let path = cardBackgroundImagePath, !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                           let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
-                           let uiImage = UIImage(data: data) {
-                            Image(uiImage: uiImage)
-                                .resizable()
-                                .scaledToFill()
+                        if let path = cardBackgroundImagePath, !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            AsyncLocalFileImage(filePath: path, contentMode: .fill)
+                                .id(path)
                         } else if let remote = cardBackgroundRemoteURL?.trimmingCharacters(in: .whitespacesAndNewlines), !remote.isEmpty,
-                                  let url = URL(string: remote), Self.isAPICardBackgroundURL(url) {
+                                  let url = APIResourceURL.resolved(from: remote), Self.isAPICardBackgroundURL(url) {
                             AuthenticatedLogoView(url: url, stripBackgroundFill: true)
-                                .id(remote)
+                                .id(url.absoluteString)
                         } else {
                             bandeauColor
                         }
@@ -207,47 +289,146 @@ struct CafeDesArtsCardPreview: View {
             ) {
                 banner
             }
+        } else {
+            cardBackgroundBannerStampsOnly(cardWidth: cardWidth, bannerHeight: bannerHeight)
         }
     }
 
+    /// Sans image de fond : grille de tampons dans le bandeau (comme le pass Wallet tampons — pas la photo « banner » du mode points).
+    private func cardBackgroundBannerStampsOnly(cardWidth: CGFloat, bannerHeight: CGFloat) -> some View {
+        let insetH: CGFloat = compact ? 12 : 16
+        return ZStack {
+            primaryColor
+            CardPreviewTappableZone(
+                zone: .mainMetrics,
+                accessibilityLabel: "Système de carte",
+                onEditZoneTap: onEditZoneTap
+            ) {
+                stampGridBannerFitted(cardWidth: cardWidth, bannerHeight: bannerHeight, horizontalInset: insetH)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: bannerHeight)
+    }
+
+    /// Tampons calés dans la hauteur du bandeau (750×246), sans déborder.
+    private func stampGridBannerFitted(cardWidth: CGFloat, bannerHeight: CGFloat, horizontalInset: CGFloat) -> some View {
+        let total = Int(requiredStamps)
+        let filled = min(max(0, Int(stampsCount)), total)
+        let cols = 5
+        let rows = max(1, (total + cols - 1) / cols)
+        /// Marges un peu resserrées pour laisser plus de place aux pictos (rendu plus proche du pass Wallet).
+        let verticalPad: CGFloat = compact ? 8 : 12
+        let gap: CGFloat = compact ? 4 : 5
+        let innerW = max(1, cardWidth - horizontalInset * 2)
+        let innerH = max(1, bannerHeight - verticalPad * 2)
+        let cellW = (innerW - CGFloat(max(0, cols - 1)) * gap) / CGFloat(cols)
+        let cellH = (innerH - CGFloat(max(0, rows - 1)) * gap) / CGFloat(rows)
+        /// Plafond relevé : les tampons paraissaient petits vs la grille réelle.
+        let cellSize = max(10, min(cellW, cellH, compact ? 48 : 58))
+
+        return VStack(spacing: gap) {
+            ForEach(0..<rows, id: \.self) { row in
+                HStack(spacing: gap) {
+                    ForEach(0..<cols, id: \.self) { col in
+                        let index = row * cols + col
+                        Group {
+                            if index < total {
+                                stampIconCell(
+                                    index: index,
+                                    total: total,
+                                    filledStampCount: filled,
+                                    size: cellSize,
+                                    tint: passForegroundExact
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.horizontal, horizontalInset)
+        .padding(.vertical, verticalPad)
+    }
+
+    private func rewardIconKey(for index: Int, total: Int) -> String? {
+        if total >= 10 && index == 9 { return "giftgold" }
+        if total >= 5 && index == 4 { return "giftsilver" }
+        return nil
+    }
+
+    /// Prochain palier cadeau : argent avant le 5e tampon, or entre le 5e et le 10e — affiché en couleur même vide.
+    private func isNextGiftTeaser(index: Int, total: Int, filledStampCount: Int) -> Bool {
+        if total >= 5 && index == 4 && filledStampCount < 5 { return true }
+        if total >= 10 && index == 9 && filledStampCount >= 5 && filledStampCount < 10 { return true }
+        return false
+    }
+
     @ViewBuilder
-    private func logoInStrip(maxWidth: CGFloat, maxHeight: CGFloat) -> some View {
+    private func stampIconCell(index: Int, total: Int, filledStampCount: Int, size: CGFloat, tint: Color) -> some View {
+        let slotFilled = index < filledStampCount
+        let rewardKey = rewardIconKey(for: index, total: total)
+        let giftInColor = slotFilled || isNextGiftTeaser(index: index, total: total, filledStampCount: filledStampCount)
+        if let rewardKey {
+            StampIconView(stampEmoji: rewardKey, size: size, tint: tint)
+                .frame(width: size, height: size)
+                .grayscale(giftInColor ? 0 : 1)
+                .opacity(giftInColor ? 1 : 0.44)
+        } else {
+            let trimmed = stampEmoji?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !trimmed.isEmpty {
+                StampIconView(stampEmoji: trimmed, size: size, tint: tint)
+                    .frame(width: size, height: size)
+                    .grayscale(slotFilled ? 0 : 1)
+                    .opacity(slotFilled ? 1 : 0.44)
+            } else if slotFilled {
+                RoundedRectangle(cornerRadius: size * 0.12, style: .continuous)
+                    .fill(tint.opacity(0.95))
+                    .frame(width: size, height: size)
+            } else {
+                emptyStampSquare(size: size)
+            }
+        }
+    }
+
+    private func emptyStampSquare(size: CGFloat) -> some View {
+        RoundedRectangle(cornerRadius: size * 0.12, style: .continuous)
+            .fill(Color.black.opacity(0.38))
+            .frame(width: size, height: size)
+    }
+
+    @ViewBuilder
+    private func logoInStrip(maxWidth: CGFloat, maxHeight: CGFloat, cardWidth: CGFloat) -> some View {
+        let textPrimary = AppTheme.CardPreviewLayout.scaledFont(base: compact ? 18 : 26, cardWidth: cardWidth)
         Group {
             if stripDisplayMode == "text" {
                 Text(stripText?.trimmingCharacters(in: .whitespaces).isEmpty == false ? (stripText ?? displayName) : (displayName.isEmpty ? "Ma Carte" : displayName))
-                    .font(.system(size: compact ? 18 : 26, weight: .semibold))
+                    .font(.system(size: textPrimary, weight: .semibold))
                     .foregroundStyle(.white)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
-                    .minimumScaleFactor(0.75)
+                    .minimumScaleFactor(0.72)
                     .frame(maxWidth: maxWidth, maxHeight: maxHeight, alignment: .topLeading)
             } else if let urlString = logoURL?.trimmingCharacters(in: .whitespaces), !urlString.isEmpty {
                 stampLogoImage(from: urlString)
                     .frame(maxWidth: maxWidth, maxHeight: maxHeight, alignment: .topLeading)
                     .clipped()
             } else {
-                Image(systemName: "building.2.fill")
-                    .font(.system(size: compact ? 21 : 30))
-                    .foregroundStyle(.white.opacity(0.95))
-                    .frame(width: min(maxHeight * 0.85, 44), height: min(maxHeight * 0.85, 44))
+                Image("votrelogo")
+                    .renderingMode(.original)
+                    .resizable()
+                    .scaledToFit()
                     .frame(maxWidth: maxWidth, maxHeight: maxHeight, alignment: .topLeading)
+                    .accessibilityLabel("Logo du commerce, à personnaliser")
             }
         }
     }
 
-    // MARK: - Corps : grille d’icônes tampons + RÉCOMPENSE / MEMBRE (comme en mode points)
+    // MARK: - Corps : avec fond → tampons + prochaine récompense + membre ; sinon prochaine récompense + membre (grille tampons dans le bandeau)
 
     private func stampsBodySection(cardWidth: CGFloat) -> some View {
-        let total = Int(requiredStamps)
-        let filled = min(max(0, Int(stampsCount)), total)
-        let cols = 5
-        let rows = (total + cols - 1) / cols
-        let cellSize: CGFloat = compact ? 36 : 44
-        let gap: CGFloat = compact ? 6 : 8
         let insetH: CGFloat = compact ? 12 : 16
-
-        let restants = max(0, total - filled)
-        let restantsLine = "\(restantsCaption.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Restants" : restantsCaption) = \(restants)"
 
         return ZStack(alignment: .topLeading) {
             if let onEditZoneTap {
@@ -258,33 +439,44 @@ struct CafeDesArtsCardPreview: View {
                         .contentShape(Rectangle())
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                .buttonStyle(.borderless)
+                .buttonStyle(PassPreviewZoneButtonStyle())
             }
             VStack(alignment: .leading, spacing: 0) {
                 if hasCardBackground {
                     HStack(alignment: .top, spacing: compact ? 4 : 8) {
                         CardPreviewTappableZone(
                             zone: .mainMetrics,
-                            accessibilityLabel: "Règles du programme et emoji des tampons",
+                            accessibilityLabel: "Système de carte",
                             onEditZoneTap: onEditZoneTap
                         ) {
-                            restantsSummaryBlock(text: restantsLine)
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                            stampFieldBlock(
+                                label: stampsMetricColumnLabel,
+                                value: stampsMetricColumnValue,
+                                align: .leading,
+                                cardWidth: cardWidth
+                            )
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
                         CardPreviewTappableZone(
-                            zone: .rewardColumn,
-                            accessibilityLabel: "Modifier la récompense ou les paliers",
+                            zone: .headerRight,
+                            accessibilityLabel: "Prochaine récompense, modifier dans Récompenses",
                             onEditZoneTap: onEditZoneTap
                         ) {
-                            stampFieldBlock(label: rewardColumnTitle, value: rewardDisplay, align: .leading)
-                                .frame(maxWidth: .infinity)
+                            stampFieldBlock(
+                                label: nextRewardDansPassagesLabel,
+                                value: nextRewardMerchantValueOnly,
+                                align: .leading,
+                                cardWidth: cardWidth,
+                                valueLineLimit: 4
+                            )
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
                         CardPreviewTappableZone(
                             zone: .memberColumn,
                             accessibilityLabel: "Modifier les libellés colonne membre",
                             onEditZoneTap: onEditZoneTap
                         ) {
-                            stampFieldBlock(label: memberColumnTitle, value: memberDisplay, align: .trailing)
+                            stampFieldBlock(label: memberColumnTitle, value: memberDisplay, align: .trailing, cardWidth: cardWidth)
                                 .frame(maxWidth: .infinity)
                         }
                     }
@@ -292,49 +484,33 @@ struct CafeDesArtsCardPreview: View {
                     .padding(.top, compact ? 14 : 20)
                     .padding(.bottom, compact ? 18 : 26)
                 } else {
-                    CardPreviewTappableZone(
-                        zone: .mainMetrics,
-                        accessibilityLabel: "Règles du programme et emoji des tampons",
-                        onEditZoneTap: onEditZoneTap
-                    ) {
-                        VStack(spacing: gap) {
-                            ForEach(0..<rows, id: \.self) { row in
-                                HStack(spacing: gap) {
-                                    ForEach(0..<cols, id: \.self) { col in
-                                        let index = row * cols + col
-                                        if index < total {
-                                            stampIconCell(filled: index < filled, size: cellSize, tint: accentColor)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.horizontal, insetH)
-                        .padding(.top, compact ? 14 : 22)
-                    }
-
-                    HStack(alignment: .top, spacing: 0) {
+                    HStack(alignment: .top, spacing: compact ? 6 : 10) {
                         CardPreviewTappableZone(
-                            zone: .rewardColumn,
-                            accessibilityLabel: "Modifier la récompense ou les paliers",
+                            zone: .headerRight,
+                            accessibilityLabel: "Prochaine récompense, modifier dans Récompenses",
                             onEditZoneTap: onEditZoneTap
                         ) {
-                            stampFieldBlock(label: rewardColumnTitle, value: rewardDisplay, align: .leading)
-                                .frame(maxWidth: .infinity)
+                            stampFieldBlock(
+                                label: nextRewardDansPassagesLabel,
+                                value: nextRewardMerchantValueOnly,
+                                align: .leading,
+                                cardWidth: cardWidth,
+                                valueLineLimit: 4
+                            )
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
                         CardPreviewTappableZone(
                             zone: .memberColumn,
                             accessibilityLabel: "Modifier les libellés colonne membre",
                             onEditZoneTap: onEditZoneTap
                         ) {
-                            stampFieldBlock(label: memberColumnTitle, value: memberDisplay, align: .trailing)
-                                .frame(maxWidth: .infinity)
+                            stampFieldBlock(label: memberColumnTitle, value: memberDisplay, align: .trailing, cardWidth: cardWidth)
+                                .frame(maxWidth: .infinity, alignment: .trailing)
                         }
                     }
                     .padding(.horizontal, insetH)
-                    .padding(.top, compact ? 20 : 28)
-                    .padding(.bottom, compact ? 20 : 30)
+                    .padding(.top, compact ? 14 : 20)
+                    .padding(.bottom, compact ? 20 : 26)
                 }
 
                 Spacer(minLength: 0)
@@ -345,32 +521,20 @@ struct CafeDesArtsCardPreview: View {
         .id("stamps-\(cardBackgroundRemoteURL ?? "")-\(cardBackgroundImagePath ?? "")-\(primaryColorHex)")
     }
 
-    private func stampIconCell(filled: Bool, size: CGFloat, tint: Color) -> some View {
-        StampIconView(stampEmoji: stampEmoji, size: size, tint: tint)
-            .opacity(filled ? 1 : 0.4)
-            .frame(width: size, height: size)
-    }
-
-    private func restantsSummaryBlock(text: String) -> some View {
-        Text(text)
-            .font(.system(size: compact ? CafePassFieldFont.valueCompact : CafePassFieldFont.value, weight: .regular))
-            .foregroundStyle(accentColor)
-            .lineLimit(2)
-            .minimumScaleFactor(0.78)
-            .multilineTextAlignment(.leading)
-            .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func stampFieldBlock(label: String, value: String, align: HorizontalAlignment) -> some View {
-        VStack(alignment: align, spacing: compact ? 3 : 4) {
+    private func stampFieldBlock(label: String, value: String, align: HorizontalAlignment, cardWidth: CGFloat, valueLineLimit: Int = 3) -> some View {
+        let labelPx = AppTheme.CardPreviewLayout.scaledFont(base: compact ? CafePassFieldFont.labelCompact : CafePassFieldFont.label, cardWidth: cardWidth)
+        let valuePx = AppTheme.CardPreviewLayout.scaledFont(base: compact ? CafePassFieldFont.valueCompact : CafePassFieldFont.value, cardWidth: cardWidth, minSize: 10)
+        return VStack(alignment: align, spacing: compact ? 3 : 4) {
             Text(label)
-                .font(.system(size: compact ? CafePassFieldFont.labelCompact : CafePassFieldFont.label, weight: .medium))
-                .foregroundStyle(labelColor ?? .white.opacity(0.88))
-            Text(value)
-                .font(.system(size: compact ? CafePassFieldFont.valueCompact : CafePassFieldFont.value, weight: .regular))
-                .foregroundStyle(accentColor)
+                .font(.system(size: labelPx, weight: .medium))
+                .foregroundStyle(passLabelExact)
                 .lineLimit(2)
-                .minimumScaleFactor(0.78)
+                .minimumScaleFactor(0.72)
+            Text(value)
+                .font(.system(size: valuePx, weight: .regular))
+                .foregroundStyle(passForegroundExact)
+                .lineLimit(valueLineLimit)
+                .minimumScaleFactor(0.68)
                 .multilineTextAlignment(align == .leading ? .leading : .trailing)
         }
         .frame(maxWidth: .infinity, alignment: align == .leading ? .leading : .trailing)
@@ -378,7 +542,7 @@ struct CafeDesArtsCardPreview: View {
 
     // MARK: - Zone QR (identique à WalletCardPreview : fond blanc, QR noir)
 
-    private func qrSection() -> some View {
+    private func qrSection(cardWidth: CGFloat) -> some View {
         let insetH: CGFloat = compact ? 12 : 16
         return ZStack {
             if let onEditZoneTap {
@@ -389,16 +553,16 @@ struct CafeDesArtsCardPreview: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(.borderless)
+                .buttonStyle(PassPreviewZoneButtonStyle())
             }
             HStack {
                 Spacer(minLength: 0)
                 CardPreviewTappableZone(
                     zone: .qrCode,
-                    accessibilityLabel: "Lien et QR code pour vos clients",
+                    accessibilityLabel: "Ouvrir la page où vos clients ajoutent la carte",
                     onEditZoneTap: onEditZoneTap
                 ) {
-                    cafeQrCodeBlock()
+                    cafeQrCodeBlock(cardWidth: cardWidth)
                 }
                 Spacer(minLength: 0)
             }
@@ -412,15 +576,17 @@ struct CafeDesArtsCardPreview: View {
     }
 
     @ViewBuilder
-    private func cafeQrCodeBlock() -> some View {
-        let payload = fidelityQRPayloadURL?.trimmingCharacters(in: .whitespacesAndNewlines).flatMap { $0.isEmpty ? nil : $0 }
-            ?? "5b34fc46-19d4-46db-95d3-dc2ffbc0"
-        if let qrImage = QRCodeGenerator.generateQR(from: payload, size: compact ? 80 : 120) {
+    private func cafeQrCodeBlock(cardWidth: CGFloat) -> some View {
+        let trimmed = fidelityQRPayloadURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let payload = trimmed.isEmpty ? "5b34fc46-19d4-46db-95d3-dc2ffbc0" : trimmed
+        let side = AppTheme.CardPreviewLayout.qrDisplaySide(cardWidth: cardWidth, compact: compact)
+        let renderPx = max(128, ceil(side * AppTheme.DisplayMetrics.displayScale))
+        if let qrImage = QRCodeGenerator.generateQR(from: payload, size: renderPx) {
             Image(uiImage: qrImage)
                 .interpolation(.none)
                 .resizable()
                 .scaledToFit()
-                .frame(width: compact ? 80 : 120, height: compact ? 80 : 120)
+                .frame(width: side, height: side)
                 .padding(4)
                 .background(Color.white)
                 .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
@@ -429,55 +595,34 @@ struct CafeDesArtsCardPreview: View {
 
     // MARK: - Logo (même logique que WalletCardPreview, .fit pour pas de crop)
 
-    @ViewBuilder
     private func stampLogoImage(from urlString: String) -> some View {
         let trimmed = urlString.trimmingCharacters(in: .whitespaces)
-        let filePath: String? = if trimmed.hasPrefix("/") || trimmed.hasPrefix("file:") {
-            trimmed.hasPrefix("file:") ? URL(string: trimmed)?.path : trimmed
-        } else if trimmed.contains("CardLogos"), let full = CardLogoStorage.fullPath(forRelative: trimmed) {
-            full
-        } else {
-            nil
-        }
-        if let path = filePath {
-            let url = URL(fileURLWithPath: path)
-            if let data = try? Data(contentsOf: url), let uiImage = UIImage(data: data) {
-                Image(uiImage: uiImage)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
+        return Group {
+            if let path = APIResourceURL.localImageFilePathIfPresent(trimmed) {
+                AsyncLocalFileImage(filePath: path, contentMode: .fit)
+                    .id(path)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            } else if let url = APIResourceURL.resolved(from: trimmed), isAPIStripLogoURL(url) {
+                let displayURL = MerchantLogoAssetCache.stripeLogoDisplayURL(url)
+                AuthenticatedLogoView(url: displayURL, stripBackgroundFill: false)
+                    .id(displayURL.absoluteString)
+            } else if let url = APIResourceURL.resolved(from: trimmed) {
+                DecodedURLImage(url: url, contentMode: .fit, maxPixelDimension: 1000)
+                    .id(url.absoluteString)
             } else {
-                Image(systemName: "photo.circle.fill")
-                    .font(.title2)
-                    .foregroundStyle(.white.opacity(0.7))
+                Image("votrelogo")
+                    .renderingMode(.original)
+                    .resizable()
+                    .scaledToFit()
             }
-        } else if let url = URL(string: trimmed), isAPILogoURL(url) {
-            AuthenticatedLogoView(url: url, stripBackgroundFill: false)
-                .id(trimmed)
-        } else if let url = URL(string: trimmed) {
-            AsyncImage(url: url) { phase in
-                switch phase {
-                case .success(let image):
-                    image.resizable().aspectRatio(contentMode: .fit)
-                case .failure, .empty:
-                    Image(systemName: "photo.circle.fill")
-                        .font(.title2)
-                        .foregroundStyle(.white.opacity(0.7))
-                @unknown default:
-                    Image(systemName: "photo.circle.fill")
-                        .font(.title2)
-                        .foregroundStyle(.white.opacity(0.7))
-                }
-            }
-        } else {
-            Image(systemName: "photo.circle.fill")
-                .font(.title2)
-                .foregroundStyle(.white.opacity(0.7))
         }
+        .accessibilityLabel("Logo du commerce, à personnaliser")
     }
 
-    private func isAPILogoURL(_ url: URL) -> Bool {
+    private func isAPIStripLogoURL(_ url: URL) -> Bool {
         guard url.scheme == "http" || url.scheme == "https" else { return false }
-        return url.host() == APIConfig.baseURL.host() && url.path.contains("/logo")
+        guard url.host() == APIConfig.baseURL.host() else { return false }
+        return url.path.hasSuffix("/logo")
     }
 
     private static func isAPICardBackgroundURL(_ url: URL) -> Bool {
@@ -491,22 +636,24 @@ struct CafeDesArtsCardPreview: View {
 #Preview {
     VStack(spacing: 24) {
         CafeDesArtsCardPreview(
-            displayName: "O'CALI CROUSTY",
+            displayName: "Commerce démo",
             requiredStamps: 10,
             stampsCount: 3,
-            primaryColorHex: "8B2942",
-            accentColorHex: "ffd54f",
+            primaryColorHex: AppTheme.WalletCardAppearanceDefaults.backgroundHex,
+            accentColorHex: AppTheme.WalletCardAppearanceDefaults.bodyTextHex,
             logoURL: nil,
-            stampEmoji: "☕"
+            stampEmoji: "☕",
+            stampMidRewardLabel: "−50 % sur un dessert",
+            stampRewardLabel: "Boisson offerte"
         )
         .padding(.horizontal, 24)
 
         CafeDesArtsCardPreview(
-            displayName: "Café des Arts",
+            displayName: "Ma Carte",
             requiredStamps: 10,
             stampsCount: 8,
-            primaryColorHex: "5d4e37",
-            accentColorHex: "d7ccc8",
+            primaryColorHex: AppTheme.WalletCardAppearanceDefaults.backgroundHex,
+            accentColorHex: AppTheme.WalletCardAppearanceDefaults.bodyTextHex,
             logoURL: nil,
             stampEmoji: "☕",
             compact: true

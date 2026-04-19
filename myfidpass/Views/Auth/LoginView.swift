@@ -2,280 +2,467 @@
 //  LoginView.swift
 //  myfidpass
 //
-//  Connexion : email + mot de passe, Apple, Google. Prêt pour branchement API.
+//  Connexion / inscription par e-mail : flux minimal en deux étapes (e-mail → mot de passe),
+//  détection automatique connexion / inscription via l’API.
 //
 
 import SwiftUI
-import AuthenticationServices
+import UIKit
 
 struct LoginView: View {
-    @Environment(\.openURL) private var openURL
     @EnvironmentObject var authService: AuthService
+    @Environment(\.dismiss) private var dismiss
+
+    var lockedEmail: String? = nil
+    var onChangeEmail: (() -> Void)? = nil
+    var presentationAsSheet: Bool = false
+    var onOpenEstablishment: (() -> Void)? = nil
+    /// Feuille : `true` quand un champ est focalisé (clavier) — pour agrandir le sheet.
+    var onSheetNeedsTallLayout: ((Bool) -> Void)? = nil
+
+    private enum Step {
+        case email
+        case password
+    }
+
+    @State private var step: Step = .email
     @State private var email = ""
     @State private var password = ""
+    @State private var accountExists: Bool?
     @State private var isLoading = false
+    @State private var isCheckingEmail = false
     @State private var errorMessage: String?
-    @State private var googleError: String?
-    @State private var isGoogleLoading = false
-    @State private var showNoAccountInLogiciel = false
-    @State private var isRegisterMode = false
-    @State private var displayName = ""
-    @FocusState private var focusedField: Field?
 
-    enum Field { case email, password }
+    @FocusState private var focusedField: Field?
+    private enum Field {
+        case email
+        case password
+    }
+
+    init(
+        lockedEmail: String? = nil,
+        onChangeEmail: (() -> Void)? = nil,
+        presentationAsSheet: Bool = false,
+        onOpenEstablishment: (() -> Void)? = nil,
+        onSheetNeedsTallLayout: ((Bool) -> Void)? = nil
+    ) {
+        self.lockedEmail = lockedEmail
+        self.onChangeEmail = onChangeEmail
+        self.presentationAsSheet = presentationAsSheet
+        self.onOpenEstablishment = onOpenEstablishment
+        self.onSheetNeedsTallLayout = onSheetNeedsTallLayout
+    }
+
+    private var normalizedEmail: String {
+        email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private var isEmailValid: Bool {
+        let e = normalizedEmail
+        guard e.count >= 5, e.contains("@") else { return false }
+        let parts = e.split(separator: "@")
+        guard parts.count == 2, let domain = parts.last, domain.contains(".") else { return false }
+        return true
+    }
+
+    private var hasOnboardingEstablishmentForRegister: Bool {
+        let p = FirstLaunchOnboarding.readPendingEstablishment()
+        if p.relax { return true }
+        return FirstLaunchOnboarding.hasCompletePendingEstablishmentForRegistration()
+    }
 
     var body: some View {
         ScrollView {
-            VStack(spacing: AppTheme.Spacing.xl) {
-                headerSection
-                formSection
-                if let msg = errorMessage {
-                    Text(msg)
-                        .font(AppTheme.Fonts.caption())
-                        .foregroundStyle(AppTheme.Colors.error)
+            VStack(alignment: .leading, spacing: 0) {
+                Group {
+                    switch step {
+                    case .email:
+                        emailStep
+                    case .password:
+                        passwordStep
+                    }
                 }
-                submitSection
+                .animation(.easeInOut(duration: 0.28), value: step)
+
+                if let msg = errorMessage, !msg.isEmpty {
+                    Text(msg)
+                        .font(.system(size: 14))
+                        .foregroundStyle(AppTheme.Colors.error)
+                        .padding(.top, 20)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                if !presentationAsSheet {
+                    LegalDocumentLinksView()
+                        .padding(.top, 8)
+                    SocialSignInSection(intent: .signIn)
+                        .padding(.top, 20)
+                }
+
+                if !presentationAsSheet {
+                    Spacer(minLength: 32)
+                }
             }
-            .padding(AppTheme.Spacing.lg)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 24)
+            .padding(.top, presentationAsSheet ? 24 : 22)
+            .padding(.bottom, presentationAsSheet ? 12 : 28)
         }
+        .scrollDismissesKeyboard(.interactively)
         .background(AppTheme.Colors.background)
         .navigationBarTitleDisplayMode(.inline)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if presentationAsSheet {
+                sheetBottomActionBar
+            }
+        }
+        .onAppear {
+            if let locked = lockedEmail {
+                email = locked
+            }
+            if presentationAsSheet {
+                onSheetNeedsTallLayout?(false)
+                scheduleSheetEmailFocusIfNeeded()
+            }
+        }
+        .onChange(of: step) { _, new in
+            if new == .password {
+                focusedField = .password
+            } else {
+                focusedField = .email
+            }
+        }
         .toolbar {
-            ToolbarItem(placement: .cancellationAction) {
-                Button("Retour") {
-                    authService.showWelcome()
+            if !presentationAsSheet {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Retour") {
+                        authService.showWelcome()
+                    }
                 }
             }
         }
+        .sheetHideNavigationBar(presentationAsSheet)
+        .onChange(of: focusedField) { _, new in
+            guard presentationAsSheet else { return }
+            onSheetNeedsTallLayout?(new != nil)
+        }
     }
 
-    private var headerSection: some View {
-        VStack(spacing: AppTheme.Spacing.sm) {
+    /// Boutons principaux collés à la zone sûre (au-dessus du clavier) — évite le vide énorme du `ScrollView` + `Spacer`.
+    @ViewBuilder
+    private var sheetBottomActionBar: some View {
+        VStack(spacing: 0) {
+            switch step {
+            case .email:
+                primaryButton(
+                    title: isCheckingEmail ? "Vérification…" : "Continuer",
+                    enabled: isEmailValid && !isCheckingEmail && !isLoading,
+                    loading: isCheckingEmail
+                ) {
+                    Task { await continueAfterEmail() }
+                }
+                .accessibilityLabel("Continuer avec cet e-mail")
+            case .password:
+                primaryButton(
+                    title: primaryPasswordActionTitle,
+                    enabled: canSubmitPassword,
+                    loading: isLoading
+                ) {
+                    Task { await submitPasswordStep() }
+                }
+            }
+        }
+        .padding(.horizontal, 24)
+        .padding(.top, 12)
+        .padding(.bottom, 10)
+        .background(AppTheme.Colors.background)
+    }
+
+    private func scheduleSheetEmailFocusIfNeeded() {
+        guard step == .email, lockedEmail == nil else { return }
+        let delay: TimeInterval = 0.42
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            focusedField = .email
+        }
+    }
+
+    // MARK: - Étape e-mail
+
+    private var emailStep: some View {
+        VStack(alignment: .leading, spacing: 22) {
             Text("Connexion")
-                .font(AppTheme.Fonts.largeTitle())
+                .font(.system(size: 32, weight: .bold))
                 .foregroundStyle(AppTheme.Colors.textPrimary)
-            Text("Connectez-vous à votre compte commerçant")
-                .font(AppTheme.Fonts.body())
-                .foregroundStyle(AppTheme.Colors.textSecondary)
-                .multilineTextAlignment(.center)
-        }
-        .padding(.top, AppTheme.Spacing.lg)
-    }
 
-    private var formSection: some View {
-            VStack(alignment: .leading, spacing: AppTheme.Spacing.md) {
-            Picker("", selection: $isRegisterMode) {
-                Text("Connexion").tag(false)
-                Text("Inscription").tag(true)
-            }
-            .pickerStyle(.segmented)
-            if isRegisterMode {
-                VStack(alignment: .leading, spacing: AppTheme.Spacing.xs) {
-                    Text("Nom (optionnel)")
-                        .font(AppTheme.Fonts.caption())
-                        .foregroundStyle(AppTheme.Colors.textSecondary)
-                    TextField("Votre nom", text: $displayName)
-                        .textFieldStyle(.roundedBorder)
+            Text("Saisissez votre adresse e-mail pour continuer. Nous détecterons si vous avez déjà un compte.")
+                .font(.system(size: 16))
+                .foregroundStyle(AppTheme.Colors.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Votre adresse e-mail")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(AppTheme.Colors.textSecondary)
+
+                if lockedEmail != nil {
+                    Text(email)
+                        .font(.system(size: 17))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(16)
+                        .background(Color(UIColor.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                } else {
+                    TextField("", text: $email, prompt: Text("votre@email.fr").foregroundStyle(placeholderGray))
+                        .textContentType(.emailAddress)
+                        .keyboardType(.emailAddress)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .foregroundStyle(AppTheme.Colors.textPrimary)
+                        .tint(AppTheme.Colors.textPrimary)
+                        .focused($focusedField, equals: .email)
+                        .padding(16)
+                        .background(Color(UIColor.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        .onChange(of: email) { _, new in
+                            if errorMessage != nil { errorMessage = nil }
+                        }
+                }
+
+                if lockedEmail != nil, let onChangeEmail {
+                    Button(action: onChangeEmail) {
+                        Text("Modifier l’adresse e-mail")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(.black)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, 4)
                 }
             }
-            VStack(alignment: .leading, spacing: AppTheme.Spacing.xs) {
-                Text("Email")
-                    .font(AppTheme.Fonts.caption())
-                    .foregroundStyle(AppTheme.Colors.textSecondary)
-                TextField("votre@email.fr", text: $email)
-                    .textFieldStyle(.roundedBorder)
-                    .keyboardType(.emailAddress)
-                    .textInputAutocapitalization(.never)
-                    .focused($focusedField, equals: .email)
+            .padding(.top, 8)
+
+            if !presentationAsSheet {
+                primaryButton(
+                    title: isCheckingEmail ? "Vérification…" : "Continuer",
+                    enabled: isEmailValid && !isCheckingEmail && !isLoading,
+                    loading: isCheckingEmail
+                ) {
+                    Task { await continueAfterEmail() }
+                }
+                .padding(.top, 8)
+                .accessibilityLabel("Continuer avec cet e-mail")
             }
-            VStack(alignment: .leading, spacing: AppTheme.Spacing.xs) {
+        }
+    }
+
+    // MARK: - Étape mot de passe
+
+    private var passwordStep: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            Text(passwordTitle)
+                .font(.system(size: 32, weight: .bold))
+                .foregroundStyle(AppTheme.Colors.textPrimary)
+
+            Text(passwordSubtitle)
+                .font(.system(size: 16))
+                .foregroundStyle(AppTheme.Colors.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Text(normalizedEmail)
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(AppTheme.Colors.textPrimary)
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                    Button("Modifier") {
+                        goBackToEmail()
+                    }
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.black)
+                    .buttonStyle(.plain)
+                }
+                .padding(.vertical, 11)
+                .padding(.horizontal, 14)
+                .background(Color(UIColor.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
                 Text("Mot de passe")
-                    .font(AppTheme.Fonts.caption())
-                    .foregroundStyle(AppTheme.Colors.textSecondary)
-                SecureField("••••••••", text: $password)
-                    .textFieldStyle(.roundedBorder)
-                    .focused($focusedField, equals: .password)
-            }
-        }
-    }
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.secondary)
 
-    private var submitSection: some View {
-        VStack(spacing: AppTheme.Spacing.md) {
-            Button {
-                if isRegisterMode {
-                    submitRegister()
-                } else {
-                    submitLogin()
-                }
-            } label: {
-                Group {
-                    if isLoading {
-                        ProgressView()
-                            .tint(.white)
-                    } else {
-                        Text(isRegisterMode ? "Créer mon compte" : "Se connecter")
-                    }
-                }
-                .font(AppTheme.Fonts.headline())
-                .frame(maxWidth: .infinity)
-                .padding(AppTheme.Spacing.md)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(AppTheme.Colors.primary)
-            .disabled(
-                isLoading
-                    || email.trimmingCharacters(in: .whitespaces).isEmpty
-                    || password.isEmpty
-                    || (isRegisterMode && password.count < 8)
-            )
-
-            if !isRegisterMode {
-                socialSignInSection
-            }
-
-            LegalDocumentLinksView()
-                .padding(.top, AppTheme.Spacing.sm)
-
-            Button(isRegisterMode ? "Déjà un compte ? Se connecter" : "Créer un compte sur le web") {
-                if isRegisterMode {
-                    isRegisterMode = false
-                } else {
-                    openURL(AppWebURL.createAccount)
-                }
-            }
-            .font(AppTheme.Fonts.callout())
-            .foregroundStyle(AppTheme.Colors.primary)
-        }
-        .padding(.top, AppTheme.Spacing.md)
-        .alert("Aucun compte associé", isPresented: $showNoAccountInLogiciel) {
-            Button("Ouvrir le site") {
-                openURL(AppWebURL.createAccount)
-            }
-            Button("Fermer", role: .cancel) {}
-        } message: {
-            Text("Aucun compte n’est rattaché. Créez d’abord votre compte sur myfidpass.fr.")
-        }
-        .alert("Connexion Google", isPresented: .init(get: { googleError != nil }, set: { if !$0 { googleError = nil } })) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            if let msg = googleError { Text(msg) }
-        }
-    }
-
-    private var socialSignInSection: some View {
-        VStack(spacing: AppTheme.Spacing.md) {
-            Text("ou")
-                .font(AppTheme.Fonts.caption())
-                .foregroundStyle(AppTheme.Colors.textSecondary)
-
-            SignInWithAppleButton(.signIn) { request in
-                request.requestedScopes = [.fullName, .email]
-            } onCompletion: { result in
-                switch result {
-                case .success(let authorization):
-                    guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential,
-                          let tokenData = credential.identityToken,
-                          let idToken = String(data: tokenData, encoding: .utf8) else { return }
-                    let name: String? = {
-                        guard let given = credential.fullName?.givenName else { return nil }
-                        let family = credential.fullName?.familyName ?? ""
-                        return "\(given) \(family)".trimmingCharacters(in: .whitespaces)
-                    }()
-                    Task {
-                        do {
-                            try await authService.loginWithApple(idToken: idToken, name: name, email: credential.email)
-                        } catch AuthError.noAccountInLogiciel {
-                            showNoAccountInLogiciel = true
-                        } catch { }
-                    }
-                case .failure:
-                    break
-                }
-            }
-            .signInWithAppleButtonStyle(.black)
-            .frame(maxWidth: .infinity)
-            .frame(minHeight: 50)
-
-            Button {
-                startGoogleSignIn()
-            } label: {
-                HStack(spacing: 10) {
-                    if isGoogleLoading {
-                        ProgressView()
-                            .tint(AppTheme.Colors.primary)
-                        Text("Ouverture de Google…")
-                            .font(AppTheme.Fonts.callout())
-                            .foregroundStyle(AppTheme.Colors.primary)
-                    } else {
-                        Image(systemName: "globe")
-                        Text("Continuer avec Google")
-                    }
-                }
-                .frame(maxWidth: .infinity)
-                .frame(minHeight: 50)
-            }
-            .font(AppTheme.Fonts.callout())
-            .foregroundStyle(AppTheme.Colors.primary)
-            .buttonStyle(.bordered)
-            .disabled(isGoogleLoading)
-        }
-    }
-
-    private func startGoogleSignIn() {
-        isGoogleLoading = true
-        googleError = nil
-        Task {
-            do {
-                try await authService.startGoogleOAuthFlow()
-            } catch AuthError.notImplemented {
-                googleError = "La connexion avec Google sera disponible prochainement."
-            } catch AuthError.noAccountInLogiciel {
-                showNoAccountInLogiciel = true
-            } catch {
-                let ns = error as NSError
-                if ns.domain == "com.apple.AuthenticationServices.WebAuthenticationSession" && ns.code == 1 {
-                    googleError = "Connexion annulée. Si la fenêtre ne s’est pas ouverte (iPad), réessayez."
-                } else {
-                    googleError = error.localizedDescription
-                }
-            }
-            isGoogleLoading = false
-        }
-    }
-
-    private func submitLogin() {
-        errorMessage = nil
-        focusedField = nil
-        isLoading = true
-        Task {
-            do {
-                try await authService.login(email: email, password: password)
-            } catch AuthError.noAccountInLogiciel {
-                showNoAccountInLogiciel = true
-            } catch {
-                errorMessage = error.localizedDescription
-            }
-            isLoading = false
-        }
-    }
-
-    private func submitRegister() {
-        errorMessage = nil
-        focusedField = nil
-        isLoading = true
-        Task {
-            do {
-                let name = displayName.trimmingCharacters(in: .whitespaces)
-                try await authService.register(
-                    email: email.trimmingCharacters(in: .whitespaces).lowercased(),
-                    password: password,
-                    name: name.isEmpty ? nil : name
+                SecureField(
+                    "",
+                    text: $password,
+                    prompt: Text(accountExists == true ? "Votre mot de passe" : "Au moins 12 caractères")
+                        .foregroundStyle(placeholderGray)
                 )
-            } catch {
+                    .textContentType(accountExists == true ? .password : .newPassword)
+                    .focused($focusedField, equals: .password)
+                    .foregroundStyle(AppTheme.Colors.textPrimary)
+                    .tint(AppTheme.Colors.textPrimary)
+                    .padding(16)
+                    .background(Color(UIColor.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .onChange(of: password) { _, _ in
+                        if errorMessage != nil { errorMessage = nil }
+                    }
+            }
+
+            if accountExists == false {
+                if presentationAsSheet, !hasOnboardingEstablishmentForRegister, let openEst = onOpenEstablishment {
+                    Button {
+                        openEst()
+                    } label: {
+                        Text("Choisir mon établissement")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(.black)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 14)
+                            .background(
+                                RoundedRectangle(cornerRadius: 26, style: .continuous)
+                                    .stroke(Color.black.opacity(0.88), lineWidth: 1.5)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            if accountExists == false {
+                Text("Au moins 12 caractères pour sécuriser votre compte.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            }
+
+            if !presentationAsSheet {
+                primaryButton(
+                    title: primaryPasswordActionTitle,
+                    enabled: canSubmitPassword,
+                    loading: isLoading
+                ) {
+                    Task { await submitPasswordStep() }
+                }
+                .padding(.top, 4)
+            }
+        }
+    }
+
+    private var passwordTitle: String {
+        if accountExists == true { return "Se connecter" }
+        return "Créer un compte"
+    }
+
+    private var passwordSubtitle: String {
+        if accountExists == true {
+            return "Entrez le mot de passe associé à votre compte."
+        }
+        return "Choisissez un mot de passe pour finaliser votre inscription commerçant."
+    }
+
+    private var primaryPasswordActionTitle: String {
+        if accountExists == true { return "Se connecter" }
+        return "Créer mon compte"
+    }
+
+    private var canSubmitPassword: Bool {
+        guard !isLoading, !password.isEmpty else { return false }
+        if accountExists == true { return true }
+        if password.count < 12 { return false }
+        if !hasOnboardingEstablishmentForRegister { return false }
+        return true
+    }
+
+    // MARK: - Bouton principal
+
+    private func primaryButton(title: String, enabled: Bool, loading: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Group {
+                if loading {
+                    ProgressView()
+                        .tint(.white)
+                        .scaleEffect(1.05)
+                } else {
+                    Text(title)
+                        .font(.system(size: 17, weight: .semibold))
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 16)
+            .foregroundStyle(.white)
+            .background(
+                RoundedRectangle(cornerRadius: 26, style: .continuous)
+                    .fill(Color.black.opacity(enabled && !loading ? 1 : 0.35))
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled || loading)
+        .accessibilityLabel(title)
+    }
+
+    // MARK: - Actions
+
+    private func continueAfterEmail() async {
+        errorMessage = nil
+        isCheckingEmail = true
+        do {
+            let exists = try await authService.checkAccountExists(email: normalizedEmail)
+            await MainActor.run {
+                accountExists = exists
+                step = .password
+                password = ""
+                isCheckingEmail = false
+                focusedField = .password
+            }
+        } catch {
+            await MainActor.run {
+                errorMessage = error.localizedDescription
+                isCheckingEmail = false
+            }
+        }
+    }
+
+    private func goBackToEmail() {
+        withAnimation {
+            step = .email
+            password = ""
+            accountExists = nil
+            errorMessage = nil
+        }
+        focusedField = .email
+    }
+
+    private func submitPasswordStep() async {
+        guard let exists = accountExists else { return }
+        errorMessage = nil
+        isLoading = true
+        defer { isLoading = false }
+        do {
+            if exists {
+                try await authService.login(email: normalizedEmail, password: password)
+            } else {
+                try await authService.register(
+                    email: normalizedEmail,
+                    password: password,
+                    name: nil,
+                    googlePlaceId: nil,
+                    establishmentName: nil
+                )
+            }
+        } catch AuthError.invalidCredentials {
+            await MainActor.run {
+                errorMessage = "E-mail ou mot de passe incorrect."
+            }
+        } catch AuthError.emailAlreadyUsed {
+            await MainActor.run {
+                errorMessage = "Un compte existe déjà avec cet e-mail. Revenez en arrière et connectez-vous."
+            }
+        } catch {
+            await MainActor.run {
                 errorMessage = error.localizedDescription
             }
-            isLoading = false
         }
+    }
+
+    /// Placeholder e-mail : gris foncé (pas bleu système).
+    private var placeholderGray: Color {
+        Color(UIColor(white: 0.38, alpha: 1))
     }
 }
 

@@ -19,7 +19,7 @@ struct FlyerPreviewWebView: UIViewRepresentable {
     var onWebViewCreated: ((WKWebView) -> Void)? = nil
 
     /// Retire `custom_bg_data_url` du JSON pour alléger l’injection + mode « calque » natif sous la WebView.
-    static func stripCustomBgFromBootstrapBase64(_ b64: String) -> String? {
+    nonisolated static func stripCustomBgFromBootstrapBase64(_ b64: String) -> String? {
         guard let data = Data(base64Encoded: b64),
               var root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               var fp = root["flyer_prefs"] as? [String: Any] else { return nil }

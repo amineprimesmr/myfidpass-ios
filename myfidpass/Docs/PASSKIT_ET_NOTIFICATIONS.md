@@ -73,36 +73,16 @@ Aucune logique PassKit côté app : l’app envoie uniquement le message au back
 
 ---
 
-## 5. Dos du pass (backFields) — vue CLIENT dans le Wallet
-
-### Comment le client voit le détail (récompenses, progression)
-
-Pour une **carte de fidélité** (pass type **store card**), Apple Wallet ne permet **pas** d’ouvrir une app ou une vue custom au tap sur la carte. La seule interaction « détail » est : le **bouton (i)** en bas à droite de la carte. Quand le **client** touche **(i)**, Wallet affiche le **dos du pass** : les champs **backFields** du `pass.json`.
-
-**Ce qu’on met au dos (orienté client) :**
-
-1. **Votre progression** — ex. « 3 / 20 tampons » ou « 150 points »
-2. **Récompense** — ex. « 20 tampons = 1 café offert » ou la liste des paliers points
-3. **Pour l’obtenir** — ex. « Il vous manque 17 tampons pour avoir 1 café offert. » ou « Encore 50 points pour : 5 € de réduction. »
-4. **Conditions** — texte défini par le commerçant
-5. **Contact** — email / infos du commerce
-6. **Voir en ligne** — lien cliquable vers le site (ex. myfidpass.fr)
-
-Sur le **recto** du pass, on affiche aussi une ligne du type : « Touchez (i) en bas à droite pour voir le détail (progression, récompense). » pour que le client sache où regarder.
-
-### Différence avec Revolut / cartes de paiement
-
-**Revolut** (et les banques) affichent dans le Wallet une **carte de paiement** (Apple Pay). Ce type de pass est géré par Apple et les **extensions Wallet / Apple Pay** des apps bancaires : au tap, iOS peut ouvrir l’app ou une vue dédiée (dernières transactions, etc.). Ce n’est **pas** le même type de pass que notre **store card**.
-
-Pour une **store card** (carte de fidélité), Apple ne fournit **que** :
-- le **recto** (champs primary/secondary/auxiliary + image strip),
-- le **dos** (backFields) affiché quand le client touche **(i)**.
-
-On ne peut donc pas « ouvrir une page transactions » comme Revolut ; on met **tout le détail utile** (progression, récompense, « il vous manque X », conditions, contact, lien) dans les **backFields** pour que le client ait toutes les infos en touchant **(i)**.
+## 5. Lien au dos du pass
 
 ### Back field avec URL
 
-Un des back fields contient une **URL** avec **`PKDataDetectorTypeLink`** pour que le lien soit **cliquable** (ex. « Voir en ligne » → myfidpass.fr).
+Sur le **dos du pass**, un champ (**back field**) avec une **URL** et **`PKDataDetectorTypeLink`** pour que le lien soit **cliquable**.
+
+- Chez nous : libellé **« Voir en ligne »**, lien vers le site (ex. `https://myfidpass.fr`).
+
+**À faire côté backend :**  
+Lors de la génération du pass, ajouter dans `pass.json` un **back field** avec cette URL et le type approprié pour que le lien soit détecté et cliquable.
 
 ---
 
@@ -131,3 +111,39 @@ Un des back fields contient une **URL** avec **`PKDataDetectorTypeLink`** pour q
 - **GET** `/api/businesses/:slug/wallet-pass` → retourne le fichier **.pkpass** (avec `relevantLocations`, back field « Voir en ligne », etc.).
 - **POST** `/api/businesses/:slug/notify` → body `{ "message": "string" }` → le backend envoie ce message aux clients (push / changeMessage).
 - **GET** `.../dashboard/settings` → peut retourner `locationAddress`, `locationLat`, `locationLng` pour que l’app et le backend aient la même adresse / coordonnées pour les **relevant locations**.
+
+---
+
+## 9. Matrice des canaux (refonte notifications)
+
+| Canal | Public | Contenu typique | Cooldown auto |
+|--------|--------|-----------------|---------------|
+| **PassKit** (APNs `PASS_TYPE_ID`) | Clients avec carte dans Apple Wallet | Push vide → iPhone retélécharge le pass (`last_broadcast_message`, points, etc.) | Oui pour les campagnes (`notification_log` avec `counts_for_member_cooldown=1`) |
+| **Web Push** (VAPID) | Clients ayant activé les notifs navigateur | Titre + message + icône | Idem |
+| **App commerçant** (APNs bundle `com.myfidpass`) | Commerçant connecté sur l’app iOS | **Accusé** de campagne (résumé Wallet / Web), pas le message client | Non (`merchant_receipt`, cooldown 0) |
+
+- Chaque envoi campagne crée un **`batch_id`** (`notification_batches` + lignes dans `notification_log`).
+- Les mises à jour pass « techniques » (points en caisse, etc.) peuvent être journalisées avec `trigger_name=pass_sync` et **sans** impacter le cooldown (à activer côté serveur si besoin).
+
+---
+
+## 10. Pourquoi « rien ne se passe » puis tout apparaît après rafraîchir dans Wallet ?
+
+### Comportement normal Apple (PassKit)
+
+- La **mise à jour d’une carte** ne passe **pas** par une notification comme iMessage : le serveur envoie un **push APNs vide** (`aps: {}`) vers le **Pass Type ID**. Ce n’est **pas** une alerte avec titre/corps comme une app classique.
+- Ce push sert surtout à **réveiller** le Wallet pour qu’il interroge ton **Web Service** (`GET …/devices/…/registrations/…` puis `GET …/passes/…`) et **retélécharge** le `.pkpass`.
+- **Apple ne garantit pas** une bannière immédiate sur l’écran de verrouillage ni une mise à jour instantanée : mode économie d’énergie, réseau, file d’arrière-plan, etc. peuvent retarder le fetch.
+- **Tirer pour rafraîchir** dans le détail de la carte force un **téléchargement immédiat** du pass : c’est pour ça que le texte / les points « apparaissent enfin » même si le push a été lent ou la bannière absente.
+
+### Ce qui améliore vraiment l’expérience « comme les concurrents »
+
+1. **Web Service joignable** : `PASSKIT_WEB_SERVICE_URL` (ou `API_URL`) correct sur Railway ; enregistrement device visible dans les logs (`POST …/devices/…/registrations/…` avec push token).
+2. **APNs production** pour les vrais iPhones : `APNS_USE_SANDBOX` ne doit pas être activé en prod ; `PASS_TYPE_ID` = identifiant du type de pass dans Apple Developer.
+3. **`changeMessage` sur un champ visible sur la face** : le message de campagne est aussi exposé sur la **face** du pass (champ dédié), pas seulement au verso, pour que Wallet puisse associer la mise à jour à une alerte utilisateur lorsque le pass est rechargé.
+
+### Ce qu’il ne faut pas confondre
+
+- **PassKit** = clients avec carte dans **Apple Wallet**.
+- **Web Push** = clients avec notif **navigateur** (autre canal).
+- **App commerçant (bundle `com.myfidpass`)** = accusés / infos pour le **commerçant**, pas le message client sur Wallet.

@@ -211,12 +211,6 @@ struct CampaignNotificationsView: View {
     @State private var notificationIconPhotoItem: PhotosPickerItem?
     @State private var notificationIconCropPayload: ImageCropPayload?
     @State private var isUploadingNotificationIcon = false
-    /// Icône recadrée en attente de confirmation (limitation iOS Wallet : cache d'icône verrouillé
-    /// après la première installation du pass — voir alerte ci-dessous).
-    @State private var pendingIconUploadImage: UIImage?
-    /// Contrôle de l'alerte de confirmation expliquant que l'icône sera définitivement
-    /// verrouillée par iOS Wallet pour les cartes déjà installées.
-    @State private var showIconLockWarningAlert = false
     /// Même URL `…/notification-icon` après upload : recréer les vues image + appliquer le nouveau `?v=`.
     @State private var notificationIconReloadNonce = 0
     @State private var editingRuleId: String?
@@ -410,36 +404,8 @@ struct CampaignNotificationsView: View {
                     onCancel: { notificationIconCropPayload = nil },
                     onComplete: { cropped in
                         notificationIconCropPayload = nil
-                        // Avant l'upload : alerte de confirmation expliquant la limitation iOS Wallet
-                        // (cache d'icône verrouillé côté OS). Le commerçant doit valider en
-                        // connaissance de cause puisque l'icône ne pourra plus être modifiée sur
-                        // les iPhones qui ont déjà installé la carte.
-                        pendingIconUploadImage = cropped
-                        showIconLockWarningAlert = true
+                        Task { await uploadCroppedNotificationIcon(cropped) }
                     }
-                )
-            }
-            .alert(
-                "Cette icône sera définitive sur iOS",
-                isPresented: $showIconLockWarningAlert,
-                presenting: pendingIconUploadImage
-            ) { img in
-                Button("Annuler", role: .cancel) {
-                    pendingIconUploadImage = nil
-                }
-                Button("J'ai compris, utiliser cette icône") {
-                    pendingIconUploadImage = nil
-                    Task { await uploadCroppedNotificationIcon(img) }
-                }
-            } message: { _ in
-                Text(
-                    "Limitation iOS : une fois qu'un client a ajouté votre carte à son Apple Wallet, "
-                    + "son iPhone mémorise l'icône et ne la met plus jamais à jour, même si vous la "
-                    + "changez ici. Seuls les clients qui ajouteront la carte APRÈS ce changement "
-                    + "verront la nouvelle icône dans leurs notifications.\n\n"
-                    + "Choisissez donc cette icône avec soin : image bien cadrée, nette, de bonne "
-                    + "qualité, représentative de votre marque. Vous ne pourrez plus la modifier "
-                    + "pour vos clients actuels."
                 )
             }
             .onChange(of: title) { _, _ in
@@ -597,7 +563,6 @@ struct CampaignNotificationsView: View {
                 }
             )
             .id(notificationIconReloadNonce)
-            iconLockWarningBanner
             if resolveSlugForAPI() != nil {
                 previewCampaignActionsBar
                 if isSending {
@@ -618,45 +583,6 @@ struct CampaignNotificationsView: View {
     private var segmentMenuLabel: String {
         guard let s = segment, !s.isEmpty else { return "Tous les clients" }
         return manualSegmentChoices.first(where: { $0.key == s })?.label ?? s
-    }
-
-    /// Bandeau d'avertissement permanent sous le preview de notification : explique au
-    /// commerçant que l'icône de notification Wallet est verrouillée par iOS après la première
-    /// installation de la carte sur un iPhone. Ce n'est pas un bug de l'app : c'est une
-    /// limitation fondamentale d'Apple PassKit (cache `passd` keyed sur passTypeIdentifier).
-    /// Référence : StackOverflow #54399616 (réponse officielle PassKit).
-    private var iconLockWarningBanner: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "lock.shield")
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(Color.orange)
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Icône Wallet : définitive côté iOS")
-                    .font(AppTheme.Fonts.callout().weight(.semibold))
-                    .foregroundStyle(AppTheme.Colors.textPrimary)
-                Text(
-                    "Une fois qu'un client a ajouté la carte à son Apple Wallet, son iPhone "
-                    + "mémorise l'icône et ne la met plus à jour — même si vous la changez ici. "
-                    + "Seuls les clients qui ajouteront la carte après le changement verront la "
-                    + "nouvelle icône.\n\n"
-                    + "Choisissez bien votre icône dès le départ : image carrée, nette, bien "
-                    + "cadrée, représentative de votre marque."
-                )
-                .font(AppTheme.Fonts.caption())
-                .foregroundStyle(AppTheme.Colors.textSecondary)
-                .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.orange.opacity(0.10))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color.orange.opacity(0.35), lineWidth: 1)
-        )
     }
 
     /// Sous l’aperçu : catégories (segment) + envoi — même logique que l’ancien onglet Manuel.

@@ -18,6 +18,8 @@ enum APIError: LocalizedError {
     case noAccountInLogiciel
     /// HTTP 403 avec `code: subscription_required` — abonnement Stripe inactif côté serveur.
     case subscriptionRequired
+    /// HTTP 400 avec `code: missing_establishment` — inscription sans lieu / nom d’établissement (UserDefaults onboarding).
+    case missingEstablishment(String)
 
     var errorDescription: String? {
         switch self {
@@ -25,28 +27,32 @@ enum APIError: LocalizedError {
         case .noData: return "Réponse vide du serveur."
         case .decoding(let e): return "Données invalides: \(e.localizedDescription)"
         case .server(let code, let msg): return msg ?? "Erreur serveur (\(code))."
-        case .network(let e): return Self.friendlyNetworkDescription(e)
+        case .network(let e):
+            if let url = e as? URLError, url.code == .cancelled { return nil }
+            return Self.friendlyNetworkDescription(e)
         case .unauthorized: return "Session expirée. Reconnectez-vous."
         case .notFound: return "Ressource introuvable."
         case .subscriptionRequired:
-            return "Cette action nécessite une offre active (scan, points, campagnes…). La configuration reste accessible sans abonnement — souscrivez via Stripe depuis le bandeau « Mode découverte »."
+            return "Cette action nécessite un abonnement actif (ou une période d’essai gratuite encore en cours). Les nouveaux comptes ont 24 h d’accès complet ; après cette période, souscrivez via Stripe depuis l’écran d’abonnement."
         case .noAccountInLogiciel:
             return "Aucun compte associé. Créez un compte via l’onglet « Inscription » dans l’app."
+        case .missingEstablishment(let message):
+            return message
         }
     }
 
-    /// Messages iOS peu parlants (« Application failed to respond », timeouts) → texte actionnable pour le commerçant.
+    /// Messages iOS peu parlants (« Application failed to respond », timeouts) → texte générique (pas lié aux seules notifications).
     private static func friendlyNetworkDescription(_ error: Error) -> String {
         let raw = error.localizedDescription
         if raw.localizedCaseInsensitiveContains("failed to respond")
             || raw.localizedCaseInsensitiveContains("couldn’t be completed")
             || raw.localizedCaseInsensitiveContains("could not be completed") {
-            return "Le serveur n’a pas répondu à temps (souvent : campagne « tous les inscrits » avec beaucoup de cartes Wallet). Réessayez dans un instant, ou testez d’abord « sur mon iPhone », ou ciblez un segment plus petit."
+            return "Le serveur n’a pas répondu à temps. Réessayez dans un instant. Si c’est une génération IA ou une grosse campagne, l’opération peut être longue : vérifiez aussi votre connexion."
         }
         if let url = error as? URLError {
             switch url.code {
             case .timedOut:
-                return "Délai dépassé : l’envoi des notifications peut prendre plus d’une minute. Réessayez ; si le problème continue, évitez « tous les inscrits » en un seul envoi ou contactez le support."
+                return "Délai dépassé : le serveur n’a pas fini à temps (génération IA, synchronisation lourde, etc.). Réessayez dans un moment avec une bonne connexion ; si ça bloque souvent, contactez le support."
             case .notConnectedToInternet:
                 return "Pas de connexion Internet."
             case .networkConnectionLost, .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed:
@@ -56,5 +62,14 @@ enum APIError: LocalizedError {
             }
         }
         return "Réseau : \(raw)"
+    }
+
+    /// Annulation iOS (nouvelle requête, fermeture d’écran) — ne pas traiter comme une vraie erreur métier.
+    static func isBenignRequestCancellation(_ error: Error) -> Bool {
+        if let url = error as? URLError, url.code == .cancelled { return true }
+        if let api = error as? APIError, case .network(let underlying) = api {
+            return (underlying as? URLError)?.code == .cancelled
+        }
+        return false
     }
 }

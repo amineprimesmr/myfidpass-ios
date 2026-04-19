@@ -1,0 +1,18 @@
+---
+description: Déployer le SaaS après chaque modification demandée par l'utilisateur
+alwaysApply: true
+---
+
+# Déploiement après chaque modification
+
+À **chaque fois que l'utilisateur demande une modification** qui touche le projet **fidelity** (SaaS / site myfidpass.fr) :
+
+1. **Après avoir appliqué les changements**, exécuter le déploiement sans attendre que l'utilisateur le demande.
+2. **Commande** : `cd /Users/amine/Desktop/fidelity && npm run deploy`
+3. Le script fait `git add -A`, commit, `git push origin main`, ce qui déclenche Vercel (frontend) et Railway (backend). Les changements sont en ligne sur myfidpass.fr sous 1–2 minutes.
+4. Indiquer à l'utilisateur que le déploiement a été fait et qu'il peut rafraîchir le site.
+5. **Si `git push` échoue** avec `fatal: mmap failed` (souvent dépôt sur Bureau iCloud ou pack Git lourd) : appliquer la procédure de secours dans **`Docs/DEPLOY-FIDELITY-GIT-MMAP.md`** (clone `/tmp`, copie des fichiers listés par `git diff origin/main..HEAD`, push via `gh auth token`). Ce n'est **pas** automatique entre sessions : chaque agent doit la relancer si le push standard échoue.
+
+**Exception** : si l'utilisateur dit explicitement de ne pas déployer, ou si les changements concernent uniquement le projet **myfidpass** (app iOS) sans toucher à fidelity.
+
+Règle à retenir : **modif sur fidelity → déployer à la fin**.

@@ -3,7 +3,9 @@
 //  myfidpass
 //
 //  Détourage fond logo pour collage sur fond IA.
-//  Stratégie : détection dynamique de la couleur de fond + BFS depuis tous les bords.
+//  Stratégie : détection dynamique de la couleur de fond + BFS depuis tous les bords,
+//  puis seconde passe sur les « cavités » (même couleur que le fond mais non reliée au bord :
+//  trous fermés des lettres A, R, O, B, etc.).
 //  Conditions requises pour appliquer le détourage :
 //    1. L'image ne possède pas déjà de transparence significative (> 5 % des pixels).
 //    2. Le fond détecté est uniforme : >= 50 % des pixels de bord appartiennent à la couleur
@@ -175,8 +177,35 @@ enum FlyerLogoBackgroundPrepared {
                 tryEnqueue(x, y + 1); tryEnqueue(x, y - 1)
             }
 
+            // ── 3b. Contreformes (trous dans les lettres) ──────────────────────────────
+            // Le BFS depuis le bord ne traverse pas le trait du logo : une zone de la couleur
+            // du fond entièrement entourée par le sujet reste « non visitée ». On retire aussi
+            // ces composantes connexes (même critère isBg, 4-voisinage).
+            var shouldClear = visited
+            var cavitySeen = [Bool](repeating: false, count: w * h)
+
+            for start in 0..<(w * h) {
+                guard !visited[start], !cavitySeen[start], isBg(start) else { continue }
+                var stack: [Int] = [start]
+                cavitySeen[start] = true
+                while let i = stack.popLast() {
+                    shouldClear[i] = true
+                    let x = i % w
+                    let y = i / w
+                    for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                        let nx = x + dx
+                        let ny = y + dy
+                        guard nx >= 0, nx < w, ny >= 0, ny < h else { continue }
+                        let ni = ny * w + nx
+                        guard !visited[ni], !cavitySeen[ni], isBg(ni) else { continue }
+                        cavitySeen[ni] = true
+                        stack.append(ni)
+                    }
+                }
+            }
+
             // ── 4. Effacer les pixels de fond (alpha = 0) ─────────────────────────────
-            for i in 0..<(w * h) where visited[i] {
+            for i in 0..<(w * h) where shouldClear[i] {
                 let o = i * bpp
                 base[o] = 0; base[o + 1] = 0; base[o + 2] = 0; base[o + 3] = 0
             }

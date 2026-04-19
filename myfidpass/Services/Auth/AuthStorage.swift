@@ -27,10 +27,8 @@ enum AuthStorage {
         static let currentBusinessSlug = "myfidpass.auth.currentBusinessSlug"
         /// `slug` → `dashboard_token` (GET login/me) pour l’en-tête `X-Dashboard-Token` sur les routes dashboard.
         static let dashboardTokensBySlug = "myfidpass.auth.dashboardTokensBySlug"
-        /// Après `POST /api/auth/register` : ouvrir une fois la feuille d’abonnement à l’entrée dans l’app.
+        /// Après `POST /api/auth/register` : afficher le paywall avant l’accès aux onglets.
         static let pendingOpenMerchantSubscriptionSheetAfterSignup = "myfidpass.auth.pendingOpenMerchantSubscriptionSheetAfterSignup"
-        /// Après `POST /api/auth/register` : autoriser le tutoriel d’accueil (spotlight) lorsque l’utilisateur arrive sur l’onglet Accueil.
-        static let pendingShowMerchantHomeTutorialAfterSignup = "myfidpass.auth.pendingShowMerchantHomeTutorialAfterSignup"
         /// Identifiant utilisateur API (`GET /me` → `user.id`) — RevenueCat `logIn` (stable par compte).
         static let userId = "myfidpass.auth.userId"
     }
@@ -147,31 +145,10 @@ enum AuthStorage {
         return (defaults.dictionary(forKey: Key.dashboardTokensBySlug) as? [String: String])?[k]
     }
 
-    /// Une fois à `true` après inscription réussie ; consommé par `ContentView` à l’ouverture de la feuille Stripe.
+    /// Une fois à `true` après inscription réussie ; consommé par `ContentView` (paywall racine ou feuille).
     static var pendingOpenMerchantSubscriptionSheetAfterSignup: Bool {
         get { defaults.bool(forKey: Key.pendingOpenMerchantSubscriptionSheetAfterSignup) }
         set { defaults.set(newValue, forKey: Key.pendingOpenMerchantSubscriptionSheetAfterSignup) }
-    }
-
-    /// Une fois à `true` après inscription réussie ; consommé par `DashboardView` à la fin du tutoriel
-    /// (spotlight « User-Tutorial-Screen »). Jamais activé pour un compte existant.
-    static var pendingShowMerchantHomeTutorialAfterSignup: Bool {
-        get { defaults.bool(forKey: Key.pendingShowMerchantHomeTutorialAfterSignup) }
-        set { defaults.set(newValue, forKey: Key.pendingShowMerchantHomeTutorialAfterSignup) }
-    }
-
-    /// Clé `@AppStorage` partagée avec `DashboardView` et `OneTimeOnBoarding` — booléen « tutoriel vu ? ».
-    /// Bumpée à `v2` pour re-déclencher le tutoriel sur tous les devices où la `v1` était coincée à `true`.
-    static let merchantHomeTutorialCompletedKey = "myfidpass.merchantHomeTutorial.v2"
-
-    /// Arme le tutoriel d’accueil pour la prochaine apparition (signup réussi) :
-    /// - pose le flag « pending » consommé côté `DashboardView` ;
-    /// - **remet à `false`** la clé AppStorage `merchantHomeTutorial.v2` pour qu’un compte déjà marqué
-    ///   comme onboardé voie quand même le tutoriel sur un nouveau signup (sinon une seule complétion
-    ///   historique désactive tout tutoriel futur, y compris après réinstallation si UserDefaults survit).
-    static func armMerchantHomeTutorialAfterSignup() {
-        defaults.set(true, forKey: Key.pendingShowMerchantHomeTutorialAfterSignup)
-        defaults.set(false, forKey: merchantHomeTutorialCompletedKey)
     }
 
     static func clearSession() {
@@ -187,10 +164,8 @@ enum AuthStorage {
         defaults.removeObject(forKey: Key.currentBusinessSlug)
         defaults.removeObject(forKey: Key.dashboardTokensBySlug)
         defaults.removeObject(forKey: Key.pendingOpenMerchantSubscriptionSheetAfterSignup)
-        defaults.removeObject(forKey: Key.pendingShowMerchantHomeTutorialAfterSignup)
-        // Déconnexion : ré-autoriser le tutoriel pour un futur signup/connexion depuis ce device.
-        defaults.removeObject(forKey: merchantHomeTutorialCompletedKey)
-        // On nettoie aussi l'ancienne clé v1 au cas où pour éviter toute confusion.
+        defaults.removeObject(forKey: "myfidpass.auth.pendingShowMerchantHomeTutorialAfterSignup")
+        defaults.removeObject(forKey: "myfidpass.merchantHomeTutorial.v2")
         defaults.removeObject(forKey: "myfidpass.merchantHomeTutorial.v1")
     }
 }

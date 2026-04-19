@@ -2,71 +2,137 @@
 //  FirstLaunchOnboardingView.swift
 //  myfidpass
 //
-//  Onboarding style iOS affiché au tout premier lancement de l’app, avant la page de connexion.
+//  Premier lancement : connexion / inscription (RootView) après recherche d’établissement.
 //
 
 import SwiftUI
-import UIKit
 
-/// Clé UserDefaults : une fois à true, l’onboarding premier lancement n’est plus affiché.
+/// Premier lancement : recherche d’établissement puis connexion / inscription.
+/// Déconnexion : retour direct sur l’écran d’auth (comme Shopify) — la phase « commerce » ne se rejoue pas.
+/// Suppression de compte : phase « commerce » à refaire.
 enum FirstLaunchOnboarding {
+    /// Ancienne clé bool (compat lecture migration uniquement).
     static let key = "myfidpass.hasCompletedFirstLaunchOnboarding"
+    /// `needs` = afficher la recherche établissement ; `done` = aller sur connexion / inscription.
+    private static let merchantPremisesPhaseKey = "myfidpass.merchantPremises.phase"
+    private static let phaseNeeds = "needs"
+    private static let phaseDone = "done"
+    private static let lastLaunchedShortVersionKey = "myfidpass.lastLaunchedShortVersion"
 
+    /// À appeler tôt au démarrage (ex. `AuthService.loadFromStorage`) avant toute décision d’UI welcome.
+    static func bootstrapInstallAndMigrateMerchantPhaseIfNeeded() {
+        let d = UserDefaults.standard
+        if d.object(forKey: merchantPremisesPhaseKey) != nil {
+            recordLastLaunchedAppVersion()
+            return
+        }
+        let previousVersion = d.string(forKey: lastLaunchedShortVersionKey)
+        if d.bool(forKey: key) {
+            d.set(phaseDone, forKey: merchantPremisesPhaseKey)
+        } else if previousVersion != nil {
+            d.set(phaseDone, forKey: merchantPremisesPhaseKey)
+        } else if hasLegacyAppActivityIndicators() {
+            d.set(phaseDone, forKey: merchantPremisesPhaseKey)
+        } else {
+            // Premier lancement (nouvel install) : commencer par la page « renseignez votre établissement ».
+            d.set(phaseNeeds, forKey: merchantPremisesPhaseKey)
+        }
+        recordLastLaunchedAppVersion()
+    }
+
+    private static func recordLastLaunchedAppVersion() {
+        let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"
+        UserDefaults.standard.set(v, forKey: lastLaunchedShortVersionKey)
+    }
+
+    /// Heuristique : appareil déjà utilisé avec une version antérieure (sans `merchantPremisesPhaseKey`).
+    private static func hasLegacyAppActivityIndicators() -> Bool {
+        let d = UserDefaults.standard
+        if d.bool(forKey: AuthStorage.Key.isLoggedIn) { return true }
+        if let em = d.string(forKey: AuthStorage.Key.userEmail)?.trimmingCharacters(in: .whitespacesAndNewlines), !em.isEmpty {
+            return true
+        }
+        if let dash = d.dictionary(forKey: AuthStorage.Key.dashboardTokensBySlug) as? [String: String], !dash.isEmpty {
+            return true
+        }
+        if d.object(forKey: "myfidpass.sync.lastSyncDate") != nil { return true }
+        if let pid = d.string(forKey: "myfidpass.ob.placeId")?.trimmingCharacters(in: .whitespacesAndNewlines), !pid.isEmpty {
+            return true
+        }
+        if d.object(forKey: "myfidpass.templateLastSavedAt") != nil { return true }
+        return false
+    }
+
+    /// `true` une fois l’étape « renseignez votre commerce » terminée (ou migrée).
     static var hasCompleted: Bool {
-        get { UserDefaults.standard.bool(forKey: key) }
-        set { UserDefaults.standard.set(newValue, forKey: key) }
+        get { UserDefaults.standard.string(forKey: merchantPremisesPhaseKey) == phaseDone }
+        set {
+            UserDefaults.standard.set(newValue ? phaseDone : phaseNeeds, forKey: merchantPremisesPhaseKey)
+        }
+    }
+
+    static func markMerchantPremisesOnboardingFinished() {
+        UserDefaults.standard.set(phaseDone, forKey: merchantPremisesPhaseKey)
+    }
+
+    /// Après suppression de compte : tout revoir depuis le début (onboarding + clés lieu éventuelles).
+    static func resetAfterAccountDeletion() {
+        UserDefaults.standard.set(phaseNeeds, forKey: merchantPremisesPhaseKey)
+        UserDefaults.standard.removeObject(forKey: key)
+        let d = UserDefaults.standard
+        [
+            "myfidpass.ob.placeId",
+            "myfidpass.ob.placeDescription",
+            "myfidpass.ob.relaxPlaceRequirement",
+            "myfidpass.ob.establishment",
+            "myfidpass.ob.loyaltyStyle",
+            "myfidpass.ob.priorities",
+            "myfidpass.ob.teamSize",
+        ].forEach { d.removeObject(forKey: $0) }
+        MerchantLinkedPlaceCache.clear()
+    }
+
+    /// Lieu saisi pendant l’onboarding — à effacer une fois le compte créé (ne pas réappliquer au prochain utilisateur).
+    static func clearPendingEstablishmentFromOnboarding() {
+        let d = UserDefaults.standard
+        ["myfidpass.ob.placeId", "myfidpass.ob.placeDescription", "myfidpass.ob.relaxPlaceRequirement"].forEach {
+            d.removeObject(forKey: $0)
+        }
+    }
+
+    /// Source de vérité tant que l’inscription n’a pas réussi (évite les ratés si @State LoginView n’a pas fusionné).
+    static func readPendingEstablishment() -> (placeId: String?, description: String?, relax: Bool) {
+        let d = UserDefaults.standard
+        let rawId = d.string(forKey: "myfidpass.ob.placeId")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let pid = rawId.isEmpty ? nil : rawId
+        let desc = d.string(forKey: "myfidpass.ob.placeDescription")
+        let relax = d.bool(forKey: "myfidpass.ob.relaxPlaceRequirement")
+        return (pid, desc, relax)
+    }
+
+    /// Lieu + nom d’établissement requis pour une **nouvelle** inscription (même règle que l’API).
+    static func hasCompletePendingEstablishmentForRegistration() -> Bool {
+        let p = readPendingEstablishment()
+        let place = p.placeId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let name = p.description?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return !place.isEmpty && !name.isEmpty
     }
 }
 
 struct FirstLaunchOnboardingView: View {
     var onComplete: () -> Void
 
-    private let tint = Color(hex: "2563EB")
-    private var items: [iOS26StyleOnBoarding.Item] {
-        [
-            .init(
-                id: 0,
-                title: "Bienvenue sur MyFidpass",
-                subtitle: "L’app des commerçants pour fidéliser vos clients avec des cartes dans le Wallet iPhone.",
-                screenshot: UIImage(named: "Screen1")
-            ),
-            .init(
-                id: 1,
-                title: "Cartes dans le Wallet",
-                subtitle: "Créez une carte fidélité (tampons ou points), personnalisez le design.\nVos clients l’ajoutent en un tap sur leur iPhone.",
-                screenshot: UIImage(named: "Screen2")
-            ),
-            .init(
-                id: 2,
-                title: "Scannez et suivez",
-                subtitle: "Scannez le QR de la carte à chaque passage, ajoutez des tampons ou des points.\nConsultez l’activité et la liste des membres.",
-                screenshot: UIImage(named: "Screen4"),
-                zoomScale: 1.3,
-                zoomAnchor: .init(x: 0.5, y: 1.1)
-            ),
-            .init(
-                id: 3,
-                title: "Notifications ciblées",
-                subtitle: "Envoyez des offres et actualités à tous vos membres ou à des catégories (ex. fidèles, inactifs).",
-                screenshot: UIImage(named: "Screen3"),
-                zoomScale: 1.3,
-                zoomAnchor: .init(x: 0.5, y: -0.3)
-            ),
-            .init(
-                id: 4,
-                title: "Prêt à commencer",
-                subtitle: "Connectez-vous ou créez votre compte commerçant sur myfidpass.fr pour activer votre carte.",
-                screenshot: UIImage(named: "Screen5")
-            )
-        ]
-    }
-
     var body: some View {
-        iOS26StyleOnBoarding(tint: tint, hideBezels: false, isLightTheme: true, items: items) {
-            FirstLaunchOnboarding.hasCompleted = true
-            onComplete()
-        }
-        .statusBarHidden(true)
+        MyfidpassMerchantOnboardingRootView(
+            onComplete: {
+                FirstLaunchOnboarding.hasCompleted = true
+                onComplete()
+            },
+            onAlreadyHaveAccount: {
+                FirstLaunchOnboarding.hasCompleted = true
+                onComplete()
+            }
+        )
         .ignoresSafeArea()
     }
 }

@@ -118,7 +118,7 @@ struct AccountSettingsDetailView: View {
                         GroupedSettingsNavigationRow(
                             icon: "building.columns.fill",
                             title: "Modifier la fiche & l’adresse",
-                            subtitle: "Identité, coordonnées, réseaux",
+                            subtitle: nil,
                             value: nil,
                             showsChevron: true
                         )
@@ -133,16 +133,10 @@ struct AccountSettingsDetailView: View {
                         } label: {
                             HStack(spacing: 12) {
                                 GroupedSettingsIconBox(systemName: "lock.rotation")
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(isSendingPasswordReset ? "Envoi en cours…" : "Réinitialiser le mot de passe")
-                                        .font(.body.weight(.medium))
-                                        .foregroundStyle(Color(UIColor.label))
-                                    Text("Un lien sécurisé est envoyé à votre e-mail.")
-                                        .font(.caption)
-                                        .foregroundStyle(Color(UIColor.secondaryLabel))
-                                        .fixedSize(horizontal: false, vertical: true)
-                                }
-                                Spacer(minLength: 0)
+                                Text(isSendingPasswordReset ? "Envoi en cours…" : "Réinitialiser le mot de passe")
+                                    .font(.body.weight(.medium))
+                                    .foregroundStyle(Color(UIColor.label))
+                                    .frame(maxWidth: .infinity, alignment: .leading)
                             }
                             .padding(.horizontal, GroupedSettingsMetrics.horizontalPadding)
                             .padding(.vertical, GroupedSettingsMetrics.rowVerticalPadding)
@@ -154,7 +148,7 @@ struct AccountSettingsDetailView: View {
                         GroupedSettingsInfoRow(
                             icon: "lock.shield",
                             title: "Mot de passe",
-                            value: AuthStorage.authProvider == .apple ? "Géré par Apple" : "Géré par Google",
+                            value: passwordExternalProviderLabel,
                         )
                     }
                 }
@@ -167,8 +161,8 @@ struct AccountSettingsDetailView: View {
                     GroupedSettingsInfoRow(
                         icon: "info.circle.fill",
                         title: "Sessions",
-                        value: "Cet iPhone utilise votre compte. La liste des autres appareils n’est pas disponible dans l’app pour l’instant.",
-                        valueMultiline: true
+                        value: "—",
+                        valueMultiline: false
                     )
                 }
 
@@ -189,11 +183,6 @@ struct AccountSettingsDetailView: View {
                     .buttonStyle(.plain)
                 }
 
-                Text("Les données de fidélité sont sur les serveurs MyFidpass. Cet écran résume votre compte marchand.")
-                    .font(.caption)
-                    .foregroundStyle(Color(UIColor.secondaryLabel))
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, 4)
             }
             .padding(.horizontal, GroupedSettingsMetrics.horizontalPadding)
             .padding(.top, 8)
@@ -236,6 +225,17 @@ struct AccountSettingsDetailView: View {
         case .apple: return "Apple"
         case .google: return "Google"
         case .email: return "E-mail"
+        case .phone: return "Téléphone (SMS)"
+        }
+    }
+
+    /// Hors compte e-mail : mot de passe géré par le fournisseur tiers.
+    private var passwordExternalProviderLabel: String {
+        switch AuthStorage.authProvider {
+        case .apple: return "Géré par Apple"
+        case .google: return "Géré par Google"
+        case .phone: return "Connexion par SMS (sans mot de passe)"
+        case .email: return ""
         }
     }
 

@@ -27,10 +27,8 @@ private func walletLogoSlotSize(cardWidth: CGFloat, compact: Bool) -> (maxWidth:
     return (min(slotW * 1.05, cardWidth * 0.52), min(slotH * 1.12, 58))
 }
 
-/// Tailles de police proches du Wallet (lisibilité Ma carte).
+/// Tailles proches du Wallet : champs secondaires (label + valeur sous le bandeau).
 private enum PassFontSize {
-    static let primaryValue: CGFloat = 36
-    static let primaryLabel: CGFloat = 14
     static let fieldLabel: CGFloat = 12
     static let fieldValue: CGFloat = 17
     static let fieldLabelCompact: CGFloat = 10
@@ -59,46 +57,47 @@ struct WalletCardPreview: View {
     var labelColorHex: String? = nil
     /// Texte à droite dans l’en-tête (ex. « Récompenses ↗ »), comme `header_right_text` côté SaaS.
     var headerRightText: String? = nil
-    /// Libellé palier / récompense affiché sous les points (ou seul bloc si image de fond).
-    var rewardPreviewText: String? = nil
     /// Nom membre à droite (aperçu).
     var memberPreviewText: String? = nil
-    /// Libellé colonne gauche (SaaS : « Récompense »).
-    var rewardColumnTitle: String = "RÉCOMPENSE"
-    /// Libellé colonne droite (`label_member` API, défaut Membre).
+    /// Libellé colonne membre (`label_member` API, défaut Membre).
     var memberColumnTitle: String = "MEMBRE"
     var compact: Bool = false
     /// Tap sur une zone → édition ciblée (Ma Carte). `nil` = aperçu passif.
     var onEditZoneTap: ((CardPreviewEditZone) -> Void)? = nil
     /// URL encodée dans le QR (page carte fidélité). Si `nil`, QR de démonstration.
     var fidelityQRPayloadURL: String? = nil
+    /// Pastilles « Configurer » (complétion Ma carte) — non interactif, ne pas bloquer les taps.
+    var completionHighlightZones: Set<CardPreviewEditZone> = []
 
     private var primaryColor: Color { Color(hex: primaryColorHex) }
-    private var accentColor: Color { Color(hex: accentColorHex) }
-    private var labelColor: Color? { labelColorHex.flatMap { Color(hex: $0) } }
     /// Couleur effective du bandeau (section points / infos).
     private var bandeauColor: Color { stripColorHex.flatMap { Color(hex: $0) } ?? primaryColor }
+
+    /// PassKit `foregroundColor` — hex tel que sur le .pkpass (pas de recalcul de contraste).
+    private var passForegroundExact: Color { Color(hex: accentColorHex) }
+    /// PassKit `labelColor` — hex explicite ou défaut type Wallet sur fond clair/sombre.
+    private var passLabelExact: Color {
+        let t = labelColorHex?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !t.isEmpty { return Color(hex: t) }
+        return primaryColor.isDark ? Color.white.opacity(0.78) : Color.black.opacity(0.78)
+    }
 
     /// Avec image promo : en-tête aligné sur le fond carte (pas un bandeau strip figé, ex. vert template).
     private var headerBarColor: Color {
         hasCardBackground ? primaryColor : bandeauColor
     }
 
-    /// Même règle que le SaaS : avec image de fond, on masque le gros bloc points et on garde paliers + membre.
+    /// Avec image de fond : pas de gros chiffre POINTS sur le bandeau (ligne « Points : n » dans le corps, comme Wallet).
     private var hasCardBackground: Bool {
         let local = cardBackgroundImagePath.map { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? false
         let rem = cardBackgroundRemoteURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return local || (!rem.isEmpty && URL(string: rem).map { Self.isAPICardBackgroundURL($0) } ?? false)
+        let remoteOk = rem.isEmpty ? false : (APIResourceURL.resolved(from: rem).map { Self.isAPICardBackgroundURL($0) } ?? false)
+        return local || remoteOk
     }
 
     private var headerRightDisplay: String {
         let t = headerRightText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return t.isEmpty ? "Récompenses ↗" : t
-    }
-
-    private var rewardDisplay: String {
-        let t = rewardPreviewText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return t.isEmpty ? "Paliers en magasin" : t
     }
 
     private var memberDisplay: String {
@@ -115,6 +114,18 @@ struct WalletCardPreview: View {
             cardContent(cardWidth: w)
                 .frame(width: w, height: h)
                 .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
+                .overlay {
+                    if !completionHighlightZones.isEmpty, let onTap = onEditZoneTap {
+                        CardPreviewCompletionPillsOverlay(
+                            cardWidth: w,
+                            totalHeight: h,
+                            compact: compact,
+                            zones: completionHighlightZones,
+                            layoutStyle: .walletPoints,
+                            onTapZone: onTap
+                        )
+                    }
+                }
                 .overlay(
                     RoundedRectangle(cornerRadius: corner, style: .continuous)
                         .strokeBorder(.white.opacity(0.35), lineWidth: 1)
@@ -131,54 +142,60 @@ struct WalletCardPreview: View {
         .animation(.easeOut(duration: 0.2), value: logoURL)
         .animation(.easeOut(duration: 0.2), value: stampEmoji)
         .animation(.easeOut(duration: 0.25), value: cardBackgroundRemoteURL)
+        .animation(.easeOut(duration: 0.2), value: completionHighlightZones.count)
     }
 
     private func cardContent(cardWidth: CGFloat) -> some View {
         VStack(spacing: 0) {
             headerSection(cardWidth: cardWidth)
-                .zIndex(1)
+                .zIndex(2)
             cardBackgroundBannerSection(cardWidth: cardWidth)
-                .zIndex(0)
+                .zIndex(1)
             bodySection(cardWidth: cardWidth)
                 .zIndex(0)
         }
     }
 
+    private func walletBannerHeight(cardWidth: CGFloat) -> CGFloat {
+        max(1, cardWidth / walletCardBackgroundBannerAspect)
+    }
+
     /// En-tête : fond couleur strip (comme le SaaS) ; logo à gauche ; lien à droite. L’image promo est dans `cardBackgroundBannerSection`.
     private func headerSection(cardWidth: CGFloat) -> some View {
         let logoSlot = walletLogoSlotSize(cardWidth: cardWidth, compact: compact)
-        let headerTopInset: CGFloat = compact ? 6 : 11
+        let scale = AppTheme.CardPreviewLayout.widthScale(cardWidth: cardWidth)
+        let headerTopInset: CGFloat = compact ? 7 : 12
         let headerBottomInset: CGFloat = compact ? 6 : 8
-        let headerH: CGFloat = compact ? 64 : 92
+        let headerH: CGFloat = compact ? 70 : 100
         return ZStack(alignment: .topLeading) {
             headerBarColor
             VStack(spacing: 0) {
                 Color.clear
                     .frame(height: headerTopInset)
-                HStack(alignment: .center, spacing: 0) {
+                HStack(alignment: .top, spacing: 0) {
                     CardPreviewTappableZone(
                         zone: .logoBand,
                         accessibilityLabel: "Modifier le logo ou le texte du bandeau",
                         onEditZoneTap: onEditZoneTap
                     ) {
-                        logoInStrip(maxWidth: logoSlot.maxWidth, maxHeight: logoSlot.maxHeight)
+                        logoInStrip(maxWidth: logoSlot.maxWidth, maxHeight: logoSlot.maxHeight, cardWidth: cardWidth)
                             .frame(maxWidth: logoSlot.maxWidth, maxHeight: logoSlot.maxHeight, alignment: .topLeading)
                             .clipped()
                     }
                     Spacer(minLength: compact ? 4 : 8)
                     CardPreviewTappableZone(
                         zone: .headerRight,
-                        accessibilityLabel: "Modifier le texte en haut à droite",
+                        accessibilityLabel: "Modifier les récompenses",
                         onEditZoneTap: onEditZoneTap
                     ) {
                         Text(headerRightDisplay)
-                            .font(.system(size: compact ? 11 : 16, weight: .semibold))
-                            .foregroundStyle(labelColor ?? .white.opacity(0.95))
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.7)
+                            .font(.system(size: AppTheme.CardPreviewLayout.scaledFont(base: compact ? 10 : 13, cardWidth: cardWidth), weight: .semibold))
+                            .foregroundStyle(passForegroundExact)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.trailing)
+                            .minimumScaleFactor(0.62 * scale)
                     }
                 }
-                .offset(y: compact ? -2 : -4)
                 .frame(maxWidth: .infinity)
                 .padding(.leading, compact ? 12 : 16)
                 .padding(.trailing, compact ? 10 : 12)
@@ -191,26 +208,23 @@ struct WalletCardPreview: View {
         .clipped()
     }
 
-    /// Bandeau image entre en-tête et corps — ratio SaaS `750×246`, `cover`.
+    /// Bandeau `750×246` : image commerce, ou visuel par défaut (`banner`) **sans** texte par-dessus — le solde est dans le corps (comme le pass Wallet sans primary sur le strip).
     @ViewBuilder
     private func cardBackgroundBannerSection(cardWidth: CGFloat) -> some View {
+        let bannerHeight = walletBannerHeight(cardWidth: cardWidth)
         if hasCardBackground {
-            let bannerHeight = max(1, cardWidth / walletCardBackgroundBannerAspect)
             let banner = Color.clear
                 .frame(maxWidth: .infinity)
                 .frame(height: bannerHeight)
                 .overlay {
                     Group {
-                        if let path = cardBackgroundImagePath, !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                           let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
-                           let uiImage = UIImage(data: data) {
-                            Image(uiImage: uiImage)
-                                .resizable()
-                                .scaledToFill()
+                        if let path = cardBackgroundImagePath, !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            AsyncLocalFileImage(filePath: path, contentMode: .fill)
+                                .id(path)
                         } else if let remote = cardBackgroundRemoteURL?.trimmingCharacters(in: .whitespacesAndNewlines), !remote.isEmpty,
-                                  let url = URL(string: remote), Self.isAPICardBackgroundURL(url) {
+                                  let url = APIResourceURL.resolved(from: remote), Self.isAPICardBackgroundURL(url) {
                             AuthenticatedLogoView(url: url, stripBackgroundFill: true)
-                                .id(remote)
+                                .id(url.absoluteString)
                         } else {
                             bandeauColor
                         }
@@ -225,40 +239,67 @@ struct WalletCardPreview: View {
             ) {
                 banner
             }
+        } else {
+            cardBackgroundBannerPointsOnly(cardWidth: cardWidth, bannerHeight: bannerHeight)
+        }
+    }
+
+    /// Sans image personnalisée : uniquement le visuel `banner` (pas de solde superposé — les points sont sous le bandeau, comme sans image perso sur le Wallet).
+    private func cardBackgroundBannerPointsOnly(cardWidth: CGFloat, bannerHeight: CGFloat) -> some View {
+        CardPreviewTappableZone(
+            zone: .backgroundImage,
+            accessibilityLabel: "Ajouter une image de fond (optionnel)",
+            onEditZoneTap: onEditZoneTap
+        ) {
+            ZStack {
+                // Ressource Xcode uniquement pour l’aperçu in-app. Le vrai pass Wallet utilise
+                // `card_background` (upload) ou `backend/src/pass/assets/default-points-strip.png` (sync `npm run sync:wallet-strip`).
+                Image("banner")
+                    .resizable()
+                    .scaledToFill()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
+                LinearGradient(
+                    colors: [Color.black.opacity(0.35), Color.black.opacity(0.08)],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+                .allowsHitTesting(false)
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: bannerHeight)
+            .clipped()
         }
     }
 
     /// Logo ou texte dans le bandeau selon stripDisplayMode (taille calquée sur le slot Wallet).
     @ViewBuilder
-    private func logoInStrip(maxWidth: CGFloat, maxHeight: CGFloat) -> some View {
+    private func logoInStrip(maxWidth: CGFloat, maxHeight: CGFloat, cardWidth: CGFloat) -> some View {
+        let textPrimary = AppTheme.CardPreviewLayout.scaledFont(base: compact ? 18 : 26, cardWidth: cardWidth)
         Group {
             if stripDisplayMode == "text" {
                 Text(stripText?.trimmingCharacters(in: .whitespaces).isEmpty == false ? (stripText ?? displayName) : displayName)
-                    .font(.system(size: compact ? 18 : 26, weight: .semibold))
+                    .font(.system(size: textPrimary, weight: .semibold))
                     .foregroundStyle(.white)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
-                    .minimumScaleFactor(0.75)
+                    .minimumScaleFactor(0.72)
                     .frame(maxWidth: maxWidth, maxHeight: maxHeight, alignment: .topLeading)
             } else if let urlString = logoURL?.trimmingCharacters(in: .whitespaces), !urlString.isEmpty {
                 logoImage(from: urlString)
                     .frame(maxWidth: maxWidth, maxHeight: maxHeight, alignment: .topLeading)
                     .clipped()
             } else {
-                Image(systemName: "building.2.fill")
-                    .font(.system(size: compact ? 21 : 30))
-                    .foregroundStyle(.white.opacity(0.95))
-                    .frame(width: min(maxHeight * 0.85, 44), height: min(maxHeight * 0.85, 44))
-                    .frame(maxWidth: maxWidth, maxHeight: maxHeight, alignment: .topLeading)
+                stripLogoPlaceholder(maxWidth: maxWidth, maxHeight: maxHeight)
             }
         }
     }
 
-    /// Corps : points + paliers (+ avec image de fond : 3 colonnes comme sur le pass Wallet).
+    /// Corps : Points (gauche) + Membre (droite), sous le bandeau — avec ou sans image de fond (même mise en page que le Wallet).
     private func bodySection(cardWidth: CGFloat) -> some View {
         let insetH: CGFloat = compact ? 12 : 16
         return VStack(spacing: 0) {
-            // Fond coloré : tap hors champs (points, paliers, membre) → couleurs de la carte ; tap sur la zone points uniquement → règles du programme.
+            // Fond coloré : tap hors champs → couleurs ; zone points → règles du programme.
             ZStack(alignment: .topLeading) {
                 if let onEditZoneTap {
                     Button {
@@ -268,71 +309,34 @@ struct WalletCardPreview: View {
                             .contentShape(Rectangle())
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
-                    .buttonStyle(.borderless)
+                    .buttonStyle(PassPreviewZoneButtonStyle())
                 }
                 VStack(alignment: .leading, spacing: 0) {
-                    if hasCardBackground {
-                        /// Avec image sur le strip : POINTS + RÉCOMPENSE + MEMBRE sur une ligne (comme la vraie carte).
-                        HStack(alignment: .top, spacing: compact ? 4 : 8) {
-                            CardPreviewTappableZone(
-                                zone: .mainMetrics,
-                                accessibilityLabel: "Règles du programme (points ou tampons)",
-                                onEditZoneTap: onEditZoneTap
-                            ) {
-                                pointsFieldColumn(emphasized: false)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                            }
-                            CardPreviewTappableZone(
-                                zone: .rewardColumn,
-                                accessibilityLabel: "Modifier la récompense ou les paliers",
-                                onEditZoneTap: onEditZoneTap
-                            ) {
-                                fieldBlock(label: rewardColumnTitle, value: rewardDisplay, align: .leading)
-                                    .frame(maxWidth: .infinity)
-                            }
-                            CardPreviewTappableZone(
-                                zone: .memberColumn,
-                                accessibilityLabel: "Modifier les libellés colonne membre",
-                                onEditZoneTap: onEditZoneTap
-                            ) {
-                                fieldBlock(label: memberColumnTitle, value: memberDisplay, align: .trailing)
-                                    .frame(maxWidth: .infinity)
-                            }
-                        }
-                        .padding(.horizontal, insetH)
-                        .padding(.top, compact ? 14 : 20)
-                    } else {
+                    HStack(alignment: .top, spacing: compact ? 4 : 8) {
                         CardPreviewTappableZone(
                             zone: .mainMetrics,
-                            accessibilityLabel: "Règles du programme (points ou tampons)",
+                            accessibilityLabel: "Système de carte",
                             onEditZoneTap: onEditZoneTap
                         ) {
-                            pointsFieldColumn(emphasized: true)
-                                .padding(.leading, insetH)
-                                .padding(.top, compact ? 12 : 22)
+                            fieldBlock(
+                                label: "POINTS",
+                                value: "\(stampsCount)",
+                                align: .leading,
+                                cardWidth: cardWidth
+                            )
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
-
-                        HStack(alignment: .top, spacing: 0) {
-                            CardPreviewTappableZone(
-                                zone: .rewardColumn,
-                                accessibilityLabel: "Modifier la récompense ou les paliers",
-                                onEditZoneTap: onEditZoneTap
-                            ) {
-                                fieldBlock(label: rewardColumnTitle, value: rewardDisplay, align: .leading)
-                                    .frame(maxWidth: .infinity)
-                            }
-                            CardPreviewTappableZone(
-                                zone: .memberColumn,
-                                accessibilityLabel: "Modifier les libellés colonne membre",
-                                onEditZoneTap: onEditZoneTap
-                            ) {
-                                fieldBlock(label: memberColumnTitle, value: memberDisplay, align: .trailing)
-                                    .frame(maxWidth: .infinity)
-                            }
+                        CardPreviewTappableZone(
+                            zone: .memberColumn,
+                            accessibilityLabel: "Modifier les libellés colonne membre",
+                            onEditZoneTap: onEditZoneTap
+                        ) {
+                            fieldBlock(label: memberColumnTitle, value: memberDisplay, align: .trailing, cardWidth: cardWidth)
+                                .frame(maxWidth: .infinity)
                         }
-                        .padding(.horizontal, insetH)
-                        .padding(.top, compact ? 22 : 32)
                     }
+                    .padding(.horizontal, insetH)
+                    .padding(.top, compact ? 14 : 20)
 
                     Spacer(minLength: compact ? 18 : 44)
                 }
@@ -350,16 +354,16 @@ struct WalletCardPreview: View {
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .contentShape(Rectangle())
                     }
-                    .buttonStyle(.borderless)
+                    .buttonStyle(PassPreviewZoneButtonStyle())
                 }
                 HStack {
                     Spacer(minLength: 0)
                     CardPreviewTappableZone(
                         zone: .qrCode,
-                        accessibilityLabel: "Lien et QR code pour vos clients",
+                        accessibilityLabel: "Ouvrir la page où vos clients ajoutent la carte",
                         onEditZoneTap: onEditZoneTap
                     ) {
-                        walletQrCodeBlock()
+                        walletQrCodeBlock(cardWidth: cardWidth)
                     }
                     Spacer(minLength: 0)
                 }
@@ -375,52 +379,37 @@ struct WalletCardPreview: View {
     }
 
     @ViewBuilder
-    private func walletQrCodeBlock() -> some View {
-        let payload = fidelityQRPayloadURL?.trimmingCharacters(in: .whitespacesAndNewlines).flatMap { $0.isEmpty ? nil : $0 }
-            ?? "5b34fc46-19d4-46db-95d3-dc2ffbc0"
-        if let qrImage = QRCodeGenerator.generateQR(from: payload, size: compact ? 80 : 120) {
+    private func walletQrCodeBlock(cardWidth: CGFloat) -> some View {
+        let trimmed = fidelityQRPayloadURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let payload = trimmed.isEmpty ? "5b34fc46-19d4-46db-95d3-dc2ffbc0" : trimmed
+        let side = AppTheme.CardPreviewLayout.qrDisplaySide(cardWidth: cardWidth, compact: compact)
+        let renderPx = max(128, ceil(side * AppTheme.DisplayMetrics.displayScale))
+        if let qrImage = QRCodeGenerator.generateQR(from: payload, size: renderPx) {
             Image(uiImage: qrImage)
                 .interpolation(.none)
                 .resizable()
                 .scaledToFit()
-                .frame(width: compact ? 80 : 120, height: compact ? 80 : 120)
+                .frame(width: side, height: side)
                 .padding(4)
                 .background(Color.white)
                 .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
         }
     }
 
-    /// Colonne « Points » : mise en avant si `emphasized` (sans image de fond), sinon taille alignée sur les autres champs.
-    private func pointsFieldColumn(emphasized: Bool) -> some View {
-        let valueSize: CGFloat = emphasized
-            ? (compact ? 30 : PassFontSize.primaryValue)
-            : (compact ? PassFontSize.fieldValueCompact : PassFontSize.fieldValue)
-        let valueWeight: Font.Weight = emphasized ? .semibold : .regular
-        let labelSize: CGFloat = emphasized
-            ? (compact ? 13 : PassFontSize.primaryLabel)
-            : (compact ? PassFontSize.fieldLabelCompact : PassFontSize.fieldLabel)
-        return VStack(alignment: .leading, spacing: compact ? 3 : 4) {
-            Text("POINTS")
-                .font(.system(size: labelSize, weight: .medium))
-                .foregroundStyle(labelColor ?? .white.opacity(0.9))
-            Text("\(stampsCount)")
-                .font(.system(size: valueSize, weight: valueWeight))
-                .foregroundStyle(accentColor)
-                .lineLimit(1)
-                .minimumScaleFactor(0.75)
-        }
-    }
-
-    private func fieldBlock(label: String, value: String, align: HorizontalAlignment = .leading) -> some View {
-        VStack(alignment: align, spacing: compact ? 3 : 4) {
+    private func fieldBlock(label: String, value: String, align: HorizontalAlignment = .leading, cardWidth: CGFloat) -> some View {
+        let labelPx = AppTheme.CardPreviewLayout.scaledFont(base: compact ? PassFontSize.fieldLabelCompact : PassFontSize.fieldLabel, cardWidth: cardWidth)
+        let valuePx = AppTheme.CardPreviewLayout.scaledFont(base: compact ? PassFontSize.fieldValueCompact : PassFontSize.fieldValue, cardWidth: cardWidth, minSize: 10)
+        return VStack(alignment: align, spacing: compact ? 3 : 4) {
             Text(label)
-                .font(.system(size: compact ? PassFontSize.fieldLabelCompact : PassFontSize.fieldLabel, weight: .medium))
-                .foregroundStyle(labelColor ?? .white.opacity(0.88))
-            Text(value)
-                .font(.system(size: compact ? PassFontSize.fieldValueCompact : PassFontSize.fieldValue, weight: .regular))
-                .foregroundStyle(accentColor)
+                .font(.system(size: labelPx, weight: .medium))
+                .foregroundStyle(passLabelExact)
                 .lineLimit(2)
-                .minimumScaleFactor(0.78)
+                .minimumScaleFactor(0.72)
+            Text(value)
+                .font(.system(size: valuePx, weight: .regular))
+                .foregroundStyle(passForegroundExact)
+                .lineLimit(3)
+                .minimumScaleFactor(0.68)
                 .multilineTextAlignment(align == .leading ? .leading : .trailing)
         }
         .frame(maxWidth: .infinity, alignment: align == .leading ? .leading : .trailing)
@@ -429,44 +418,27 @@ struct WalletCardPreview: View {
     @ViewBuilder
     private func logoImage(from urlString: String) -> some View {
         let trimmed = urlString.trimmingCharacters(in: .whitespaces)
-        let filePath: String? = if trimmed.hasPrefix("/") || trimmed.hasPrefix("file:") {
-            trimmed.hasPrefix("file:") ? URL(string: trimmed)?.path : trimmed
-        } else if trimmed.contains("CardLogos"), let full = CardLogoStorage.fullPath(forRelative: trimmed) {
-            full
-        } else {
-            nil
-        }
-        if let path = filePath {
-            let url = URL(fileURLWithPath: path)
-            if let data = try? Data(contentsOf: url), let uiImage = UIImage(data: data) {
-                Image(uiImage: uiImage)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-            } else {
-                logoPlaceholder
-            }
-        } else if let url = URL(string: trimmed), isAPILogoURL(url) {
-            AuthenticatedLogoView(url: url, stripBackgroundFill: false)
-                .id(trimmed)
-        } else if let url = URL(string: trimmed) {
-            AsyncImage(url: url) { phase in
-                switch phase {
-                case .success(let image):
-                    image.resizable().aspectRatio(contentMode: .fit)
-                case .failure, .empty:
-                    logoPlaceholder
-                @unknown default:
-                    logoPlaceholder
-                }
-            }
+        if let path = APIResourceURL.localImageFilePathIfPresent(trimmed) {
+            AsyncLocalFileImage(filePath: path, contentMode: .fit)
+                .id(path)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        } else if let url = APIResourceURL.resolved(from: trimmed), isAPIStripLogoURL(url) {
+            let displayURL = MerchantLogoAssetCache.stripeLogoDisplayURL(url)
+            AuthenticatedLogoView(url: displayURL, stripBackgroundFill: false)
+                .id(displayURL.absoluteString)
+        } else if let url = APIResourceURL.resolved(from: trimmed) {
+            DecodedURLImage(url: url, contentMode: .fit, maxPixelDimension: 1000)
+                .id(url.absoluteString)
         } else {
             logoPlaceholder
         }
     }
 
-    private func isAPILogoURL(_ url: URL) -> Bool {
+    /// Logo bandeau Wallet / SaaS : `…/logo` exactement (pas `logo-icon`, pas notification).
+    private func isAPIStripLogoURL(_ url: URL) -> Bool {
         guard url.scheme == "http" || url.scheme == "https" else { return false }
-        return url.host() == APIConfig.baseURL.host() && url.path.contains("/logo")
+        guard url.host() == APIConfig.baseURL.host() else { return false }
+        return url.path.hasSuffix("/logo")
     }
 
     private static func isAPICardBackgroundURL(_ url: URL) -> Bool {
@@ -475,9 +447,21 @@ struct WalletCardPreview: View {
     }
 
     private var logoPlaceholder: some View {
-        Image(systemName: "photo.circle.fill")
-            .font(.title2)
-            .foregroundStyle(.white.opacity(0.7))
+        Image("votrelogo")
+            .renderingMode(.original)
+            .resizable()
+            .scaledToFit()
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .accessibilityLabel("Logo du commerce, à personnaliser")
+    }
+
+    private func stripLogoPlaceholder(maxWidth: CGFloat, maxHeight: CGFloat) -> some View {
+        Image("votrelogo")
+            .renderingMode(.original)
+            .resizable()
+            .scaledToFit()
+            .frame(maxWidth: maxWidth, maxHeight: maxHeight, alignment: .topLeading)
+            .accessibilityLabel("Logo du commerce, à personnaliser")
     }
 }
 
@@ -552,9 +536,12 @@ struct AuthenticatedLogoView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 }
             } else if failed {
-                Image(systemName: "photo.circle.fill")
-                    .font(.title2)
-                    .foregroundStyle(.white.opacity(0.7))
+                Image("votrelogo")
+                    .renderingMode(.original)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .accessibilityLabel("Logo du commerce, à personnaliser")
             } else {
                 ProgressView()
                     .tint(.white)
@@ -567,7 +554,8 @@ struct AuthenticatedLogoView: View {
         }
         .task(id: urlKey) {
             let loadKey = urlKey
-            if let instant = AuthenticatedMediaLoader.memoryCachedImage(for: url) {
+            let maxDim: CGFloat = url.path.contains("card-background") ? 1800 : 1000
+            if let instant = AuthenticatedMediaLoader.memoryCachedImage(for: url, maxPixelDimension: maxDim) {
                 await MainActor.run {
                     guard loadKey == urlKey else { return }
                     image = instant
@@ -581,7 +569,7 @@ struct AuthenticatedLogoView: View {
                 return
             }
             do {
-                let img = try await AuthenticatedMediaLoader.loadAuthenticatedImage(from: url)
+                let img = try await AuthenticatedMediaLoader.loadAuthenticatedImage(from: url, maxPixelDimension: maxDim)
                 guard !Task.isCancelled else { return }
                 await MainActor.run {
                     guard loadKey == urlKey else { return }
@@ -599,48 +587,14 @@ struct AuthenticatedLogoView: View {
     }
 }
 
-// MARK: - Grille tampons (usage ailleurs)
-
-private struct StampGridView: View {
-    let total: Int
-    let filled: Int
-    let accentColor: Color
-    let compact: Bool
-    private let maxCols = 5
-    var body: some View {
-        let rows = (total + maxCols - 1) / maxCols
-        let cols = min(total, maxCols)
-        let size: CGFloat = compact ? 6 : 10
-        let spacing: CGFloat = compact ? 5 : 8
-        VStack(alignment: .leading, spacing: spacing) {
-            ForEach(0..<rows, id: \.self) { row in
-                HStack(spacing: spacing) {
-                    ForEach(0..<cols, id: \.self) { col in
-                        let index = row * maxCols + col
-                        Group {
-                            if index < total {
-                                Circle()
-                                    .fill(index < filled ? accentColor : Color.white.opacity(0.4))
-                            } else {
-                                Color.clear
-                            }
-                        }
-                        .frame(width: size, height: size)
-                    }
-                }
-            }
-        }
-    }
-}
-
 #Preview {
     VStack(spacing: 24) {
         WalletCardPreview(
             displayName: "test",
             requiredStamps: 10,
             stampsCount: 3,
-            primaryColorHex: "0a7c42",
-            accentColorHex: "F59E0B",
+            primaryColorHex: AppTheme.WalletCardAppearanceDefaults.backgroundHex,
+            accentColorHex: AppTheme.WalletCardAppearanceDefaults.accentHex,
             logoURL: nil
         )
         .padding(.horizontal, 24)
@@ -649,8 +603,8 @@ private struct StampGridView: View {
             displayName: "Ma Carte",
             requiredStamps: 10,
             stampsCount: 0,
-            primaryColorHex: "0a7c42",
-            accentColorHex: "F59E0B",
+            primaryColorHex: AppTheme.WalletCardAppearanceDefaults.backgroundHex,
+            accentColorHex: AppTheme.WalletCardAppearanceDefaults.accentHex,
             logoURL: nil,
             compact: true
         )

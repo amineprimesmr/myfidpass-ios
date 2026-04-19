@@ -17,7 +17,15 @@ struct ScansTodayView: View {
     }
 
     private var stampsToday: Int { dataService.stampsCountToday() }
-    private var recentStamps: [Stamp] { dataService.recentStamps(limit: 100) }
+    private var recentStamps: [Stamp] {
+        let cal = Calendar.current
+        let start = cal.startOfDay(for: Date())
+        guard let template = dataService.currentCardTemplate() else { return [] }
+        return dataService.recentStamps(limit: 200).filter { stamp in
+            guard let d = stamp.createdAt, d >= start else { return false }
+            return stamp.clientCard?.template == template
+        }
+    }
 
     var body: some View {
         Group {
@@ -47,10 +55,13 @@ struct ScansTodayView: View {
                 .listStyle(.insetGrouped)
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .myfidpassRemoteSyncDidMerge)) { _ in
+            dataService.bumpRefreshAfterRemoteMerge()
+        }
         .navigationTitle("Scans aujourd'hui")
         .navigationBarTitleDisplayMode(.inline)
         .refreshable {
-            await syncService.syncIfNeeded()
+            await syncService.syncAfterServerMutation()
         }
         .background(AppTheme.Colors.background)
     }

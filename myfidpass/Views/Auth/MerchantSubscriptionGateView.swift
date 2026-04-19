@@ -6,34 +6,32 @@
 //
 
 import SwiftUI
-import RevenueCatUI
 
 struct MerchantSubscriptionGateView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var authService: AuthService
-    @EnvironmentObject private var syncService: SyncService
     @EnvironmentObject private var revenueCatSubscriptionState: RevenueCatSubscriptionState
 
     @State private var showStripeFallback = false
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            PaywallView()
+            CustomMerchantProPaywallView(onCloseRequested: finishMerchantSubscriptionGate)
 
             stripeFallbackBar
         }
-        .background(Color(.systemBackground))
+        .background(Color.black)
         .task {
             await revenueCatSubscriptionState.refreshCustomerInfo()
         }
         .onChange(of: revenueCatSubscriptionState.hasPremiumEntitlement) { _, _ in
-            if shouldDismissGateAsSubscribed { dismiss() }
+            if shouldDismissGateAsSubscribed { finishMerchantSubscriptionGate() }
         }
         .onChange(of: authService.merchantSubscription?.status) { _, _ in
-            if shouldDismissGateAsSubscribed { dismiss() }
+            if shouldDismissGateAsSubscribed { finishMerchantSubscriptionGate() }
         }
         .onChange(of: authService.isPlatformAdmin) { _, _ in
-            if shouldDismissGateAsSubscribed { dismiss() }
+            if shouldDismissGateAsSubscribed { finishMerchantSubscriptionGate() }
         }
         .sheet(isPresented: $showStripeFallback) {
             InAppSafariView(url: stripeCheckoutURL)
@@ -70,16 +68,11 @@ struct MerchantSubscriptionGateView: View {
             || revenueCatSubscriptionState.hasPremiumEntitlement
     }
 
+    /// Ferme la feuille / consomme le flag post-inscription pour laisser place à l’app.
     @MainActor
-    private func afterPurchaseOrRestore() async {
-        await revenueCatSubscriptionState.refreshCustomerInfo()
-        await authService.reconcileStripeSubscriptionFromServer(force: true)
-        await authService.refreshBusinessesIfNeeded()
-        syncService.invalidateSyncThrottle()
-        await syncService.syncAfterServerMutation()
-        if shouldDismissGateAsSubscribed {
-            dismiss()
-        }
+    private func finishMerchantSubscriptionGate() {
+        AuthStorage.pendingOpenMerchantSubscriptionSheetAfterSignup = false
+        dismiss()
     }
 }
 

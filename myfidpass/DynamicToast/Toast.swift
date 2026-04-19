@@ -37,19 +37,50 @@ struct Toast {
     }
 
     /// Toast affiché quand le scan QR a réussi et que l'utilisateur a été détecté.
-    static func scanSuccess(memberName: String, pointsAdded: Int?) -> Toast {
+    static func scanSuccess(memberName: String, pointsAdded: Int?, pointsCapped: Bool = false, pointsRequested: Int? = nil) -> Toast {
         let pointsText: String
         if let pts = pointsAdded, pts > 0 {
             pointsText = " +\(pts) point\(pts > 1 ? "s" : "")"
         } else {
             pointsText = ""
         }
+        var capSuffix = ""
+        if pointsCapped, let req = pointsRequested, let got = pointsAdded, req > got {
+            capSuffix = "\nPlafond sécurité : \(got) pt crédité(s) (calcul : \(req))."
+        }
         return Toast(
             symbol: "checkmark.circle.fill",
             symbolFont: .system(size: 35),
             symbolForegroundStyle: (.white, .green),
             title: "Client détecté",
-            message: "\(memberName)\(pointsText)"
+            message: "\(memberName)\(pointsText)\(capSuffix)"
+        )
+    }
+
+    /// Toast affiché quand 1 tampon a été ajouté (programme tampons uniquement).
+    static func scanStampSuccess(
+        memberName: String,
+        pointsCapped: Bool = false,
+        pointsRequested: Int? = nil,
+        pointsAdded: Int? = nil,
+        stampCycleCompleted: Bool = false
+    ) -> Toast {
+        var capSuffix = ""
+        if pointsCapped, let req = pointsRequested, let got = pointsAdded, req > got {
+            capSuffix = "\nPlafond sécurité : \(got) pt crédité(s) (calcul : \(req))."
+        }
+        let title = stampCycleCompleted ? "Carte complète — récompense !" : "1 tampon ajouté"
+        let rewardLine = stampCycleCompleted
+            ? "\nLe compteur repart à zéro pour une nouvelle carte."
+            : ""
+        return Toast(
+            symbol: stampCycleCompleted ? "gift.fill" : "checkmark.circle.fill",
+            symbolFont: .system(size: 35),
+            symbolForegroundStyle: stampCycleCompleted
+                ? (.white, Color(red: 1, green: 0.55, blue: 0.2))
+                : (.white, .green),
+            title: title,
+            message: "\(memberName)\(rewardLine)\(capSuffix)"
         )
     }
 }

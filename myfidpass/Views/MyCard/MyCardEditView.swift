@@ -7,6 +7,7 @@
 
 import SwiftUI
 import PhotosUI
+import UIKit
 
 struct MyCardEditView: View {
     @Binding var displayName: String
@@ -20,41 +21,91 @@ struct MyCardEditView: View {
 
     @State private var savedFeedback = false
     @State private var isSaving = false
+    @State private var imageCropPayload: ImageCropPayload?
 
     var body: some View {
         NavigationStack {
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(spacing: 0) {
+                    HStack(spacing: 10) {
+                        if #available(iOS 26.0, *) {
+                            Button("Annuler") {
+                                isPresented = false
+                            }
+                            .buttonStyle(.glass)
+                            .buttonBorderShape(.capsule)
+                            .controlSize(.regular)
+                        } else {
+                            Button("Annuler") {
+                                isPresented = false
+                            }
+                            .font(.subheadline.weight(.semibold))
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .background(.ultraThinMaterial, in: Capsule())
+                            .overlay(Capsule().strokeBorder(Color.white.opacity(0.28), lineWidth: 1))
+                        }
+                        Spacer(minLength: 8)
+                        Text("Modifier la carte")
+                            .font(.headline.weight(.semibold))
+                        Spacer(minLength: 8)
+                        if #available(iOS 26.0, *) {
+                            Button {
+                                saveAndDismiss()
+                            } label: {
+                                if isSaving {
+                                    ProgressView()
+                                        .scaleEffect(0.9)
+                                } else {
+                                    Text(savedFeedback ? "Enregistré" : "Enregistrer")
+                                }
+                            }
+                            .disabled(savedFeedback || isSaving)
+                            .buttonStyle(.glass)
+                            .buttonBorderShape(.capsule)
+                            .controlSize(.regular)
+                            .tint(savedFeedback ? AppTheme.Colors.success : AppTheme.Colors.primary)
+                        } else {
+                            Button {
+                                saveAndDismiss()
+                            } label: {
+                                if isSaving {
+                                    ProgressView()
+                                        .scaleEffect(0.9)
+                                } else {
+                                    Text(savedFeedback ? "Enregistré" : "Enregistrer")
+                                }
+                            }
+                            .disabled(savedFeedback || isSaving)
+                            .font(.subheadline.weight(.semibold))
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .background(.ultraThinMaterial, in: Capsule())
+                            .overlay(Capsule().strokeBorder(Color.white.opacity(0.28), lineWidth: 1))
+                        }
+                    }
+                    .padding(.horizontal, AppTheme.Spacing.lg)
+                    .padding(.top, 8)
+                    .padding(.bottom, 12)
+
                     livePreviewBlock
                     editForm
                 }
                 .padding(.bottom, 32)
             }
             .background(AppTheme.Colors.background)
-            .navigationTitle("Modifier la carte")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Annuler") {
-                        isPresented = false
+            .sheetHideNavigationBar()
+            .sheet(item: $imageCropPayload) { payload in
+                ImageCropEditorView(
+                    spec: payload.spec,
+                    sourceImage: payload.image,
+                    onCancel: { imageCropPayload = nil },
+                    onComplete: { cropped in
+                        imageCropPayload = nil
+                        let path = CardLogoStorage.saveImage(cropped)
+                        logoURL = path ?? ""
                     }
-                    .foregroundStyle(AppTheme.Colors.primary)
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button {
-                        saveAndDismiss()
-                    } label: {
-                        if isSaving {
-                            ProgressView()
-                                .scaleEffect(0.9)
-                        } else {
-                            Text(savedFeedback ? "Enregistré" : "Enregistrer")
-                        }
-                    }
-                    .fontWeight(.semibold)
-                    .foregroundStyle(savedFeedback ? AppTheme.Colors.success : AppTheme.Colors.primary)
-                    .disabled(savedFeedback || isSaving)
-                }
+                )
             }
             .onChange(of: requiredStamps) { _, new in
                 // Rien à faire, le parent gère previewStampsCount
@@ -216,10 +267,9 @@ struct MyCardEditView: View {
         guard let item else { return }
         guard let data = try? await item.loadTransferable(type: Data.self),
               let image = UIImage(data: data) else { return }
-        let path = CardLogoStorage.saveImage(image)
         await MainActor.run {
-            logoURL = path ?? ""
-            if path != nil { logoPhotoItem = nil }
+            imageCropPayload = ImageCropPayload(image: image, spec: .walletStripLogo)
+            logoPhotoItem = nil
         }
     }
 

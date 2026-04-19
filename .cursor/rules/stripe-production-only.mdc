@@ -1,0 +1,16 @@
+---
+description: Paiements Stripe uniquement en production réelle (pas de mode test côté produit)
+alwaysApply: true
+---
+
+# Stripe et paiements — production uniquement
+
+Le produit MyFidpass (**app iOS, SaaS, API**) ne vise **que l’exploitation réelle** :
+
+- Clés **`sk_live_…`** sur Railway, webhook **production**, clients et abonnements **réels** sur le dashboard Stripe.
+- **Ne pas** orienter l’utilisateur vers le **mode test** Stripe, les clés **`sk_test_…`**, les « paiements de test » ou les parcours « sandbox » comme référence opérationnelle.
+- Dans les réponses et les textes orientés commerçant / prod, parler **uniquement** de la configuration et du comportement **en production**.
+
+**Exception technique (hors périmètre commerçant)** : le script `npm test` du backend `fidelity` peut utiliser des variables factices pour **Vitest** en local ; cela ne constitue pas un mode d’usage du produit.
+
+Règle à retenir : **Stripe = prod réelle** ; pas de branche conversationnelle ni de guide produit centrés sur le test Stripe.

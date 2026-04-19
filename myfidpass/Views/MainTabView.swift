@@ -2,7 +2,7 @@
 //  MainTabView.swift
 //  myfidpass
 //
-//  Navigation principale : Dashboard, Scanner, Ma Carte, Profil.
+//  Navigation principale : Accueil, Campagnes, Commerce. (Flyer depuis Commerce → navigation)
 //
 
 import SwiftUI
@@ -10,40 +10,47 @@ import CoreData
 
 struct MainTabView: View {
     @Environment(\.managedObjectContext) private var viewContext
-    @State private var selectedTab = 0
+    @EnvironmentObject private var tabRouter: MainTabRouter
 
     var body: some View {
-        TabView(selection: $selectedTab) {
+        TabView(selection: $tabRouter.selectedTab) {
             DashboardView(context: viewContext)
                 .tabItem {
-                    Label("Tableau de bord", systemImage: "chart.bar.fill")
+                    Label("Accueil", systemImage: "house.fill")
                 }
                 .tag(0)
 
-            ScannerView(context: viewContext)
-                .tabItem {
-                    Label("Scanner", systemImage: "qrcode.viewfinder")
-                }
-                .tag(1)
-
-            MyCardView(context: viewContext)
-                .tabItem {
-                    Label("Ma Carte", systemImage: "creditcard.fill")
-                }
-                .tag(2)
+            NavigationStack {
+                CampaignNotificationsView(context: viewContext)
+            }
+            .tabItem {
+                Label("Notifs", systemImage: "bell.badge.fill")
+            }
+            .tag(1)
 
             ProfileView(context: viewContext)
                 .tabItem {
-                    Label("Profil", systemImage: "person.crop.circle.fill")
+                    Label("Commerce", systemImage: "person.crop.circle.fill")
                 }
-                .tag(3)
+                .tag(2)
         }
         .tabViewStyle(.automatic)
         .tint(AppTheme.Colors.primary)
+        .animation(MerchantMotion.tabSwitch, value: tabRouter.selectedTab)
+        .sensoryFeedback(.selection, trigger: tabRouter.selectedTab)
+        .onReceive(NotificationCenter.default.publisher(for: .myfidpassOpenCampaignsTab)) { _ in
+            withAnimation(MerchantMotion.tabSwitch) {
+                tabRouter.selectedTab = 1
+            }
+        }
+        /// Pastille essai / abo : voir `ContentView` (`safeAreaInset` sur `TabView` ne réserve pas assez au-dessus de la tab bar).
     }
 }
 
 #Preview {
     MainTabView()
+        .environmentObject(MainTabRouter())
+        .environmentObject(SyncService(container: PersistenceController.preview.container))
+        .environmentObject(RevenueCatSubscriptionState())
         .environment(\.managedObjectContext, PersistenceController.preview.container.viewContext)
 }

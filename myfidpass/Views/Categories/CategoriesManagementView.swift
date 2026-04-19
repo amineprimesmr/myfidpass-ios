@@ -58,6 +58,9 @@ struct CategoriesManagementView: View {
                     Task { await createCategory(name: name, colorHex: colorHex) }
                     showAddCategory = false
                 }, onCancel: { showAddCategory = false })
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+                .modifier(LiquidGlassSheetModifier())
             }
             .sheet(item: Binding(
                 get: { categoryToEdit.map { IdentifiableCategory(category: $0) } },
@@ -67,6 +70,9 @@ struct CategoriesManagementView: View {
                     Task { await updateCategory(wrap.category, name: name, colorHex: colorHex) }
                     categoryToEdit = nil
                 }, onCancel: { categoryToEdit = nil })
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+                .modifier(LiquidGlassSheetModifier())
             }
             .alert("Supprimer la catégorie ?", isPresented: .constant(categoryToDelete != nil)) {
                 Button("Annuler", role: .cancel) { categoryToDelete = nil }
@@ -164,8 +170,8 @@ struct CategoriesManagementView: View {
         isSaving = true
         defer { isSaving = false }
         do {
-            _ = try await APIClient.shared.request(.createCategory(slug: slug, name: name, colorHex: colorHex)) as CategoryDTO
-            await syncService.syncIfNeeded()
+            _ = try await APIClient.shared.request(.createCategory(slug: slug, name: name, colorHex: colorHex, sortOrder: nil)) as CategoryDTO
+            await syncService.syncAfterServerMutation()
         } catch {
             errorMessage = (error as? APIError)?.errorDescription ?? error.localizedDescription
         }
@@ -180,7 +186,7 @@ struct CategoriesManagementView: View {
             category.name = name
             category.colorHex = colorHex
             try? viewContext.save()
-            await syncService.syncIfNeeded()
+            await syncService.syncAfterServerMutation()
         } catch {
             errorMessage = (error as? APIError)?.errorDescription ?? error.localizedDescription
         }
@@ -194,7 +200,7 @@ struct CategoriesManagementView: View {
             _ = try await APIClient.shared.request(.deleteCategory(slug: slug, categoryId: id)) as EmptyResponse
             viewContext.delete(category)
             try? viewContext.save()
-            await syncService.syncIfNeeded()
+            await syncService.syncAfterServerMutation()
         } catch {
             errorMessage = (error as? APIError)?.errorDescription ?? error.localizedDescription
         }
@@ -220,32 +226,72 @@ struct CategoryEditSheet: View {
     @State private var name: String = ""
     @State private var colorHex: String = ""
 
+    private var sheetTitle: String {
+        mode.isCreate ? "Nouvelle catégorie" : "Modifier"
+    }
+
+    private var canSave: Bool {
+        !name.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
     var body: some View {
         NavigationStack {
-            Form {
-                Section("Nom") {
-                    TextField("Ex. Classe A, Promo 2025", text: $name)
-                }
-                Section("Couleur (optionnel)") {
-                    TextField("Hex sans # (ex. 2563EB)", text: $colorHex)
-                        .textInputAutocapitalization(.characters)
-                        .autocorrectionDisabled()
-                }
-            }
-            .navigationTitle(mode.isCreate ? "Nouvelle catégorie" : "Modifier")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Annuler") { onCancel() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Enregistrer") {
-                        let hex = colorHex.trimmingCharacters(in: .whitespaces).isEmpty ? nil : colorHex.trimmingCharacters(in: .whitespaces)
-                        onSave(name.trimmingCharacters(in: .whitespaces), hex)
+            VStack(spacing: 0) {
+                HStack(spacing: 10) {
+                    if #available(iOS 26.0, *) {
+                        Button("Annuler", action: onCancel)
+                            .buttonStyle(.glass)
+                            .buttonBorderShape(.capsule)
+                            .controlSize(.regular)
+                    } else {
+                        Button("Annuler", action: onCancel)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(AppTheme.Colors.textPrimary)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .background(.ultraThinMaterial, in: Capsule())
+                            .overlay(Capsule().strokeBorder(Color.white.opacity(0.28), lineWidth: 1))
                     }
-                    .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
+                    Spacer(minLength: 8)
+                    Text(sheetTitle)
+                        .font(.headline.weight(.semibold))
+                        .lineLimit(1)
+                    Spacer(minLength: 8)
+                    if #available(iOS 26.0, *) {
+                        Button("Enregistrer") {
+                            let hex = colorHex.trimmingCharacters(in: .whitespaces).isEmpty ? nil : colorHex.trimmingCharacters(in: .whitespaces)
+                            onSave(name.trimmingCharacters(in: .whitespaces), hex)
+                        }
+                        .disabled(!canSave)
+                        .buttonStyle(.glass)
+                        .buttonBorderShape(.capsule)
+                        .controlSize(.regular)
+                        .tint(AppTheme.Colors.primary)
+                    } else {
+                        Button("Enregistrer") {
+                            let hex = colorHex.trimmingCharacters(in: .whitespaces).isEmpty ? nil : colorHex.trimmingCharacters(in: .whitespaces)
+                            onSave(name.trimmingCharacters(in: .whitespaces), hex)
+                        }
+                        .disabled(!canSave)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(canSave ? AppTheme.Colors.primary : AppTheme.Colors.textSecondary)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+
+                Form {
+                    Section("Nom") {
+                        TextField("Ex. Classe A, Promo 2025", text: $name)
+                    }
+                    Section("Couleur (optionnel)") {
+                        TextField("Hex sans # (ex. 2563EB)", text: $colorHex)
+                            .textInputAutocapitalization(.characters)
+                            .autocorrectionDisabled()
+                    }
                 }
             }
+            .sheetHideNavigationBar()
             .onAppear {
                 if case .edit(let cat) = mode {
                     name = cat.name ?? ""
@@ -274,7 +320,9 @@ struct CategoryMembersView: View {
     private var inCategory: [ClientCard] { dataService.clientCards(in: category) }
     private var allMembers: [ClientCard] {
         guard let t = category.template else { return [] }
-        return dataService.clientCards(for: t)
+        return dataService.uniqueClientCards(for: t).filter {
+            !WalletPreviewMember.shouldExcludeFromMerchantActivity(clientEmail: $0.clientEmail)
+        }
     }
     private var notInCategory: [ClientCard] {
         let inSet = Set(inCategory.map { $0.objectID })
@@ -299,19 +347,22 @@ struct CategoryMembersView: View {
     }
 
     private func memberRow(_ card: ClientCard, inCategory: Bool) -> some View {
-        HStack {
-            Text(card.clientDisplayName ?? "Client")
-                .font(AppTheme.Fonts.body())
-            Spacer()
-            if inCategory {
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(AppTheme.Colors.success)
-            }
-        }
-        .contentShape(.rect)
-        .onTapGesture {
+        Button {
             toggleMember(card, inCategory: inCategory)
+        } label: {
+            HStack {
+                Text(card.clientDisplayName ?? "Client")
+                    .font(AppTheme.Fonts.body())
+                Spacer()
+                if inCategory {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(AppTheme.Colors.success)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(.rect)
         }
+        .buttonStyle(.borderless)
     }
 
     private func toggleMember(_ card: ClientCard, inCategory: Bool) {
@@ -330,11 +381,15 @@ struct CategoryMembersView: View {
             do {
                 _ = try await APIClient.shared.request(.updateMemberCategories(slug: slug, memberId: memberId, categoryIds: newIds)) as EmptyResponse
                 let newCategories = newIds.compactMap { dataService.category(byServerId: $0, template: template) }
-                card.categories = NSSet(array: newCategories)
-                try? viewContext.save()
-                await syncService.syncIfNeeded()
+                await MainActor.run {
+                    card.categories = NSSet(array: newCategories)
+                    try? viewContext.save()
+                }
+                await syncService.syncAfterServerMutation()
             } catch {
-                // TODO: show error
+                await MainActor.run {
+                    AppState.shared.showError((error as? APIError)?.errorDescription ?? "Mise à jour des catégories impossible.")
+                }
             }
         }
     }

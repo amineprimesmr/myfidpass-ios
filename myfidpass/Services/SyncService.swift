@@ -3,7 +3,7 @@
 //  myfidpass
 //
 //  Sync avec l’API MyFidpass : auth/me puis settings, stats, members, transactions par slug.
-//  La fusion Core Data s’exécute dans performBackgroundTask pour ne pas bloquer l’UI.
+//  La fusion Core Data s’exécute dans un contexte enfant (file privée) puis save du viewContext sur le main.
 //
 
 import Foundation
@@ -15,6 +15,24 @@ fileprivate enum SyncMergeUserDefaults {
     static let lastLogoUploadAt = "myfidpass.lastLogoUploadAt"
     static let lastLogoIconUploadAt = "myfidpass.lastLogoIconUploadAt"
     static let lastNotificationIconUploadAt = "myfidpass.lastNotificationIconUploadAt"
+}
+
+/// Une seule synchronisation à la fois. Plusieurs `syncIfNeeded` / `syncAfterServerMutation` lancés en parallèle
+/// (ContentView `.onAppear`, retour premier plan, `refreshable`, notifications) enclenchaient plusieurs
+/// Plusieurs syncs concurrentes + `mergeChanges` depuis des notifications → crash Core Data fréquent après connexion.
+@MainActor
+private final class SyncSerialExecutor {
+    private var tail: Task<Void, Never>?
+
+    func enqueue(_ work: @escaping @MainActor () async -> Void) async {
+        let previous = tail
+        let job = Task { @MainActor in
+            await previous?.value
+            await work()
+        }
+        tail = job
+        await job.value
+    }
 }
 
 @MainActor
@@ -124,6 +142,8 @@ final class SyncService: ObservableObject {
     private static let maxMemberPages = 40
     private static let maxTransactionPages = 12
 
+    private let syncSerialExecutor = SyncSerialExecutor()
+
     /// Invalide le délai minimal entre syncs (ex. après un `PATCH` réussi) pour autoriser un pull immédiat sans `force`.
     func invalidateSyncThrottle() {
         lastSyncDate = nil
@@ -137,6 +157,12 @@ final class SyncService: ObservableObject {
 
     /// Récupère user + businesses, puis pour le commerce courant (slug) : settings, stats, membres, transactions.
     func syncIfNeeded(force: Bool = false) async {
+        await syncSerialExecutor.enqueue { [self] in
+            await self.performSyncIfNeeded(force: force)
+        }
+    }
+
+    private func performSyncIfNeeded(force: Bool) async {
         guard AuthStorage.isLoggedIn, let token = APIClient.shared.authToken, !token.isEmpty else { return }
         if !force, let last = lastSyncDate, Date().timeIntervalSince(last) < Self.syncThrottleInterval, !isSyncing {
             return
@@ -145,9 +171,9 @@ final class SyncService: ObservableObject {
         lastError = nil
         defer { isSyncing = false }
         do {
-            // Optimisation : si un slug est en cache, lancer authMe ET syncBusiness en parallèle.
-            // On économise un aller-retour réseau (authMe latency) à chaque sync.
-            // Si le slug retourné par authMe diffère du cache (changement de compte), on re-sync.
+            // Séquentiel volontaire : la phase de sync est prioritaire sur la perf.
+            // Des rafales de requêtes/décodages parallèles au lancement ont déjà été corrélées
+            // à des crashs malloc (`freed pointer was not the last allocation`).
             let cachedSlug = AuthStorage.currentBusinessSlug.flatMap { s -> String? in
                 let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
                 return t.isEmpty ? nil : t
@@ -157,10 +183,10 @@ final class SyncService: ObservableObject {
 
             let me: AuthMeResponse
             if let slug = cachedSlug {
-                async let meTask = APIClient.shared.request(.authMe) as AuthMeResponse
-                async let preSyncTask: Void = syncBusiness(slug: slug, skipTemplateOverwrite: skipTemplate)
-                me = try await meTask
-                _ = try? await preSyncTask  // Erreur 404 gérée ci-dessous via le slug corrigé
+                // D'abord le profil, ensuite la sync du commerce. Plus lent, mais beaucoup plus sûr.
+                me = try await APIClient.shared.request(.authMe)
+                let resolvedAfterMe = resolvedSlug(from: me) ?? slug
+                try await syncBusiness(slug: resolvedAfterMe, skipTemplateOverwrite: skipTemplate)
             } else {
                 me = try await APIClient.shared.request(.authMe)
             }
@@ -227,15 +253,11 @@ final class SyncService: ObservableObject {
     }
 
     private func syncBusiness(slug: String, skipTemplateOverwrite: Bool = false) async throws {
-        // Vague 1 (léger) : réglages + stats + catégories → Core Data tout de suite (carte / accueil à jour sans attendre listes).
-        async let settingsTask = APIClient.shared.request(.businessSettings(slug: slug)) as BusinessSettingsResponse
-        async let statsTask = APIClient.shared.request(.businessStats(slug: slug, period: nil)) as BusinessStatsResponse
-        async let categoriesTask = fetchCategoriesOptional(slug: slug)
-
-        let settings = try await settingsTask
+        // Vague 1 : séquentielle, plus sûre que trois requêtes parallèles au démarrage.
+        let settings: BusinessSettingsResponse = try await APIClient.shared.request(.businessSettings(slug: slug))
         ScanFlowSettingsCache.store(settings, for: slug)
-        let stats = try await statsTask
-        let categoriesResponse = await categoriesTask
+        let stats: BusinessStatsResponse = try await APIClient.shared.request(.businessStats(slug: slug, period: nil))
+        let categoriesResponse = await fetchCategoriesOptional(slug: slug)
 
         let emptyMembers = BusinessMembersResponse(members: [], total: nil)
         let emptyTransactions = BusinessTransactionsResponse(transactions: [], total: nil)
@@ -252,11 +274,9 @@ final class SyncService: ObservableObject {
         // l'URL du fond distant — sans attendre que l'utilisateur ouvre « Ma carte ».
         updateSnapshotRemoteBackground(settings: settings, slug: slug)
 
-        // Vague 2 : membres (pages de 200) + transactions paginées, sans réécraser le template Core Data.
-        async let membersFetch = fetchAllMembers(slug: slug)
-        async let transactionsFetch = fetchAllTransactions(slug: slug)
-        let members = try await membersFetch
-        let transactions = try await transactionsFetch
+        // Vague 2 : entièrement séquentielle pour supprimer une autre source de courses.
+        let members = try await fetchAllMembers(slug: slug)
+        let transactions = try await fetchAllTransactions(slug: slug)
 
         try await mergeOnBackground(
             slug: slug,
@@ -376,6 +396,7 @@ final class SyncService: ObservableObject {
             hasLocalCardBackground: localExists ? true : nil,
             stampRewardLabel: settings.stampRewardLabel ?? "",
             stampMidRewardLabel: settings.stampMidRewardLabel,
+            startGameRewardLabel: nil,
             labelRestants: settings.labelRestants,
             tierPoints: tierPoints.isEmpty ? nil : tierPoints,
             tierLabels: tierLabels.isEmpty ? nil : tierLabels,
@@ -452,9 +473,16 @@ final class SyncService: ObservableObject {
         let c = container
         let logoKey = SyncMergeUserDefaults.lastLogoUploadAt
         let logoIconKey = SyncMergeUserDefaults.lastLogoIconUploadAt
+        // Contexte enfant → parent : aucun `mergeChanges` global (observateur supprimé dans Persistence).
+        // Sauvegarde du parent sur la file principale, sans `perform` + `Task` imbriqués (réentrance / malloc).
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            c.performBackgroundTask { bg in
-                bg.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
+            let child = NSManagedObjectContext(concurrencyType: .privateQueueConcurrencyType)
+            child.parent = c.viewContext
+            child.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
+            child.automaticallyMergesChangesFromParent = false
+            child.shouldDeleteInaccessibleFaults = true
+
+            child.perform {
                 do {
                     try SyncCoreDataMerge.apply(
                         slug: slug,
@@ -466,14 +494,25 @@ final class SyncService: ObservableObject {
                         skipTemplateOverwrite: skipTemplateOverwrite,
                         lastLogoUploadKey: logoKey,
                         lastLogoIconUploadKey: logoIconKey,
-                        context: bg
+                        context: child
                     )
-                    if bg.hasChanges {
-                        try bg.save()
+                    if child.hasChanges {
+                        try child.save()
                     }
-                    cont.resume()
+                    DispatchQueue.main.async {
+                        do {
+                            if c.viewContext.hasChanges {
+                                try c.viewContext.save()
+                            }
+                            cont.resume()
+                        } catch {
+                            cont.resume(throwing: error)
+                        }
+                    }
                 } catch {
-                    cont.resume(throwing: error)
+                    DispatchQueue.main.async {
+                        cont.resume(throwing: error)
+                    }
                 }
             }
         }
@@ -577,11 +616,10 @@ fileprivate enum SyncCoreDataMerge {
             card.clientDisplayName = m.name ?? "Client"
             card.clientEmail = m.email
             card.updatedAt = parseISO8601(m.lastVisitAt) ?? card.updatedAt
+            // Vague 2 de sync passe `categories: nil` : ne pas effacer les catégories déjà fusionnées en vague 1.
             if let categoryIds = m.categoryIds, categories != nil {
                 let cats = categoryIds.compactMap { findCategory(byServerId: $0, template: template, context: context) }
                 card.categories = NSSet(array: cats)
-            } else {
-                card.categories = nil
             }
         }
 

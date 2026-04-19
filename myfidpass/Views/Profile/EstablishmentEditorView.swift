@@ -328,16 +328,31 @@ struct MerchantEstablishmentForm: View {
         var hideEngagementCardTitle: Bool = false
         /// Carte métriques (OAuth, rafraîchissement).
         var showSocialMetrics: Bool = true
+        /// Instagram, TikTok, Facebook, YouTube, X, etc. — désactivé sur l’onglet Commerce (Google / Place ID uniquement).
+        var showSocialNetworksEngagement: Bool = true
+        /// Bandeau métriques OAuth (Meta, YouTube, TikTok) — masqué si seul Google (Place ID) est proposé.
+        var showSocialMetricsOAuthCard: Bool = true
+        /// Onglet Commerce : tableau de bord avis Google (graphique, synchro auto) à la place de la ligne cliquable.
+        var useGoogleCommerceDashboard: Bool = false
+        /// Ne pas envelopper le bloc engagement dans `sectionCard` — la carte est fournie par le parent (ex. onglet Commerce).
+        var embedEngagementWithoutSectionCard: Bool = false
+        /// Passé au tableau de bord : masque la ligne de titre interne quand le parent affiche déjà un en-tête.
+        var suppressGoogleDashboardTitleRow: Bool = false
 
         static let full = Sections()
         static let engagementOnly = Sections(showIdentity: false, showContact: false, showEngagement: true, mergeEngagementIntoSingleCard: true)
-        /// Même contenu que `engagementOnly`, sans en-tête de carte — pour intégration dans la checklist Commerce.
-        static let engagementOnlyCommerceInline = Sections(
+        /// Onglet Commerce — avis Google seul : pas de carte interne, titre géré par `ProfileView`.
+        static let commerceGoogleStandalone = Sections(
             showIdentity: false,
             showContact: false,
             showEngagement: true,
             mergeEngagementIntoSingleCard: true,
-            hideEngagementCardTitle: true
+            hideEngagementCardTitle: true,
+            showSocialNetworksEngagement: false,
+            showSocialMetricsOAuthCard: false,
+            useGoogleCommerceDashboard: true,
+            embedEngagementWithoutSectionCard: true,
+            suppressGoogleDashboardTitleRow: true
         )
     }
 
@@ -376,6 +391,54 @@ struct MerchantEstablishmentForm: View {
     init(context: NSManagedObjectContext, sections: Sections = .full) {
         _dataService = StateObject(wrappedValue: DataService(context: context))
         self.sections = sections
+    }
+
+    /// Carte fusionnée : titre/icône adaptés quand seuls les avis Google sont affichés.
+    private var mergedEngagementCardTitle: String? {
+        if sections.hideEngagementCardTitle { return nil }
+        if !sections.showSocialNetworksEngagement { return "Avis Google" }
+        return "Avis & réseaux"
+    }
+
+    private var mergedEngagementCardSystemImage: String? {
+        if sections.hideEngagementCardTitle { return nil }
+        if !sections.showSocialNetworksEngagement { return "star.bubble" }
+        return "bubble.left.and.bubble.right.fill"
+    }
+
+    @ViewBuilder
+    private func engagementMergedInnerContent() -> some View {
+        if sections.useGoogleCommerceDashboard {
+            GoogleReviewsCommerceDashboardView(
+                placeIdTrimmed: engagement.googlePlaceId.trimmingCharacters(in: .whitespacesAndNewlines),
+                showTitleRow: !sections.suppressGoogleDashboardTitleRow,
+                emptyStateHighlightsConfigureButton: true
+            )
+            googleCommerceConfigureButton
+        } else {
+            socialGoogleRow()
+        }
+        if sections.showSocialNetworksEngagement {
+            socialEngagementRow(mode: .instagram, shortName: "Instagram", channel: $engagement.instagram)
+            socialEngagementRow(mode: .tiktok, shortName: "TikTok", channel: $engagement.tiktok)
+            socialEngagementRow(mode: .facebook, shortName: "Facebook", channel: $engagement.facebook)
+            if !SocialLinkMode.twitter.isTemporarilyHiddenInAvisReseaux {
+                socialEngagementRow(mode: .twitter, shortName: "X", channel: $engagement.twitter)
+            }
+            if !SocialLinkMode.snapchat.isTemporarilyHiddenInAvisReseaux {
+                socialEngagementRow(mode: .snapchat, shortName: "Snapchat", channel: $engagement.snapchat)
+            }
+            if !SocialLinkMode.linkedin.isTemporarilyHiddenInAvisReseaux {
+                socialEngagementRow(mode: .linkedin, shortName: "LinkedIn", channel: $engagement.linkedin)
+            }
+            socialEngagementRow(mode: .youtube, shortName: "YouTube", channel: $engagement.youtube)
+            if !SocialLinkMode.trustpilot.isTemporarilyHiddenInAvisReseaux {
+                socialEngagementRow(mode: .trustpilot, shortName: "Trustpilot", channel: $engagement.trustpilot)
+            }
+            if !SocialLinkMode.tripadvisor.isTemporarilyHiddenInAvisReseaux {
+                socialEngagementRow(mode: .tripadvisor, shortName: "Tripadvisor", channel: $engagement.tripadvisor)
+            }
+        }
     }
 
     var body: some View {
@@ -430,42 +493,47 @@ struct MerchantEstablishmentForm: View {
             }
             }
 
-            if sections.showEngagement && sections.showSocialMetrics {
+            if sections.showEngagement && sections.showSocialMetrics && sections.showSocialMetricsOAuthCard {
                 SocialMetricsEngagementSection()
             }
 
             if sections.showEngagement {
                 if sections.mergeEngagementIntoSingleCard {
-                    sectionCard(
-                        title: sections.hideEngagementCardTitle ? nil : "Avis & réseaux",
-                        systemImage: sections.hideEngagementCardTitle ? nil : "bubble.left.and.bubble.right.fill"
-                    ) {
-                        socialGoogleRow()
-                        socialEngagementRow(mode: .instagram, shortName: "Instagram", channel: $engagement.instagram)
-                        socialEngagementRow(mode: .tiktok, shortName: "TikTok", channel: $engagement.tiktok)
-                        socialEngagementRow(mode: .facebook, shortName: "Facebook", channel: $engagement.facebook)
-                        if !SocialLinkMode.twitter.isTemporarilyHiddenInAvisReseaux {
-                            socialEngagementRow(mode: .twitter, shortName: "X", channel: $engagement.twitter)
-                        }
-                        if !SocialLinkMode.snapchat.isTemporarilyHiddenInAvisReseaux {
-                            socialEngagementRow(mode: .snapchat, shortName: "Snapchat", channel: $engagement.snapchat)
-                        }
-                        if !SocialLinkMode.linkedin.isTemporarilyHiddenInAvisReseaux {
-                            socialEngagementRow(mode: .linkedin, shortName: "LinkedIn", channel: $engagement.linkedin)
-                        }
-                        socialEngagementRow(mode: .youtube, shortName: "YouTube", channel: $engagement.youtube)
-                        if !SocialLinkMode.trustpilot.isTemporarilyHiddenInAvisReseaux {
-                            socialEngagementRow(mode: .trustpilot, shortName: "Trustpilot", channel: $engagement.trustpilot)
-                        }
-                        if !SocialLinkMode.tripadvisor.isTemporarilyHiddenInAvisReseaux {
-                            socialEngagementRow(mode: .tripadvisor, shortName: "Tripadvisor", channel: $engagement.tripadvisor)
+                    Group {
+                        if sections.embedEngagementWithoutSectionCard {
+                            engagementMergedInnerContent()
+                        } else if sections.hideEngagementCardTitle {
+                            sectionCard(title: nil, systemImage: nil) {
+                                engagementMergedInnerContent()
+                            }
+                        } else if !sections.showSocialNetworksEngagement {
+                            sectionCard(title: mergedEngagementCardTitle ?? "Avis Google", headerAssetName: "SocialGoogle") {
+                                engagementMergedInnerContent()
+                            }
+                        } else {
+                            sectionCard(
+                                title: mergedEngagementCardTitle,
+                                systemImage: mergedEngagementCardSystemImage
+                            ) {
+                                engagementMergedInnerContent()
+                            }
                         }
                     }
                 } else {
-            sectionCard(title: "Avis Google", systemImage: "star.bubble") {
-                    socialGoogleRow()
+            sectionCard(title: "Avis Google", headerAssetName: "SocialGoogle") {
+                    if sections.useGoogleCommerceDashboard {
+                        GoogleReviewsCommerceDashboardView(
+                            placeIdTrimmed: engagement.googlePlaceId.trimmingCharacters(in: .whitespacesAndNewlines),
+                            showTitleRow: !sections.suppressGoogleDashboardTitleRow,
+                            emptyStateHighlightsConfigureButton: true
+                        )
+                        googleCommerceConfigureButton
+                    } else {
+                        socialGoogleRow()
+                    }
             }
 
+            if sections.showSocialNetworksEngagement {
             sectionCard(title: "Réseaux sociaux", systemImage: "bubble.left.and.bubble.right") {
                 socialEngagementRow(mode: .instagram, shortName: "Instagram", channel: $engagement.instagram)
                 socialEngagementRow(mode: .tiktok, shortName: "TikTok", channel: $engagement.tiktok)
@@ -492,6 +560,7 @@ struct MerchantEstablishmentForm: View {
                     }
                 }
             }
+            }
                 }
             }
 
@@ -511,7 +580,9 @@ struct MerchantEstablishmentForm: View {
             Task {
                 await loadProfileFromServer()
                 await MainActor.run { suppressAutosave = false }
-                await loadGoogleMetricsSnapshot()
+                if !sections.useGoogleCommerceDashboard {
+                    await loadGoogleMetricsSnapshot()
+                }
             }
         }
         .onChange(of: organizationName) { _, _ in scheduleAutosave() }
@@ -522,16 +593,25 @@ struct MerchantEstablishmentForm: View {
         .onChange(of: logoIconURL) { _, _ in scheduleAutosave() }
         .onChange(of: engagement) { _, _ in scheduleAutosave() }
         .onChange(of: engagement.googlePlaceId) { _, _ in
-            Task { await loadGoogleMetricsSnapshot() }
+            if !sections.useGoogleCommerceDashboard {
+                Task { await loadGoogleMetricsSnapshot() }
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .myfidpassEngagementOAuthDidComplete)) { _ in
             Task {
                 await loadProfileFromServer()
-                await loadGoogleMetricsSnapshot()
+                if !sections.useGoogleCommerceDashboard {
+                    await loadGoogleMetricsSnapshot()
+                }
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .myfidpassRemoteSyncDidMerge)) { _ in
-            Task { await loadGoogleMetricsSnapshot() }
+            if !sections.useGoogleCommerceDashboard {
+                Task { await loadGoogleMetricsSnapshot() }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .myfidpassOpenGoogleBusinessSetupSheet)) { _ in
+            activeSheet = .googleReviews
         }
         .sheet(item: $activeSheet) { sheet in
             switch sheet {
@@ -574,6 +654,28 @@ struct MerchantEstablishmentForm: View {
 
     private func sectionCard<Content: View>(title: String, systemImage: String, @ViewBuilder content: () -> Content) -> some View {
         sectionCard(title: title as String?, systemImage: systemImage as String?, content: content)
+    }
+
+    /// En-tête de section avec image depuis les assets (ex. `SocialGoogle`).
+    private func sectionCard<Content: View>(title: String, headerAssetName: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 8) {
+                Image(headerAssetName)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 22, height: 22)
+                    .accessibilityHidden(true)
+                Text(title)
+                    .font(AppTheme.Fonts.headline())
+                    .foregroundStyle(AppTheme.Colors.textPrimary)
+            }
+            content()
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AppTheme.Colors.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .shadow(color: AppTheme.Colors.shadow, radius: 6, y: 2)
     }
 
     private func sectionCard<Content: View>(title: String?, systemImage: String?, @ViewBuilder content: () -> Content) -> some View {
@@ -649,6 +751,7 @@ struct MerchantEstablishmentForm: View {
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         switch mode {
         case .google:
+            if sections.useGoogleCommerceDashboard { return }
             activeSheet = .googleReviews
         case .instagram, .facebook:
             runEngagementOAuth(.meta)
@@ -851,6 +954,102 @@ struct MerchantEstablishmentForm: View {
         } catch {}
     }
 
+    /// Bouton d'accès à la feuille de configuration Google (onglet Commerce, sous le dashboard lecture seule).
+    /// Ouvre `GoogleReviewsSetupSheet` qui gère la recherche de fiche + l'OAuth Google Business.
+    @ViewBuilder
+    private var googleCommerceConfigureButton: some View {
+        let placeLinked = !engagement.googlePlaceId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let gbpConnected = (googleMetricsChannel?.oauthConnected == true)
+        VStack(spacing: 10) {
+            // Carte principale TOUJOURS visible : tableau de bord complet Google Business (gère lui-même
+            // l'état « non connecté » en proposant un CTA de connexion OAuth).
+            if let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines), !slug.isEmpty {
+                NavigationLink {
+                    GoogleBusinessHubView(slug: slug)
+                } label: {
+                    HStack(spacing: 12) {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(.white.opacity(0.18))
+                                .frame(width: 40, height: 40)
+                            Image(systemName: "sparkles")
+                                .font(.system(size: 18, weight: .semibold))
+                                .foregroundStyle(.white)
+                        }
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack(spacing: 6) {
+                                Text("Tableau de bord Google Business")
+                                    .font(.subheadline.weight(.bold))
+                                Text("NEW")
+                                    .font(.caption2.weight(.heavy))
+                                    .foregroundStyle(AppTheme.Colors.primary)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 1)
+                                    .background(Capsule().fill(.white))
+                            }
+                            Text(gbpConnected
+                                 ? "Avis live, IA, posts, Q&A, stats, horaires, photos"
+                                 : "Connectez-vous pour gérer avis live, posts, Q&A, stats…")
+                                .font(.caption2)
+                                .foregroundStyle(.white.opacity(0.92))
+                                .lineLimit(2)
+                        }
+                        Spacer(minLength: 8)
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(.white.opacity(0.9))
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .foregroundStyle(.white)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(
+                                LinearGradient(
+                                    colors: [Color(red: 0.13, green: 0.45, blue: 0.99), Color(red: 0.48, green: 0.25, blue: 0.95)],
+                                    startPoint: .topLeading, endPoint: .bottomTrailing
+                                )
+                            )
+                            .shadow(color: AppTheme.Colors.primary.opacity(0.35), radius: 10, x: 0, y: 4)
+                    )
+                }
+                .buttonStyle(.plain)
+            }
+
+            Button {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                activeSheet = .googleReviews
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: placeLinked ? "link.circle.fill" : "plus.circle.fill")
+                        .font(.system(size: 17, weight: .semibold))
+                    Text(placeLinked ? "Gérer la fiche Google & connexion" : "Configurer la fiche Google")
+                        .font(.subheadline.weight(.semibold))
+                    Spacer(minLength: 8)
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(AppTheme.Colors.textSecondary.opacity(0.9))
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(AppTheme.Colors.textPrimary)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(AppTheme.Colors.primary.opacity(0.08))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(AppTheme.Colors.primary.opacity(0.22), lineWidth: 1)
+            )
+        }
+        .padding(.top, 8)
+    }
+
     /// Ligne Google : logo seul à gauche, capsule note + avis à droite (pas de libellé « Google », pas de Place ID).
     private func socialGoogleRow() -> some View {
         let placeLinked = !engagement.googlePlaceId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -1040,10 +1239,13 @@ struct MerchantEstablishmentForm: View {
                     }
                 }
                 var eng = EngagementFormState(from: settings.engagementRewards)
+                let serverPlaceEmpty = eng.googlePlaceId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 let cachedPlace = MerchantLinkedPlaceCache.read()
-                if eng.googlePlaceId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                var filledGoogleFromOnboardingCache = false
+                if serverPlaceEmpty,
                    let pid = cachedPlace.placeId?.trimmingCharacters(in: .whitespacesAndNewlines), !pid.isEmpty {
                     eng.googlePlaceId = pid
+                    filledGoogleFromOnboardingCache = true
                 }
                 engagement = eng
                 let synced = engagement.googlePlaceId.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1052,6 +1254,9 @@ struct MerchantEstablishmentForm: View {
                 }
                 try? viewContext.save()
                 suppressAutosave = false
+                if filledGoogleFromOnboardingCache {
+                    scheduleAutosave()
+                }
             }
         } catch {
             await MainActor.run { suppressAutosave = false }
@@ -1119,7 +1324,7 @@ struct MerchantEstablishmentForm: View {
                         logoUrl = trimmedLogo
                     }
                 } else if trimmedLogo.contains("CardLogos") || trimmedLogo.hasPrefix("/") {
-                    logoBase64 = CardLogoStorage.compressedBase64FromFile(path: trimmedLogo)
+                    logoBase64 = CardLogoStorage.compressedWalletStripLogoBase64FromFile(path: trimmedLogo)
                 }
             }
             let trimmedIcon = logoIconURL.trimmingCharacters(in: .whitespaces)

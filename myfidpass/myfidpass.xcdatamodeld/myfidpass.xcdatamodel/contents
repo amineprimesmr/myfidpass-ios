@@ -8,6 +8,7 @@
         <attribute name="logoURL" optional="YES" attributeType="String"/>
         <attribute name="name" optional="YES" attributeType="String"/>
         <attribute name="phone" optional="YES" attributeType="String"/>
+        <attribute name="slug" optional="YES" attributeType="String"/>
         <attribute name="updatedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
         <relationship name="cardTemplates" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="CardTemplate" inverseName="business" inverseEntity="CardTemplate"/>
     </entity>
@@ -17,6 +18,7 @@
         <attribute name="displayName" optional="YES" attributeType="String"/>
         <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
         <attribute name="logoURL" optional="YES" attributeType="String"/>
+        <attribute name="logoIconURL" optional="YES" attributeType="String"/>
         <attribute name="requiredStamps" optional="YES" attributeType="Integer 32" defaultValueString="10" usesScalarValueType="YES"/>
         <attribute name="primaryColorHex" optional="YES" attributeType="String"/>
         <attribute name="stampEmoji" optional="YES" attributeType="String"/>

@@ -9,17 +9,15 @@ import SwiftUI
 import CoreData
 import UIKit
 
-private struct CommerceSetupMetrics {
-    let step1Done: Bool
-    let step2Done: Bool
-}
-
-/// Navigation vers le hub Flyer QR depuis l’onglet Commerce (plus d’onglet Flyer dédié).
+/// Navigation depuis l’onglet Commerce (hub Flyer, statistiques — plus d’onglet Flyer dédié).
 private enum CommerceFlyerDestination: Hashable {
     case flyer
     case flyerAndMyCard
     /// Assistant IA : formulaire vierge pour une nouvelle création (confirmé dans l’alerte Commerce).
     case flyerRecreate
+    case statistics
+    /// Drill-down indicateur (style Revolut) ; `periodKey` = `CommerceStatsPeriodTab.rawValue`.
+    case statisticsDetail(CommerceStatisticDetailTopic, String)
 }
 
 struct ProfileView: View {
@@ -27,15 +25,14 @@ struct ProfileView: View {
     @Environment(\.colorScheme) private var colorScheme
     @EnvironmentObject var authService: AuthService
     @EnvironmentObject var syncService: SyncService
+    @EnvironmentObject private var revenueCatSubscriptionState: RevenueCatSubscriptionState
     @EnvironmentObject private var tabRouter: MainTabRouter
     @StateObject private var dataService: DataService
     @State private var organizationName: String = ""
     @State private var logoURL: String = ""
     @State private var settingsSnapshot: BusinessSettingsResponse?
     @State private var flyerLooksCustomized = false
-    /// Étape 2 : valeur de secours tant que `settingsSnapshot` n’est pas arrivé (hydratée depuis le cache disque).
-    @State private var cachedEngagementStepDone = false
-    /// Alimentés par `GET …/dashboard/flyer` pour le bloc « Flyer enregistré » sur la checklist Commerce.
+    /// Alimentés par `GET …/dashboard/flyer` pour le bloc flyer (aperçu Commerce).
     @State private var commerceFlyerShareURL: String = ""
     @State private var commerceFlyerCustomBgDataURL: String?
     /// JSON embed base64 (même source que l’éditeur) pour miniature **composite** (QR, roue, textes), pas seulement le fond IA.
@@ -83,8 +80,17 @@ struct ProfileView: View {
 
                         ScrollView {
                             VStack(alignment: .leading, spacing: 16) {
-                                commerceSetupChecklistCard
+                                if shouldShowCommerceTrialSubscribePill, let trialEnd = authService.merchantTrialEndsAt {
+                                    CommerceTrialPromoBannerView(trialEndsAt: trialEnd) {
+                                        NotificationCenter.default.post(
+                                            name: .myfidpassOpenMerchantTrialStripePaymentLink,
+                                            object: nil
+                                        )
+                                    }
                                     .padding(.top, 10)
+                                }
+                                commerceSetupChecklistCard
+                                    .padding(.top, shouldShowCommerceTrialSubscribePill ? 4 : 10)
                                 Color.clear.frame(height: 20)
                             }
                             .padding(.horizontal, 14)
@@ -116,12 +122,20 @@ struct ProfileView: View {
                 loadProfile()
                 hydrateCommerceFromDiskCache()
                 Task { await loadProfileFromServer() }
+                // Préchauffage embed flyer après le cold start / la sync (WKWebView hors pic initial).
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                    FlyerEmbedWarmup.startIfNeeded()
+                }
+            }
+            .onChange(of: flyerLooksCustomized) { _, _ in
+                pushFlyerOnboardingSync()
             }
             .sheet(isPresented: $showSettingsSheet) {
                 NavigationStack {
                     SettingsView()
                         .environmentObject(authService)
                         .environmentObject(syncService)
+                        .environmentObject(revenueCatSubscriptionState)
                         .environment(\.managedObjectContext, viewContext)
                 }
             }
@@ -130,27 +144,44 @@ struct ProfileView: View {
             }
             .fullScreenCover(isPresented: $showCommerceSavedFlyerLarge) {
                 CommerceSavedFlyerLargePreviewView(
-                    shareURL: commerceFlyerShareURL,
+                    shareURL: commercePublicPageURLString,
                     customBgDataURL: commerceFlyerCustomBgDataURL,
                     bootstrapPreviewBase64: commerceFlyerBootstrapPreviewB64,
                     businessSlug: AuthStorage.currentBusinessSlug,
-                    onDismiss: { showCommerceSavedFlyerLarge = false }
+                    onDismiss: { showCommerceSavedFlyerLarge = false },
+                    onConfirmRecreate: {
+                        showCommerceSavedFlyerLarge = false
+                        commerceNavPath.append(CommerceFlyerDestination.flyerRecreate)
+                    }
                 )
             }
             .navigationDestination(for: CommerceFlyerDestination.self) { dest in
-                MerchantProgramHubView(
-                    context: viewContext,
-                    seedOpenMyCard: dest == .flyerAndMyCard,
-                    seedRecreateFlyer: dest == .flyerRecreate,
-                    forceRefreshFlyerFromServer: dest == .flyer || dest == .flyerRecreate,
-                    onFlyerSaveSuccessReturnToCommerce: {
-                        if !commerceNavPath.isEmpty {
-                            commerceNavPath.removeLast()
+                switch dest {
+                case .statistics:
+                    MerchantStatisticsDashboardScreen(
+                        onRequestStatisticDetail: { topic, periodKey in
+                            commerceNavPath.append(CommerceFlyerDestination.statisticsDetail(topic, periodKey))
                         }
-                    }
-                )
-                .environmentObject(syncService)
-                .environmentObject(authService)
+                    )
+                    .environment(\.managedObjectContext, viewContext)
+                case let .statisticsDetail(topic, periodKey):
+                    MerchantStatisticRevolutDetailScreen(topic: topic, initialPeriodRaw: periodKey)
+                        .environment(\.managedObjectContext, viewContext)
+                case .flyer, .flyerAndMyCard, .flyerRecreate:
+                    MerchantProgramHubView(
+                        context: viewContext,
+                        seedOpenMyCard: dest == .flyerAndMyCard,
+                        seedRecreateFlyer: dest == .flyerRecreate,
+                        forceRefreshFlyerFromServer: dest == .flyer || dest == .flyerRecreate,
+                        onFlyerSaveSuccessReturnToCommerce: {
+                            if !commerceNavPath.isEmpty {
+                                commerceNavPath.removeLast()
+                            }
+                        }
+                    )
+                    .environmentObject(syncService)
+                    .environmentObject(authService)
+                }
             }
             .onChange(of: commerceNavPath) { _, newPath in
                 syncMerchantFlyerHubPresentation()
@@ -169,7 +200,23 @@ struct ProfileView: View {
                 guard tabRouter.selectedTab == 2 else { return }
                 Task { await loadProfileFromServer() }
             }
+            .onReceive(NotificationCenter.default.publisher(for: .myfidpassOpenMerchantStatistics)) { _ in
+                if tabRouter.selectedTab != 2 {
+                    tabRouter.selectedTab = 2
+                }
+                showSettingsSheet = false
+                DispatchQueue.main.async {
+                    commerceNavPath.append(CommerceFlyerDestination.statistics)
+                }
+            }
+            .animation(MerchantMotion.navigationPath, value: commerceNavPath.count)
         }
+    }
+
+    /// Pastille 1 € dans le contenu Commerce (scroll), pas le bandeau global — masquée dans le hub Flyer.
+    private var shouldShowCommerceTrialSubscribePill: Bool {
+        guard authService.isMerchantTrialPeriodActive, authService.merchantTrialEndsAt != nil else { return false }
+        return commerceNavPath.isEmpty
     }
 
     /// Masque la pastille d’essai dans `ContentView` tant que le hub Flyer est affiché (Commerce + navigation).
@@ -244,24 +291,13 @@ struct ProfileView: View {
         .background(Color.black)
     }
 
-    private var commerceSetupMetrics: CommerceSetupMetrics {
-        let step2: Bool = {
-            if let settings = settingsSnapshot {
-                return engagementStepDone(from: settings)
-            }
-            return cachedEngagementStepDone
-        }()
-
-        return CommerceSetupMetrics(
-            step1Done: flyerLooksCustomized,
-            step2Done: step2
-        )
-    }
-
     private func engagementStepDone(from settings: BusinessSettingsResponse) -> Bool {
         guard let e = settings.engagementRewards else { return false }
         let googleOk = (e.googleReview?.enabled == true)
             && !(e.googleReview?.placeId ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if EngagementTemporaryVisibility.commerceEngagementGoogleOnly {
+            return googleOk
+        }
         let others: [EngagementChannelDTO?] = {
             if EngagementTemporaryVisibility.hideSecondaryReviewNetworks {
                 return [e.instagramFollow, e.tiktokFollow, e.facebookFollow, e.youtubeFollow]
@@ -280,37 +316,40 @@ struct ProfileView: View {
 
     /// Réhydrate flyer + bootstrap + lien depuis le dernier GET réussi (affichage instantané sans flash).
     private func hydrateCommerceFromDiskCache() {
-        guard let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines), !slug.isEmpty else { return }
-        guard let cached = CommerceFlyerStateCache.load(slug: slug) else { return }
-        flyerLooksCustomized = cached.flyerRegistered
-        cachedEngagementStepDone = cached.engagementStepDone
+        guard let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines), !slug.isEmpty else {
+            pushFlyerOnboardingSync()
+            return
+        }
+        guard let cached = CommerceFlyerStateCache.load(slug: slug) else {
+            pushFlyerOnboardingSync()
+            return
+        }
+        let hasBootstrap = !(cached.bootstrapPreviewB64 ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasCustomBgFile = !(cached.customBgDataURL ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        flyerLooksCustomized = cached.flyerRegistered || hasBootstrap || hasCustomBgFile
         commerceFlyerShareURL = cached.shareURL
         if let b = cached.bootstrapPreviewB64, !b.isEmpty {
             commerceFlyerBootstrapPreviewB64 = b
         }
         commerceFlyerCustomBgDataURL = cached.customBgDataURL
+        pushFlyerOnboardingSync()
+    }
+
+    /// Aligne le verrou d’onglets (MainTabRouter) avec le cache / le serveur.
+    private func pushFlyerOnboardingSync() {
+        let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if slug.isEmpty {
+            tabRouter.syncFlyerOnboardingRequirement(flyerRegistered: false, hasBusinessSlug: false)
+        } else {
+            tabRouter.syncFlyerOnboardingRequirement(flyerRegistered: flyerLooksCustomized, hasBusinessSlug: true)
+        }
     }
 
     private var commerceSetupChecklistCard: some View {
-        let m = commerceSetupMetrics
-        let completed = [m.step1Done, m.step2Done].filter { $0 }.count
-
-        return VStack(alignment: .leading, spacing: 14) {
-            Text("Préparez-vous à lancer")
-                .font(.system(.title3, design: .rounded, weight: .bold))
-                .foregroundStyle(AppTheme.Colors.textPrimary)
-
-            Text("\(completed) sur 2 étapes terminées")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(AppTheme.Colors.textSecondary)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 4)
-                .background(AppTheme.Colors.primary.opacity(0.1), in: Capsule())
-                .animation(.spring(response: 0.35, dampingFraction: 0.85), value: completed)
-
-            VStack(spacing: 0) {
+        VStack(alignment: .leading, spacing: 20) {
+            VStack(spacing: 16) {
                 Group {
-                    if m.step1Done {
+                    if flyerLooksCustomized {
                         CommerceFlyerSavedBlockView(
                             customBgDataURL: commerceFlyerCustomBgDataURL,
                             bootstrapPreviewBase64: commerceFlyerBootstrapPreviewB64,
@@ -320,141 +359,118 @@ struct ProfileView: View {
                                 showCommerceSavedFlyerLarge = true
                             }
                         )
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 6)
                     } else {
-                        commerceSetupRow(
-                            step: 1,
-                            title: "Créer le flyer QR",
-                            done: false,
-                            systemImage: "qrcode"
-                        ) {
-                            commerceNavPath.append(CommerceFlyerDestination.flyer)
-                        }
+                        commerceFlyerCreateRow
                     }
                 }
-                .animation(.spring(response: 0.42, dampingFraction: 0.86), value: m.step1Done)
-
-                commerceSetupDivider
-
-                VStack(alignment: .leading, spacing: 12) {
-                    commerceSetupStepHeader(
-                        step: 2,
-                        title: "",
-                        done: m.step2Done,
-                        systemImage: "bubble.left.and.bubble.right.fill"
-                    )
-                    MerchantEstablishmentForm(context: viewContext, sections: .engagementOnlyCommerceInline)
-                        .environmentObject(syncService)
-                }
-                .padding(.horizontal, 4)
-                .padding(.vertical, 6)
+                .animation(.spring(response: 0.42, dampingFraction: 0.86), value: flyerLooksCustomized)
             }
-            .background(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(AppTheme.Colors.background.opacity(0.55))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .strokeBorder(AppTheme.Colors.textSecondary.opacity(0.18), lineWidth: 1)
-            )
+            .commerceTabSectionCard(emphasizePrimaryAccent: false)
+
+            Button {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                commerceNavPath.append(CommerceFlyerDestination.statistics)
+            } label: {
+                HStack(spacing: 14) {
+                    Image(systemName: "chart.xyaxis.line")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(AppTheme.Colors.primary)
+                        .frame(width: 40, height: 40)
+                        .background(AppTheme.Colors.primary.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Statistiques")
+                            .font(.system(.body, design: .rounded, weight: .semibold))
+                            .foregroundStyle(AppTheme.Colors.textPrimary)
+                        Text("Panier, fidélité, campagnes")
+                            .font(.caption)
+                            .foregroundStyle(AppTheme.Colors.textSecondary)
+                    }
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Color.secondary)
+                }
+                .padding(14)
+            }
+            .buttonStyle(.plain)
+            .commerceTabSectionCard(emphasizePrimaryAccent: false)
+
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 10) {
+                    Image("SocialGoogle")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 24, height: 24)
+                    Text("Avis Google")
+                        .font(.system(.title3, design: .rounded, weight: .bold))
+                        .foregroundStyle(AppTheme.Colors.textPrimary)
+                }
+                MerchantEstablishmentForm(
+                    context: viewContext,
+                    sections: .commerceGoogleStandalone
+                )
+                .environmentObject(syncService)
+            }
+            .commerceTabSectionCard(emphasizePrimaryAccent: true)
         }
         .padding(16)
     }
 
-    private var commerceSetupDivider: some View {
-        Divider().padding(.leading, 52)
-    }
+    /// Ratio canvas flyer (identique à `CommerceFlyerSavedBlockView`) — miniature alignée sur le flyer réel.
+    private static let commerceFlyerThumbAspect: CGFloat = 2400.0 / 3600.0
 
-    /// En-tête d’étape (non cliquable) — même style que `commerceSetupRow` sans chevron.
-    private func commerceSetupStepHeader(
-        step: Int,
-        title: String,
-        done: Bool,
-        systemImage: String
-    ) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            ZStack {
-                Circle()
-                    .fill(done ? AppTheme.Colors.success.opacity(0.18) : AppTheme.Colors.textSecondary.opacity(0.12))
-                    .frame(width: 36, height: 36)
-                if done {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(AppTheme.Colors.success)
-                } else {
-                    Text("\(step)")
-                        .font(.system(.subheadline, design: .rounded, weight: .bold))
-                        .foregroundStyle(AppTheme.Colors.textSecondary)
-                }
-            }
+    private var commerceFlyerCreateRow: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Créez votre Flyer de jeu")
+                .font(.title3.weight(.bold))
+                .foregroundStyle(AppTheme.Colors.textPrimary)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
 
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Image(systemName: systemImage)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(AppTheme.Colors.primary.opacity(0.9))
-                if !title.isEmpty {
-                    Text(title)
-                        .font(.body.weight(.semibold))
-                        .foregroundStyle(AppTheme.Colors.textPrimary)
-                        .multilineTextAlignment(.leading)
-                }
+            Text("Partagez-le en magasin ou en ligne : vos clients scannent le QR, ajoutent votre carte et jouent à la roue.")
+                .font(.subheadline)
+                .foregroundStyle(AppTheme.Colors.textSecondary)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack {
+                Spacer(minLength: 0)
+                Image("flyervide")
+                    .resizable()
+                    .scaledToFit()
+                    .aspectRatio(Self.commerceFlyerThumbAspect, contentMode: .fit)
+                    .frame(width: 288)
+                    .accessibilityHidden(true)
+                Spacer(minLength: 0)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 18)
+            .padding(.bottom, -12)
+
+            Button {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                commerceNavPath.append(CommerceFlyerDestination.flyer)
+            } label: {
+                Text("Créer mon flyer de jeu")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(Color.black, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            }
+            .buttonStyle(MerchantPressableButtonStyle())
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-    }
-
-    private func commerceSetupRow(
-        step: Int,
-        title: String,
-        done: Bool,
-        systemImage: String,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button {
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
-            action()
-        } label: {
-            HStack(alignment: .top, spacing: 12) {
-                ZStack {
-                    Circle()
-                        .fill(done ? AppTheme.Colors.success.opacity(0.18) : AppTheme.Colors.textSecondary.opacity(0.12))
-                        .frame(width: 36, height: 36)
-                    if done {
-                        Image(systemName: "checkmark")
-                            .font(.system(size: 14, weight: .bold))
-                            .foregroundStyle(AppTheme.Colors.success)
-                    } else {
-                        Text("\(step)")
-                            .font(.system(.subheadline, design: .rounded, weight: .bold))
-                            .foregroundStyle(AppTheme.Colors.textSecondary)
-                    }
-                }
-
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Image(systemName: systemImage)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(AppTheme.Colors.primary.opacity(0.9))
-                    Text(title)
-                        .font(.body.weight(.semibold))
-                        .foregroundStyle(AppTheme.Colors.textPrimary)
-                        .multilineTextAlignment(.leading)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(AppTheme.Colors.textSecondary.opacity(0.7))
-                    .padding(.top, 2)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 14)
-            .contentShape(Rectangle())
-        }
+        .padding(.vertical, 14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .buttonStyle(PressableScaleButtonStyle())
+        .flyerPrimaryCTAShake(shakeToken: tabRouter.flyerPrimaryCTAShakeToken)
+        .task(id: tabRouter.selectedTab) {
+            guard tabRouter.selectedTab == 2 else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                guard !Task.isCancelled, tabRouter.selectedTab == 2 else { return }
+                tabRouter.triggerFlyerPrimaryCTAAutoShake()
+            }
+        }
     }
 
     private var storeInitials: String {
@@ -466,6 +482,11 @@ struct ProfileView: View {
     }
 
     private var userInitials: String {
+        if let phone = authService.currentUserPhone?.trimmingCharacters(in: .whitespacesAndNewlines), !phone.isEmpty {
+            let digits = phone.filter(\.isNumber)
+            let tail = String(digits.suffix(2))
+            return tail.isEmpty ? "ME" : tail
+        }
         let mail = authService.currentUserEmail?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !mail.isEmpty else { return "ME" }
         let local = mail.split(separator: "@").first.map(String.init) ?? mail
@@ -492,11 +513,7 @@ struct ProfileView: View {
             let (settings, flyer) = try await (settingsTask, flyerTask)
             await MainActor.run {
                 settingsSnapshot = settings
-                if let st = flyer.flyerPrefs?.state {
-                    flyerLooksCustomized = st != .default
-                } else {
-                    flyerLooksCustomized = false
-                }
+                flyerLooksCustomized = flyer.commerceIndicatesFlyerRegistered
                 let trimmedShare = (flyer.shareUrl ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
                 if trimmedShare.isEmpty {
                     commerceFlyerShareURL = LegalURLs.fidelityCardPage(slug: slug)?.absoluteString ?? ""
@@ -506,7 +523,6 @@ struct ProfileView: View {
                 commerceFlyerCustomBgDataURL = flyer.flyerPrefs?.customBgDataUrl
                 commerceFlyerBootstrapPreviewB64 = FlyerBootstrapPreviewPayloadBuilder.base64(from: flyer, businessSlug: slug)
                 let engagement = engagementStepDone(from: settings)
-                cachedEngagementStepDone = engagement
                 CommerceFlyerStateCache.save(
                     slug: slug,
                     flyerRegistered: flyerLooksCustomized,
@@ -540,17 +556,30 @@ struct ProfileView: View {
                 }
                 try? viewContext.save()
                 loadProfile()
+                pushFlyerOnboardingSync()
             }
         } catch {}
     }
 }
 
-private struct PressableScaleButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .scaleEffect(configuration.isPressed ? 0.985 : 1)
-            .opacity(configuration.isPressed ? 0.92 : 1)
-            .animation(.spring(response: 0.22, dampingFraction: 0.8), value: configuration.isPressed)
+private extension View {
+    /// Carte section onglet Commerce — variante Google avec léger accent couleur primaire.
+    func commerceTabSectionCard(emphasizePrimaryAccent: Bool) -> some View {
+        padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(AppTheme.Colors.background.opacity(emphasizePrimaryAccent ? 0.62 : 0.55))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(
+                        emphasizePrimaryAccent
+                            ? AppTheme.Colors.primary.opacity(0.22)
+                            : AppTheme.Colors.textSecondary.opacity(0.14),
+                        lineWidth: 1
+                    )
+            )
     }
 }
 
@@ -571,78 +600,10 @@ private struct TopRoundedShape: Shape {
     }
 }
 
-private struct CommercePublicQRSheet: View {
-    let urlString: String
-    @Environment(\.dismiss) private var dismiss
-
-    private var qrLogicalSide: CGFloat { min(UIScreen.main.bounds.width - 48, 340) }
-
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(spacing: 24) {
-                    Text("Clients : ils scannent et arrivent sur votre page fidélité.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal)
-
-                    if urlString.isEmpty {
-                        ContentUnavailableView(
-                            "Lien indisponible",
-                            systemImage: "link.badge.plus",
-                            description: Text("Connectez un commerce ou réessayez dans un instant.")
-                        )
-                    } else if let img = QRCodeGenerator.generateQR(from: urlString, size: qrLogicalSide * UIScreen.main.scale) {
-                        Image(uiImage: img)
-                            .interpolation(.none)
-                            .resizable()
-                            .scaledToFit()
-                            .frame(width: qrLogicalSide, height: qrLogicalSide)
-                            .padding(20)
-                            .background(RoundedRectangle(cornerRadius: 20).fill(.white))
-                            .shadow(color: .black.opacity(0.2), radius: 20, y: 8)
-
-                        Text(urlString)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(4)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal)
-
-                        Button {
-                            UIPasteboard.general.string = urlString
-                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                        } label: {
-                            Label("Copier le lien", systemImage: "doc.on.doc")
-                        }
-                        .buttonStyle(.borderedProminent)
-                    } else {
-                        ContentUnavailableView(
-                            "QR indisponible",
-                            systemImage: "exclamationmark.triangle",
-                            description: Text("Réessayez dans un instant.")
-                        )
-                    }
-                }
-                .padding(.vertical, 24)
-                .frame(maxWidth: .infinity)
-            }
-            .navigationTitle("QR code fidélité")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Fermer") { dismiss() }
-                }
-            }
-        }
-        .presentationDetents([.large])
-    }
-}
-
 #Preview {
     ProfileView(context: PersistenceController.preview.container.viewContext)
         .environmentObject(AuthService())
         .environmentObject(SyncService(container: PersistenceController.preview.container))
+        .environmentObject(RevenueCatSubscriptionState())
         .environmentObject(MainTabRouter())
 }

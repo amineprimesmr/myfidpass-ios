@@ -7,8 +7,18 @@
 
 import SwiftUI
 
+/// Quel média authentifié est affiché : permet des caches `?v=` **indépendants** (carte / fiche / campagne).
+enum LogoAssetContext: Equatable {
+    case automatic
+    case merchantStripeLogo
+    case merchantLogoIcon
+    case campaignNotificationIcon
+}
+
 struct BusinessLogoView: View {
     var logoURL: String?
+    /// Par défaut `automatic` : déduit le type depuis le chemin d’URL (`/logo`, `/logo-icon`, `/notification-icon`).
+    var logoAssetContext: LogoAssetContext = .automatic
     var size: CGFloat = 80
     var cornerRadius: CGFloat = 20
 
@@ -33,25 +43,30 @@ struct BusinessLogoView: View {
     @ViewBuilder
     private func logoImage(from urlString: String) -> some View {
         let trimmed = urlString.trimmingCharacters(in: .whitespaces)
-        let filePath: String? = if trimmed.hasPrefix("/") || trimmed.hasPrefix("file:") {
-            trimmed.hasPrefix("file:") ? URL(string: trimmed)?.path : trimmed
-        } else if trimmed.contains("CardLogos"), let full = CardLogoStorage.fullPath(forRelative: trimmed) {
-            full
-        } else {
-            nil
-        }
-        if let path = filePath {
-            let url = URL(fileURLWithPath: path)
-            if let data = try? Data(contentsOf: url), let uiImage = UIImage(data: data) {
-                Image(uiImage: uiImage)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-            } else {
-                logoPlaceholder
+        if let path = APIResourceURL.localImageFilePathIfPresent(trimmed) {
+            AsyncLocalFileImage(filePath: path, contentMode: .fill)
+                .id(path)
+        } else if let url = APIResourceURL.resolved(from: trimmed), shouldLoadNotificationIconWithAsyncImage(url) {
+            // GET …/notification-icon est public côté API (pas de Bearer). AsyncImage = chargement type Safari, sans la chaîne AuthenticatedMediaLoader.
+            let displayURL = authenticatedLogoURLWithCacheBust(url)
+            AsyncImage(url: displayURL) { phase in
+                switch phase {
+                case .success(let image):
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                case .failure, .empty:
+                    logoPlaceholder
+                @unknown default:
+                    logoPlaceholder
+                }
             }
-        } else if let url = URL(string: trimmed), isAPILogoURL(url) {
-            ProfileAuthenticatedLogoView(url: url, size: size)
-        } else if let url = URL(string: trimmed) {
+            .id(displayURL.absoluteString)
+        } else if let url = APIResourceURL.resolved(from: trimmed), isAPILogoURL(url) {
+            let displayURL = authenticatedLogoURLWithCacheBust(url)
+            ProfileAuthenticatedLogoView(url: displayURL, size: size)
+                .id(displayURL.absoluteString)
+        } else if let url = APIResourceURL.resolved(from: trimmed) {
             AsyncImage(url: url) { phase in
                 switch phase {
                 case .success(let image):
@@ -64,14 +79,75 @@ struct BusinessLogoView: View {
                     logoPlaceholder
                 }
             }
+            .id(url.absoluteString)
         } else {
             logoPlaceholder
         }
     }
 
+    /// `notification-icon` est géré à part (`AsyncImage` public) — ne pas l’inclure ici.
     private func isAPILogoURL(_ url: URL) -> Bool {
         guard url.scheme == "http" || url.scheme == "https" else { return false }
-        return url.host() == APIConfig.baseURL.host() && url.path.contains("/logo")
+        guard hostsMatchAPIBase(url) else { return false }
+        let p = url.path
+        if p.contains("/notification-icon") { return false }
+        return p.hasSuffix("/logo") || p.contains("/logo-icon")
+    }
+
+    private func shouldLoadNotificationIconWithAsyncImage(_ url: URL) -> Bool {
+        guard url.scheme == "http" || url.scheme == "https" else { return false }
+        guard hostsMatchAPIBase(url) else { return false }
+        return url.path.contains("/notification-icon")
+    }
+
+    private func hostsMatchAPIBase(_ url: URL) -> Bool {
+        let h1 = url.host()?.lowercased()
+        let h2 = APIConfig.baseURL.host()?.lowercased()
+        guard let h1, let h2 else { return false }
+        return h1 == h2
+    }
+
+    private func resolvedAssetContext(for url: URL) -> LogoAssetContext {
+        if logoAssetContext != .automatic { return logoAssetContext }
+        let p = url.path
+        if p.contains("/notification-icon") { return .campaignNotificationIcon }
+        if p.contains("/logo-icon") { return .merchantLogoIcon }
+        if p.hasSuffix("/logo") { return .merchantStripeLogo }
+        return .merchantStripeLogo
+    }
+
+    /// Cache HTTP / mémoire : `v` selon le **type** de média (commerce vs campagne).
+    private func authenticatedLogoURLWithCacheBust(_ url: URL) -> URL {
+        var c = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        let ctx = resolvedAssetContext(for: url)
+        switch ctx {
+        case .campaignNotificationIcon:
+            let serverAt = UserDefaults.standard.object(forKey: CampaignNotificationImageCache.previewCompositeServerBustKey) as? Date
+            let localAt = UserDefaults.standard.object(forKey: SyncService.lastNotificationIconUploadAtKey) as? Date
+            if let d = [serverAt, localAt].compactMap({ $0 }).max() {
+                c?.queryItems = [URLQueryItem(name: "v", value: Self.cacheBustQueryValue(from: d))]
+            }
+        case .merchantLogoIcon:
+            let serverAt = UserDefaults.standard.object(forKey: MerchantLogoAssetCache.logoIconServerDateKey) as? Date
+            let localAt = UserDefaults.standard.object(forKey: SyncService.lastLogoIconUploadAtKey) as? Date
+            if let d = [serverAt, localAt].compactMap({ $0 }).max() {
+                c?.queryItems = [URLQueryItem(name: "v", value: Self.cacheBustQueryValue(from: d))]
+            }
+        case .merchantStripeLogo:
+            let serverAt = UserDefaults.standard.object(forKey: MerchantLogoAssetCache.logoServerDateKey) as? Date
+            let localAt = UserDefaults.standard.object(forKey: SyncService.lastLogoUploadAtKey) as? Date
+            if let d = [serverAt, localAt].compactMap({ $0 }).max() {
+                c?.queryItems = [URLQueryItem(name: "v", value: Self.cacheBustQueryValue(from: d))]
+            }
+        case .automatic:
+            break
+        }
+        return c?.url ?? url
+    }
+
+    /// `Int(secondes)` pour `?v=` faisait coller deux URLs dans la même seconde → `URLCache` / `AsyncImage` pouvaient réutiliser l’ancienne image.
+    private static func cacheBustQueryValue(from date: Date) -> String {
+        String(Int64((date.timeIntervalSince1970 * 1000.0).rounded()))
     }
 
     private var logoPlaceholder: some View {
@@ -88,6 +164,8 @@ private struct ProfileAuthenticatedLogoView: View {
     @State private var image: UIImage?
     @State private var failed = false
 
+    private var urlKey: String { url.absoluteString }
+
     var body: some View {
         Group {
             if let image {
@@ -103,22 +181,39 @@ private struct ProfileAuthenticatedLogoView: View {
                     .tint(AppTheme.Colors.primary)
             }
         }
-        .task(id: url.absoluteString) {
-            guard image == nil, !failed else { return }
-            guard let token = AuthStorage.authToken, !token.isEmpty else { failed = true; return }
-            var req = URLRequest(url: url)
-            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-            req.cachePolicy = .reloadIgnoringLocalCacheData
-            do {
-                let (data, resp) = try await URLSession.shared.data(for: req)
-                guard let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode),
-                      let img = UIImage(data: data) else {
-                    await MainActor.run { failed = true }
-                    return
+        .onChange(of: urlKey) { _, _ in
+            image = nil
+            failed = false
+        }
+        .task(id: urlKey) {
+            let loadKey = urlKey
+            if let instant = AuthenticatedMediaLoader.memoryCachedImage(for: url, maxPixelDimension: 720) {
+                await MainActor.run {
+                    guard loadKey == urlKey else { return }
+                    image = instant
                 }
-                await MainActor.run { image = img }
+            }
+            guard AuthStorage.authToken != nil, !(AuthStorage.authToken ?? "").isEmpty else {
+                await MainActor.run {
+                    guard loadKey == urlKey else { return }
+                    failed = true
+                }
+                return
+            }
+            do {
+                let img = try await AuthenticatedMediaLoader.loadAuthenticatedImage(from: url, maxPixelDimension: 720)
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    guard loadKey == urlKey else { return }
+                    image = img
+                    failed = false
+                }
             } catch {
-                await MainActor.run { failed = true }
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    guard loadKey == urlKey else { return }
+                    if image == nil { failed = true }
+                }
             }
         }
     }

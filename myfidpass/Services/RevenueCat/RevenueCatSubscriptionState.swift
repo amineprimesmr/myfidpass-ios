@@ -4,6 +4,9 @@
 //
 //  Abonnements natifs (StoreKit) via RevenueCat : paywall, restore, alignement utilisateur avec le compte MyFidpass.
 //
+//  ⚠️ Tous les accès à `Purchases.shared` sont gardés par `Purchases.isConfigured`
+//     pour éviter tout crash quand la clé publique n'est pas encore fournie.
+//
 
 import Foundation
 import Combine
@@ -16,17 +19,26 @@ final class RevenueCatSubscriptionState: NSObject, ObservableObject {
 
     override init() {
         super.init()
+        guard Purchases.isConfigured else { return }
         Purchases.shared.delegate = self
         refreshFromCachedCustomerInfo()
     }
 
     /// Appeler une fois au lancement, **après** `Purchases.configure`.
     func refreshFromCachedCustomerInfo() {
+        guard Purchases.isConfigured else {
+            hasPremiumEntitlement = false
+            return
+        }
         let info = Purchases.shared.cachedCustomerInfo
         applyCustomerInfo(info)
     }
 
     func refreshCustomerInfo() async {
+        guard Purchases.isConfigured else {
+            hasPremiumEntitlement = false
+            return
+        }
         do {
             let info = try await Purchases.shared.customerInfo()
             applyCustomerInfo(info)
@@ -36,8 +48,9 @@ final class RevenueCatSubscriptionState: NSObject, ObservableObject {
         }
     }
 
-    /// Associe l’utilisateur MyFidpass au client RevenueCat (`Purchases.logIn`).
+    /// Associe l'utilisateur MyFidpass au client RevenueCat (`Purchases.logIn`).
     func syncWithAppAccount() async {
+        guard Purchases.isConfigured else { return }
         guard AuthStorage.isLoggedIn else {
             await logOutRevenueCat()
             return
@@ -56,6 +69,10 @@ final class RevenueCatSubscriptionState: NSObject, ObservableObject {
     }
 
     func logOutRevenueCat() async {
+        guard Purchases.isConfigured else {
+            hasPremiumEntitlement = false
+            return
+        }
         do {
             _ = try await Purchases.shared.logOut()
             hasPremiumEntitlement = false

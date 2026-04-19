@@ -395,7 +395,6 @@ final class AuthService: NSObject, ObservableObject {
             FirstLaunchOnboarding.clearPendingEstablishmentFromOnboarding()
             applyAuthSuccess(response)
             AuthStorage.pendingOpenMerchantSubscriptionSheetAfterSignup = true
-            AuthStorage.armMerchantHomeTutorialAfterSignup()
         } catch let e as APIError {
             if case .server(let code, _) = e, code == 409 {
                 throw AuthError.emailAlreadyUsed
@@ -449,11 +448,15 @@ final class AuthService: NSObject, ObservableObject {
             .authPhoneVerify(phone: phone, code: code, googlePlaceId: placeId, establishmentName: estName)
         )
         AuthStorage.authProvider = .phone
-        if placeId != nil || estName != nil {
+        let isNewPhoneSignup = (placeId != nil || estName != nil)
+        if isNewPhoneSignup {
             MerchantLinkedPlaceCache.snapshotFromPendingOnboarding()
             FirstLaunchOnboarding.clearPendingEstablishmentFromOnboarding()
         }
         applyAuthSuccess(response)
+        if isNewPhoneSignup {
+            AuthStorage.pendingOpenMerchantSubscriptionSheetAfterSignup = true
+        }
     }
 
     /// Connexion Apple. POST /api/auth/apple avec idToken (JWT). L’app envoie credential.identityToken.
@@ -476,7 +479,7 @@ final class AuthService: NSObject, ObservableObject {
             }
             applyAuthSuccess(response)
             if isNewAppleSignup {
-                AuthStorage.armMerchantHomeTutorialAfterSignup()
+                AuthStorage.pendingOpenMerchantSubscriptionSheetAfterSignup = true
             }
             currentUserEmail = response.user.email ?? email ?? "Compte Apple"
         } catch let e as APIError {
@@ -514,12 +517,16 @@ final class AuthService: NSObject, ObservableObject {
         }
         applyAuthSuccess(response)
         if isNewGoogleSignup {
-            AuthStorage.armMerchantHomeTutorialAfterSignup()
+            AuthStorage.pendingOpenMerchantSubscriptionSheetAfterSignup = true
         }
     }
 
     /// Applique le JWT reçu après le redirect OAuth Google (myfidpass://auth?token=xxx&refreshToken=yyy), appelle /me puis met à jour la session.
     func applyTokenFromGoogleOAuthCallback(token: String, refreshToken: String?) async throws {
+        let pending = FirstLaunchOnboarding.readPendingEstablishment()
+        let isNewGoogleSignupFromOnboarding =
+            (pending.placeId != nil)
+            || (pending.description?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
         // Effacer d’abord toute session locale (ex. compte supprimé côté serveur) pour ne pas mélanger refresh / access avec les jetons OAuth neufs.
         AuthStorage.authToken = nil
         AuthStorage.refreshToken = nil
@@ -540,6 +547,9 @@ final class AuthService: NSObject, ObservableObject {
             merchantTrialEndsAt: me.merchantTrialEndsAt
         )
         applyAuthSuccess(response)
+        if isNewGoogleSignupFromOnboarding {
+            AuthStorage.pendingOpenMerchantSubscriptionSheetAfterSignup = true
+        }
     }
 
     /// Lance le flux OAuth Google (ouverture navigateur → redirect myfidpass://auth?token=…). En cas d’erreur ou d’annulation, throw.

@@ -34,6 +34,7 @@ struct DashboardView: View {
     @EnvironmentObject private var syncService: SyncService
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var tabRouter: MainTabRouter
+    @EnvironmentObject private var authService: AuthService
     @StateObject private var dataService: DataService
 
     @State private var showScanner: Bool = false
@@ -50,10 +51,14 @@ struct DashboardView: View {
     @State private var navigationPath = NavigationPath()
     @State private var contentAppeared = false
     @State private var scanResultSheet: ScanResultSheetData?
+    @State private var scanStampSheet: ScanStampSheetData?
     @State private var isScanAmountSubmitting = false
+    @State private var isStampVisitSubmitting = false
     @StateObject private var receiptCoordinator = ReceiptValidationCoordinator()
     /// Incrémenté quand `CardPreviewDisplaySnapshotStore` change pour forcer le re-rendu de l’aperçu carte (autre `DataService` que Ma carte).
     @State private var cardPreviewDisplayRefresh = 0
+    /// Une fois `true` après avoir ouvert « Ma carte » depuis l’aperçu accueil — arrête pulse sur l’aperçu.
+    @AppStorage("myfidpass.merchantHomeCardOpenedFromHome.v1") private var merchantHomeCardOpenedFromHome = false
 
     private var palette: DashboardRevolutPalette { DashboardRevolutPalette(colorScheme: colorScheme) }
 
@@ -129,7 +134,11 @@ struct DashboardView: View {
                 VStack(spacing: 0) {
                     DashboardHomeMinimalTopBar(
                         palette: palette,
-                        onOpenProfile: { tabRouter.selectedTab = 2 },
+                        onOpenProfile: {
+                            withAnimation(MerchantMotion.tabSwitch) {
+                                tabRouter.selectedTab = 2
+                            }
+                        },
                         onOpenScan: { showScanner = true }
                     )
                     .padding(.horizontal, DashboardHomeLayoutMetrics.topBarHorizontalInset)
@@ -179,7 +188,7 @@ struct DashboardView: View {
             }
         }
         .onAppear {
-            withAnimation(.easeOut(duration: 0.5).delay(0.06)) {
+            withAnimation(MerchantMotion.contentReveal.delay(0.05)) {
                 contentAppeared = true
             }
         }
@@ -221,6 +230,7 @@ struct DashboardView: View {
                 }
             }
         }
+        .animation(MerchantMotion.navigationPath, value: navigationPath.count)
         .onChange(of: navigationPath) { _, path in
             tabRouter.isDashboardAtRoot = path.isEmpty
         }
@@ -242,6 +252,16 @@ struct DashboardView: View {
         }
         .fullScreenCover(item: $scanResultSheet) { data in
             scanAddPointsSheet(for: data)
+        }
+        .fullScreenCover(item: $scanStampSheet) { data in
+            AddStampVisitSheet(
+                data: data,
+                isSubmitting: $isStampVisitSubmitting,
+                onDismiss: { scanStampSheet = nil },
+                onConfirm: {
+                    await submitStampVisit(slug: data.slug, barcode: data.barcode)
+                }
+            )
         }
     }
 
@@ -274,6 +294,21 @@ struct DashboardView: View {
 
     // MARK: - Accueil type fintech (carte + transactions)
 
+    private var showHomeCardTapHint: Bool { !merchantHomeCardOpenedFromHome }
+
+    @ViewBuilder
+    private func merchantHomeCardPreviewButton<Label: View>(@ViewBuilder label: () -> Label) -> some View {
+        Button {
+            merchantHomeCardOpenedFromHome = true
+            navigationPath.append(DashboardRoute.myCard)
+        } label: {
+            label()
+        }
+        .buttonStyle(MerchantPressableButtonStyle())
+        .accessibilityLabel("Ma carte")
+        .accessibilityHint("Ouvre la personnalisation de la carte fidélité.")
+    }
+
     private var fintechHomeTopAndCard: some View {
         VStack(alignment: .leading, spacing: DashboardHomeChrome.showMinimalTopBar ? 18 : 8) {
             Color.clear
@@ -281,21 +316,15 @@ struct DashboardView: View {
                 .accessibilityHidden(true)
 
             if let model = DashboardHomeCardModel.resolve(dataService: dataService) {
-                Button {
-                    navigationPath.append(DashboardRoute.myCard)
-                } label: {
+                merchantHomeCardPreviewButton {
                     FintechHomeLoyaltyCardBlock(
                         model: model,
                         palette: palette
                     )
+                    .modifier(MerchantHomeCardFirstVisitShakeModifier(active: showHomeCardTapHint))
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Ma carte")
-                .accessibilityHint("Ouvre la personnalisation de la carte fidélité.")
             } else {
-                Button {
-                    navigationPath.append(DashboardRoute.myCard)
-                } label: {
+                merchantHomeCardPreviewButton {
                     RoundedRectangle(cornerRadius: 36, style: .continuous)
                         .fill(palette.card)
                         .frame(height: 200)
@@ -318,13 +347,87 @@ struct DashboardView: View {
                             RoundedRectangle(cornerRadius: 36, style: .continuous)
                                 .strokeBorder(palette.cardStroke, lineWidth: 1)
                         )
+                        .modifier(MerchantHomeCardFirstVisitShakeModifier(active: showHomeCardTapHint))
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Ma carte")
-                .accessibilityHint("Ouvre la personnalisation de la carte fidélité.")
             }
         }
         .id(cardPreviewDisplayRefresh)
+    }
+
+    /// Secousse type « shake » toutes les ~5 s (pas un balancement continu) tant que Ma carte n’a pas été ouverte depuis l’accueil.
+    private struct MerchantHomeCardFirstVisitShakeModifier: ViewModifier {
+        var active: Bool
+        @Environment(\.accessibilityReduceMotion) private var reduceMotion
+        @State private var offsetX: CGFloat = 0
+        @State private var shakeLoopTask: Task<Void, Never>?
+
+        func body(content: Content) -> some View {
+            content
+                .offset(x: offsetX)
+                .shadow(color: Color.black.opacity(active ? 0.2 : 0.18), radius: 12, y: 6)
+                .onAppear { restartShakeLoopIfNeeded() }
+                .onChange(of: active) { _, new in
+                    if new {
+                        restartShakeLoopIfNeeded()
+                    } else {
+                        cancelShakeLoop(resetOffset: true)
+                    }
+                }
+                .onChange(of: reduceMotion) { _, _ in
+                    if reduceMotion {
+                        cancelShakeLoop(resetOffset: true)
+                    } else {
+                        restartShakeLoopIfNeeded()
+                    }
+                }
+                .onDisappear {
+                    cancelShakeLoop(resetOffset: true)
+                }
+        }
+
+        private func cancelShakeLoop(resetOffset: Bool) {
+            shakeLoopTask?.cancel()
+            shakeLoopTask = nil
+            if resetOffset {
+                offsetX = 0
+            }
+        }
+
+        private func restartShakeLoopIfNeeded() {
+            cancelShakeLoop(resetOffset: true)
+            guard active, !reduceMotion else { return }
+            shakeLoopTask = Task { @MainActor in
+                do {
+                    try await Task.sleep(for: .seconds(5))
+                } catch {
+                    return
+                }
+                while !Task.isCancelled {
+                    await performShakeBurst()
+                    do {
+                        try await Task.sleep(for: .seconds(5))
+                    } catch {
+                        return
+                    }
+                }
+            }
+        }
+
+        /// Même logique que `FlyerPrimaryCTAShakeModifier` : impulsions gauche-droite rapides, puis repos.
+        private func performShakeBurst() async {
+            let pattern: [CGFloat] = [0, -10, 10, -8, 8, -5, 5, -2, 2, 0]
+            for x in pattern {
+                if Task.isCancelled { return }
+                withAnimation(MerchantMotion.flyerCTAShakeStep) {
+                    offsetX = x
+                }
+                do {
+                    try await Task.sleep(nanoseconds: 38_000_000)
+                } catch {
+                    return
+                }
+            }
+        }
     }
 
     private var fintechTransactionsSection: some View {
@@ -343,10 +446,6 @@ struct DashboardView: View {
                     Text("Aucune transaction récente")
                         .font(.body.weight(.bold))
                         .foregroundStyle(palette.onCanvasPrimary)
-                    Text("Tirez vers le bas pour synchroniser. Les transactions (scans) apparaissent ici après enregistrement.")
-                        .font(.subheadline)
-                        .foregroundStyle(palette.secondaryText)
-                        .multilineTextAlignment(.center)
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 28)
@@ -360,7 +459,7 @@ struct DashboardView: View {
                         } label: {
                             FintechTransactionRow(entry: entry, palette: palette, isPointsProgram: homeProgramIsPoints)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(MerchantPressableButtonStyle(scalePressed: 0.98, opacityPressed: 0.94))
                         .accessibilityLabel("Ouvrir la fiche de \(entry.clientName)")
                     }
                 }
@@ -547,6 +646,11 @@ struct DashboardView: View {
         return (settings.pointsPerEuro ?? 0) > 0
     }
 
+    private func shouldPresentStampVisitSheetAfterScan(_ settings: BusinessSettingsResponse) -> Bool {
+        let pt = (settings.programType ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return pt == "stamps"
+    }
+
     private func handleQRScanned(_ code: String) {
         guard let slug = AuthStorage.currentBusinessSlug else {
             appState.showError("Aucun commerce. Reconnectez-vous.")
@@ -601,6 +705,33 @@ struct DashboardView: View {
                     return
                 }
 
+                if shouldPresentStampVisitSheetAfterScan(settings) {
+                    let stampModel = await MainActor.run {
+                        DashboardHomeCardModel.resolveStampScanPreview(
+                            dataService: dataService,
+                            memberName: memberName,
+                            memberStampBalance: lookup.member.points,
+                            settings: settings
+                        )
+                    }
+                    if let stampModel {
+                        let stampData = ScanStampSheetData(
+                            slug: slug,
+                            barcode: barcode,
+                            memberName: memberName,
+                            cardModel: stampModel
+                        )
+                        await MainActor.run {
+                            var tx = Transaction()
+                            tx.disablesAnimations = true
+                            withTransaction(tx) {
+                                scanStampSheet = stampData
+                            }
+                        }
+                        return
+                    }
+                }
+
                 let response: ScanResponse = try await APIClient.shared.request(
                     .scan(slug: slug, barcode: barcode, visit: true, points: nil, amountEur: nil, receiptValidationToken: nil)
                 )
@@ -609,7 +740,8 @@ struct DashboardView: View {
                         memberName: response.member?.name ?? memberName,
                         pointsCapped: response.pointsCapped == true,
                         pointsRequested: response.pointsRequested,
-                        pointsAdded: response.pointsAdded
+                        pointsAdded: response.pointsAdded,
+                        stampCycleCompleted: response.stampCycleCompleted == true
                     )
                     showToast = true
                 }
@@ -626,6 +758,40 @@ struct DashboardView: View {
                     appState.showError(msg)
                 }
             }
+        }
+    }
+
+    @discardableResult
+    private func submitStampVisit(slug: String, barcode: String) async -> Bool {
+        isStampVisitSubmitting = true
+        defer { Task { @MainActor in isStampVisitSubmitting = false } }
+        do {
+            let response: ScanResponse = try await APIClient.shared.request(
+                .scan(slug: slug, barcode: barcode, visit: true, points: nil, amountEur: nil, receiptValidationToken: nil)
+            )
+            await MainActor.run {
+                successToast = Toast.scanStampSuccess(
+                    memberName: response.member?.name ?? "Client",
+                    pointsCapped: response.pointsCapped == true,
+                    pointsRequested: response.pointsRequested,
+                    pointsAdded: response.pointsAdded,
+                    stampCycleCompleted: response.stampCycleCompleted == true
+                )
+                var tx = Transaction()
+                tx.disablesAnimations = true
+                withTransaction(tx) {
+                    scanStampSheet = nil
+                }
+                showToast = true
+            }
+            await syncService.syncAfterServerMutation()
+            return true
+        } catch {
+            await MainActor.run {
+                scanError = (error as? APIError)?.errorDescription ?? "Erreur lors de l’enregistrement du tampon."
+                appState.showError(scanError ?? "Erreur")
+            }
+            return false
         }
     }
 

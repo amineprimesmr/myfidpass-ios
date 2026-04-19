@@ -78,10 +78,12 @@ struct RootView: View {
 }
 
 #Preview {
-    RevenueCatBootstrap.configureIfNeeded()
     RootView()
         .environmentObject(AuthService())
         .environmentObject(SyncService(container: PersistenceController.preview.container))
         .environmentObject(RevenueCatSubscriptionState())
         .environment(\.managedObjectContext, PersistenceController.preview.container.viewContext)
+        .onAppear {
+            RevenueCatBootstrap.configureIfNeeded()
+        }
 }

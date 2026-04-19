@@ -114,10 +114,13 @@ struct NotificationSendPayload: Encodable {
     let message: String
     let categoryIds: [String]?
     let segment: String?
+    /// `true` : n’envoyer le PassKit qu’au commerçant (même compte), pas aux autres membres.
+    var testSelfOnly: Bool = false
 
     enum CodingKeys: String, CodingKey {
         case title, message, segment
         case categoryIds = "category_ids"
+        case testSelfOnly = "test_self_only"
     }
 }
 
@@ -126,15 +129,70 @@ struct NotificationSendResponse: Decodable {
     let sent: Int?
     let sentWebPush: Int?
     let sentPassKit: Int?
+    let sentMerchantApp: Int?
+    /// Total d’appareils ciblés (réponse dashboard / fidelity).
+    let total: Int?
+    let failed: Int?
     let message: String?
+    let testSelfOnly: Bool?
+    /// `true` : HTTP 202 — l’envoi continue sur le serveur (évite timeout sur gros volumes).
+    let accepted: Bool?
+    let asyncDelivery: Bool?
 }
 
 struct CampaignSegmentsResponse: Decodable {
+    let inactive14: Int?
     let inactive30: Int?
+    let inactive60: Int?
     let inactive90: Int?
+    let new7: Int?
     let new30: Int?
-    let recurrent: Int?
+    let welcomeNew: Int?
+    let pointsNear50: Int?
     let points50: Int?
+    let recurrent: Int?
+    let birthdayToday: Int?
+}
+
+// MARK: - Campagnes automatiques (GET/PATCH dashboard/settings)
+
+struct CampaignAutomationRuleDTO: Codable, Equatable {
+    var enabled: Bool?
+    var message: String?
+    /// Segment API (`inactive14`, `new7`, …) — obligatoire pour les règles dont `id` commence par `custom_`.
+    var segment: String?
+    /// Libellé dans l’app (automatisations personnalisées).
+    var title: String?
+
+    /// Type d’évènement (v1). Utilisé pour les règles dont `id` commence par `event_`.
+    /// Exemple v1 : `member_created`.
+    var eventType: String? = nil
+
+    /// Délai avant envoi, en minutes (v1). Utilisé pour les règles `event_`.
+    var delayMinutes: Int? = nil
+
+    enum CodingKeys: String, CodingKey {
+        case enabled, message, segment, title, eventType, delayMinutes
+    }
+}
+
+struct CampaignAutomationConfigDTO: Codable, Equatable {
+    var version: Int?
+    /// Délai minimum entre deux notifications pour un même client (tous scénarios confondus).
+    var globalCooldownDays: Int?
+    var rules: [String: CampaignAutomationRuleDTO]?
+
+    enum CodingKeys: String, CodingKey {
+        case version
+        case globalCooldownDays = "global_cooldown_days"
+        case rules
+    }
+}
+
+/// Réponse `POST .../dashboard/members/delete-all`.
+struct DeleteAllMembersResponse: Decodable {
+    let ok: Bool?
+    let deleted: Int?
 }
 
 struct NotificationChannelStatsResponse: Decodable {
@@ -150,6 +208,12 @@ struct NotificationChannelStatsResponse: Decodable {
     let paradoxExplanation: String?
     let dataDirHint: String?
     let membersVsDevicesExplanation: String?
+    /// Exemple de commande documentée côté SaaS (endpoint diagnostic PassKit).
+    let testPasskitCurl: String?
+    /// Clé APNs optionnelle (MERCHANT_APNS_* sur le backend) ; l’ajout Apple Wallet utilise PassKit.
+    let merchantAppPushConfigured: Bool?
+    /// Détail diagnostic si la clé MERCHANT_APNS n’est pas configurée.
+    let merchantAppPushDetail: String?
 }
 
 struct TestPasskitResponse: Decodable {
@@ -163,6 +227,20 @@ struct RemoveTestDeviceResponse: Decodable {
     let ok: Bool?
     let removed: Int?
     let message: String?
+}
+
+struct CampaignAutomationAIParseRequestDTO: Encodable {
+    let instruction: String
+}
+
+struct CampaignAutomationAIParseResponseDTO: Decodable {
+    let mode: String?
+    let title: String?
+    let message: String?
+    let eventType: String?
+    let delayMinutes: Int?
+    let confidence: Double?
+    let source: String?
 }
 
 // MARK: - Notify (alias iOS)
@@ -281,12 +359,50 @@ struct CheckoutSessionPayload: Encodable {
     let planId: String?
 }
 
+struct PaymentReconcileEmptyBody: Encodable {}
+
+/// POST /api/payment/reconcile-subscription — réaligne la base sur Stripe pour l’email du compte connecté.
+struct PaymentReconcileSubscriptionResponse: Decodable {
+    let ok: Bool?
+    let hasActiveSubscription: Bool?
+    let message: String?
+    let subscriptionStatus: String?
+}
+
 // MARK: - Inscription / mot de passe
 
 struct AuthRegisterPayload: Encodable {
     let email: String
     let password: String
     let name: String?
+    let googlePlaceId: String?
+    let establishmentName: String?
+}
+
+// MARK: - Google Places (onboarding inscription, aligné SaaS)
+
+struct PlacesAutocompleteResponse: Decodable {
+    let predictions: [PlaceAutocompletePrediction]
+}
+
+struct PlaceAutocompletePrediction: Decodable {
+    let placeId: String
+    let description: String
+    let mainText: String?
+    let secondaryText: String?
+}
+
+/// GET /api/places/details — nom + adresse à partir du seul place_id (affichage sans nouvelle recherche).
+struct PlacesPlaceDetailsResponse: Decodable {
+    let placeId: String
+    let name: String?
+    let formattedAddress: String?
+
+    enum CodingKeys: String, CodingKey {
+        case placeId = "place_id"
+        case name
+        case formattedAddress = "formatted_address"
+    }
 }
 
 struct ForgotPasswordPayload: Encodable {

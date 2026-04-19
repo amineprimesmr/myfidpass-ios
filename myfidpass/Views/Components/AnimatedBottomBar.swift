@@ -39,8 +39,14 @@ struct AnimatedBottomBar<LeadingAction: View, TrailingAction: View, MainAction: 
                     HStack(spacing: 10) {
                         /// Leading Actions
                         HStack(spacing: 10) {
-                            ForEach(subviews: leadingAction()) { subview in
-                                subview
+                            if #available(iOS 18.0, *) {
+                                ForEach(subviews: leadingAction()) { subview in
+                                    subview
+                                        .frame(width: 35, height: 35)
+                                        .contentShape(.rect)
+                                }
+                            } else {
+                                leadingAction()
                                     .frame(width: 35, height: 35)
                                     .contentShape(.rect)
                             }

@@ -5,9 +5,10 @@
 //  Feuille modale de personnalisation par zone de la carte (tap sur l’aperçu).
 //
 
-import SwiftUI
+import Combine
 import Photos
 import PhotosUI
+import SwiftUI
 import UIKit
 
 // MARK: - Données liées (bindings + actions async)
@@ -20,7 +21,6 @@ struct CardCustomizationBindPack {
     let stripText: Binding<String>
     let logoURL: Binding<String>
     let logoPhotoItem: Binding<PhotosPickerItem?>
-    let headerRightText: Binding<String>
     let labelMember: Binding<String>
     let labelRestants: Binding<String>
     let displayName: Binding<String>
@@ -34,10 +34,11 @@ struct CardCustomizationBindPack {
     let previewStampsCount: Binding<Int>
     let previewPointsCount: Binding<Int>
     let stampEmoji: Binding<String>
+    let stampIconPhotoItem: Binding<PhotosPickerItem?>
     let stampRewardLabel: Binding<String>
     let stampMidRewardLabel: Binding<String>
-    let stampSkipMidReward: Binding<Bool>
-    let stampIconPhotoItem: Binding<PhotosPickerItem?>
+    /// Palier « Début du jeu » (non modifiable côté seuil, récompense éditable). Commun aux modes points et tampons.
+    let startGameRewardLabel: Binding<String>
     let backTerms: Binding<String>
     let backContact: Binding<String>
     let notificationTitleOverride: Binding<String>
@@ -45,14 +46,11 @@ struct CardCustomizationBindPack {
 }
 
 struct CardCustomizationActions {
-    let loadLogoFromPicker: (PhotosPickerItem?) async -> Void
     let loadLogoFromPhotoAsset: (PHAsset) async -> Void
-    let loadCardBackgroundFromPicker: (PhotosPickerItem?) async -> Void
     let loadCardBackgroundFromPhotoAsset: (PHAsset) async -> Void
-    let loadStampIconFromPicker: (PhotosPickerItem?) async -> Void
     let removeCardBackground: () -> Void
     let removeLogo: () -> Void
-    let resetStampIcon: () -> Void
+    let resetStampIcon: (String) -> Void
 }
 
 // MARK: - Feuille
@@ -61,83 +59,154 @@ struct CardElementCustomizationSheet: View {
     let zone: CardPreviewEditZone
     let pack: CardCustomizationBindPack
     let actions: CardCustomizationActions
-    var logoDominantColors: [String]
+    var cardImageSuggestedColors: [String]
     var dashboardSettingsHydrated: Bool
-    var onClose: () -> Void
-    var onSave: () async -> Bool
-
-    @State private var isSaving = false
-    @State private var savedFlash = false
-
-    @State private var flyerAPIBusy = false
-    @State private var flyerBootstrapBase64: String?
-    @State private var flyerPreviewFailed = false
-    @State private var flyerWebRendering = true
+    /// État local pour la feuille de cadrage (évite les problèmes de présentation avec un `Binding` parent).
+    @State private var cropEditorPayload: ImageCropPayload?
+    var onCropComplete: (UIImage, ImageCropSpec) async -> Void
 
     /// Même gabarit de feuille que le logo : pas de sélecteurs de couleur, hauteur initiale compacte.
     private var usesCompactImagePickerSheet: Bool {
         zone == .logoBand || zone == .backgroundImage
     }
 
+    /// « Système de carte » et « Récompenses » : marges verticales alignées (segment Programme + contenu).
+    private var usesTightVerticalPadding: Bool {
+        zone == .mainMetrics || zone == .headerRight
+    }
+
+    private var sheetContentVerticalSpacing: CGFloat {
+        if usesCompactImagePickerSheet { return 8 }
+        if usesTightVerticalPadding { return 12 }
+        return 18
+    }
+
+    private var sheetPresentationDetents: Set<PresentationDetent> {
+        if usesCompactImagePickerSheet {
+            // Marge pour la ligne de titre au-dessus du carrousel + actions.
+            // Carrousel logo/fond : vignettes ~84 pt (+ marge titre + liste actions).
+            return [.height(zone == .backgroundImage ? 384 : 332), .large]
+        }
+        if zone == .cardAppearance {
+            return [.height(480), .large]
+        }
+        if zone == .mainMetrics {
+            return [.height(430), .large]
+        }
+        if zone == .headerRight {
+            /// Récompenses (2 lignes tampons ou paliers points) ; `.large` si besoin.
+            return [.medium, .large]
+        }
+        return [.medium, .large]
+    }
+
+    private var sheetVerticalPadding: CGFloat {
+        if usesCompactImagePickerSheet { return 6 }
+        if zone == .headerRight { return 8 }
+        if usesTightVerticalPadding { return 10 }
+        return 16
+    }
+
+    private var sheetBottomPadding: CGFloat {
+        if usesCompactImagePickerSheet { return 8 }
+        if zone == .headerRight { return 12 }
+        if usesTightVerticalPadding { return 14 }
+        return 28
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView(.vertical, showsIndicators: true) {
-                VStack(alignment: .leading, spacing: usesCompactImagePickerSheet ? 12 : 18) {
+                VStack(alignment: .leading, spacing: sheetContentVerticalSpacing) {
+                    sheetHeaderRow
                     zoneBody
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, AppTheme.Spacing.lg)
-                .padding(.vertical, usesCompactImagePickerSheet ? 10 : 16)
-                .padding(.bottom, usesCompactImagePickerSheet ? 12 : 28)
+                .padding(.vertical, sheetVerticalPadding)
+                .padding(.bottom, sheetBottomPadding)
             }
+            .scrollDismissesKeyboard(.interactively)
             .background(AppTheme.Colors.background)
-            .navigationTitle(zone.customizationSheetTitle)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Fermer") {
-                        onClose()
-                    }
-                    .foregroundStyle(AppTheme.Colors.textPrimary)
+            .sheetHideNavigationBar()
+        }
+        .presentationDetents(sheetPresentationDetents)
+        .presentationDragIndicator(.hidden)
+        .modifier(LiquidGlassSheetModifier())
+        /// Plein écran : une 2e `.sheet` au-dessus d’une feuille Liquid Glass laissait voir l’aperçu carte (confusion + touches) ; le fond opaque sur l’éditeur aide aussi.
+        .fullScreenCover(item: $cropEditorPayload) { payload in
+            let spec = payload.spec
+            ImageCropEditorView(
+                spec: spec,
+                sourceImage: payload.image,
+                onCancel: { cropEditorPayload = nil },
+                onComplete: { cropped in
+                    cropEditorPayload = nil
+                    Task { await onCropComplete(cropped, spec) }
                 }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button {
-                        Task {
-                            guard !isSaving else { return }
-                            isSaving = true
-                            let ok = await onSave()
-                            await MainActor.run {
-                                isSaving = false
-                                if ok {
-                                    savedFlash = true
-                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                                        onClose()
-                                    }
-                                }
-                            }
-                        }
-                    } label: {
-                        if isSaving {
-                            ProgressView()
-                                .scaleEffect(0.9)
-                        } else if savedFlash {
-                            Image(systemName: "checkmark.circle.fill")
-                        } else {
-                            Text("Enregistrer")
-                        }
-                    }
-                    .disabled(isSaving)
-                    .fontWeight(.semibold)
-                }
+            )
+        }
+    }
+
+    /// Galerie → cadrage : léger délai après fermeture du `PhotosPicker` pour que la feuille de cadrage s’affiche correctement.
+    private func presentCropFromGallery(item: PhotosPickerItem?, spec: ImageCropSpec) async {
+        guard let item else { return }
+        guard let image = await loadUIImageFromPhotosPickerItem(item) else { return }
+        await MainActor.run {
+            switch spec {
+            case .walletStripLogo:
+                pack.logoPhotoItem.wrappedValue = nil
+            case .walletCardBackground:
+                pack.cardBackgroundPhotoItem.wrappedValue = nil
+            case .squareIcon:
+                pack.stampIconPhotoItem.wrappedValue = nil
             }
         }
-        .presentationDetents(
-            usesCompactImagePickerSheet
-                ? [.height(zone == .backgroundImage ? 400 : 340), .large]
-                : [.medium, .large]
-        )
-        .presentationDragIndicator(.visible)
-        .modifier(LiquidGlassSheetModifier())
+        try? await Task.sleep(nanoseconds: 320_000_000)
+        await MainActor.run {
+            cropEditorPayload = ImageCropPayload(image: image, spec: spec)
+        }
+    }
+
+    /// Carrousel « photos récentes » → même écran de cadrage que la galerie (ne pas appliquer l’image brute).
+    private func presentCropFromPhotoAsset(_ asset: PHAsset, spec: ImageCropSpec) async {
+        guard let image = await asset.myfid_exportUIImage() else { return }
+        try? await Task.sleep(nanoseconds: 120_000_000)
+        await MainActor.run {
+            cropEditorPayload = ImageCropPayload(image: image, spec: spec)
+        }
+    }
+
+    /// Photo prise avec l’appareil → cadrage après fermeture de l’écran capture.
+    private func presentCropFromUIImage(_ image: UIImage, spec: ImageCropSpec) async {
+        try? await Task.sleep(nanoseconds: 350_000_000)
+        await MainActor.run {
+            cropEditorPayload = ImageCropPayload(image: image, spec: spec)
+        }
+    }
+
+    private func loadUIImageFromPhotosPickerItem(_ item: PhotosPickerItem) async -> UIImage? {
+        if let data = try? await item.loadTransferable(type: Data.self),
+           let img = UIImage(data: data) {
+            return img
+        }
+        if let id = item.itemIdentifier {
+            let fetch = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil)
+            if let asset = fetch.firstObject {
+                return await asset.myfid_exportUIImage()
+            }
+        }
+        return nil
+    }
+
+    private var sheetHeaderRow: some View {
+        Text(zone.customizationSheetTitle)
+            .font(.headline.weight(.semibold))
+            .foregroundStyle(AppTheme.Colors.textPrimary)
+            .frame(maxWidth: .infinity)
+            .multilineTextAlignment(.center)
+            .lineLimit(2)
+            .padding(.bottom, 4)
     }
 
     @ViewBuilder
@@ -153,12 +222,11 @@ struct CardElementCustomizationSheet: View {
             cardAppearanceBlock
         case .mainMetrics:
             mainMetricsBlock
-        case .rewardColumn:
-            rewardColumnBlock
         case .memberColumn:
             memberColumnBlock
         case .qrCode:
-            qrCodeBlock
+            // Jamais présenté : tap sur le QR dans Ma carte ouvre l’URL (MyCardView).
+            EmptyView()
         case .walletPassBack:
             walletPassBackBlock
         }
@@ -167,37 +235,27 @@ struct CardElementCustomizationSheet: View {
     // MARK: - Logo (carrousel récents + liste d’actions type iOS)
 
     private var logoBandBlock: some View {
-        Group {
-            if pack.stripDisplayMode.wrappedValue == "text" {
-                logoBandTextModeContent
-            } else {
-                logoBandImageModeContent
-            }
-        }
+        logoBandImageModeContent
     }
 
-    private var logoBandTextModeContent: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            TextField("Nom affiché sur la carte", text: pack.stripText)
-                .textFieldStyle(.plain)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 14)
-                .background(AppTheme.Colors.cardBackground)
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .strokeBorder(AppTheme.Colors.textSecondary.opacity(0.15), lineWidth: 1)
-                )
+    private var logoBandImageModeContent: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            LogoRecentPhotosCarousel(
+                onSelectAsset: { asset in
+                    Task { await presentCropFromPhotoAsset(asset, spec: .walletStripLogo) }
+                },
+                onCameraImage: { image in
+                    Task { await presentCropFromUIImage(image, spec: .walletStripLogo) }
+                }
+            )
             logoImageModeActionShell {
-                Button {
-                    pack.stripDisplayMode.wrappedValue = "logo"
-                } label: {
+                PhotosPicker(selection: pack.logoPhotoItem, matching: .images, photoLibrary: .shared()) {
                     HStack(spacing: 14) {
                         Image(systemName: "photo.on.rectangle.angled")
                             .font(.title3)
                             .foregroundStyle(Color(red: 0, green: 0.48, blue: 1))
                             .frame(width: 36, alignment: .center)
-                        Text("Utiliser une image")
+                        Text("Galerie")
                             .font(.body)
                             .foregroundStyle(Color(red: 0, green: 0.48, blue: 1))
                         Spacer(minLength: 0)
@@ -207,90 +265,9 @@ struct CardElementCustomizationSheet: View {
                     .padding(.vertical, 16)
                     .padding(.horizontal, 14)
                 }
-                .accessibilityLabel(Text("Utiliser une image à la place du texte"))
-            }
-        }
-    }
-
-    private var logoBandImageModeContent: some View {
-        let logoRef = pack.logoURL.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        let hasLogo = !logoRef.isEmpty
-        return VStack(alignment: .leading, spacing: 14) {
-            LogoRecentPhotosCarousel(
-                currentLogoRef: pack.logoURL.wrappedValue,
-                hasLogo: hasLogo
-            ) { asset in
-                Task { await actions.loadLogoFromPhotoAsset(asset) }
-            }
-            logoImageModeActionShell {
-                VStack(spacing: 0) {
-                    Button {
-                        pack.stripDisplayMode.wrappedValue = "text"
-                    } label: {
-                        HStack(spacing: 14) {
-                            Image(systemName: "textformat")
-                                .font(.title3)
-                                .foregroundStyle(AppTheme.Colors.textPrimary)
-                                .frame(width: 36, alignment: .center)
-                            Text("Texte")
-                                .font(.body)
-                                .foregroundStyle(AppTheme.Colors.textPrimary)
-                            Spacer(minLength: 0)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
-                        .padding(.vertical, 16)
-                        .padding(.horizontal, 14)
-                    }
-                    .accessibilityLabel(Text("Afficher un texte à la place du logo"))
-
-                    Divider()
-                        .padding(.leading, 64)
-
-                    PhotosPicker(selection: pack.logoPhotoItem, matching: .images, photoLibrary: .shared()) {
-                        HStack(spacing: 14) {
-                            Image(systemName: "photo.on.rectangle.angled")
-                                .font(.title3)
-                                .foregroundStyle(Color(red: 0, green: 0.48, blue: 1))
-                                .frame(width: 36, alignment: .center)
-                            Text("Choisir depuis la galerie")
-                                .font(.body)
-                                .foregroundStyle(Color(red: 0, green: 0.48, blue: 1))
-                            Spacer(minLength: 0)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
-                        .padding(.vertical, 16)
-                        .padding(.horizontal, 14)
-                    }
-                    .accessibilityLabel(Text("Choisir depuis la galerie"))
-                    .onChange(of: pack.logoPhotoItem.wrappedValue) { _, new in
-                        Task { await actions.loadLogoFromPicker(new) }
-                    }
-
-                    if hasLogo {
-                        Divider()
-                            .padding(.leading, 64)
-                        Button {
-                            actions.removeLogo()
-                        } label: {
-                            HStack(spacing: 14) {
-                                Image(systemName: "trash")
-                                    .font(.title3)
-                                    .foregroundStyle(.red)
-                                    .frame(width: 36, alignment: .center)
-                                Text("Supprimer")
-                                    .font(.body)
-                                    .foregroundStyle(.red)
-                                Spacer(minLength: 0)
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .contentShape(Rectangle())
-                            .padding(.vertical, 16)
-                            .padding(.horizontal, 14)
-                        }
-                        .accessibilityLabel(Text("Supprimer le logo"))
-                    }
+                .accessibilityLabel(Text("Ouvrir la galerie photo"))
+                .onChange(of: pack.logoPhotoItem.wrappedValue) { _, new in
+                    Task { await presentCropFromGallery(item: new, spec: .walletStripLogo) }
                 }
             }
         }
@@ -306,58 +283,40 @@ struct CardElementCustomizationSheet: View {
             )
     }
 
-    private var logoDominantSwatchesRow: some View {
-        HStack(spacing: 12) {
-            ForEach(logoDominantColors, id: \.self) { hex in
-                let normalized = hex.hasPrefix("#") ? hex : "#" + hex
-                let primNorm = pack.primaryHex.wrappedValue.trimmingCharacters(in: CharacterSet(charactersIn: "#").inverted)
-                let hexNorm = hex.trimmingCharacters(in: CharacterSet(charactersIn: "#").inverted)
-                let isSelected = primNorm.lowercased() == hexNorm.lowercased()
-                Button {
-                    pack.primaryHex.wrappedValue = normalized
-                } label: {
-                    Circle()
-                        .fill(Color(hex: hex))
-                        .frame(width: 36, height: 36)
-                        .overlay(Circle().strokeBorder(isSelected ? AppTheme.Colors.primary : Color.clear, lineWidth: 3))
-                }
-            }
-        }
-    }
-
-    // MARK: - Haut droite
+    // MARK: - Récompenses (paliers points / récompenses tampons — même choix Programme que « Système de carte »)
 
     private var headerRightBlock: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Texte affiché en haut à droite du bandeau (ex. lien récompenses).")
-                .font(.caption)
-                .foregroundStyle(AppTheme.Colors.textSecondary)
-            TextField("Récompenses ↗", text: pack.headerRightText)
-                .textFieldStyle(.plain)
-                .padding(10)
-                .background(AppTheme.Colors.cardBackground)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-                .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(AppTheme.Colors.textSecondary.opacity(0.2), lineWidth: 1))
+            rewardRulesContent
         }
     }
 
-    // MARK: - Image de fond (même logique que le logo : carrousel + liste, sans couleurs)
+    @ViewBuilder
+    private var rewardRulesContent: some View {
+        if pack.programType.wrappedValue == "points" {
+            pointsRulesContent
+        } else {
+            stampsRulesContent
+        }
+    }
 
-    private var backgroundImageBlock: some View {
+    // MARK: - Image de fond (même gabarit que le logo : carrousel + liste)
+
+    /// Réutilisé par la zone « Image de fond » et par « Système de carte » (mode points).
+    private var cardBackgroundImagePickerSection: some View {
         let path = pack.cardBackgroundImagePath.wrappedValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let remote = pack.cardBackgroundRemoteURL.wrappedValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let bgRef = !path.isEmpty ? path : remote
         let hasBackground = !bgRef.isEmpty
-        return VStack(alignment: .leading, spacing: 14) {
-            Text("L’image remplace la zone visuelle points / tampons sur la carte (comme sur le web). Les couleurs se règlent via « Autres réglages » → Couleurs.")
-                .font(.caption)
-                .foregroundStyle(AppTheme.Colors.textSecondary)
+        return VStack(alignment: .leading, spacing: 10) {
             LogoRecentPhotosCarousel(
-                currentLogoRef: bgRef,
-                hasLogo: hasBackground
-            ) { asset in
-                Task { await actions.loadCardBackgroundFromPhotoAsset(asset) }
-            }
+                onSelectAsset: { asset in
+                    Task { await presentCropFromPhotoAsset(asset, spec: .walletCardBackground) }
+                },
+                onCameraImage: { image in
+                    Task { await presentCropFromUIImage(image, spec: .walletCardBackground) }
+                }
+            )
             logoImageModeActionShell {
                 VStack(spacing: 0) {
                     PhotosPicker(selection: pack.cardBackgroundPhotoItem, matching: .images, photoLibrary: .shared()) {
@@ -366,7 +325,7 @@ struct CardElementCustomizationSheet: View {
                                 .font(.title3)
                                 .foregroundStyle(Color(red: 0, green: 0.48, blue: 1))
                                 .frame(width: 36, alignment: .center)
-                            Text("Choisir depuis la galerie")
+                            Text("Galerie")
                                 .font(.body)
                                 .foregroundStyle(Color(red: 0, green: 0.48, blue: 1))
                             Spacer(minLength: 0)
@@ -376,9 +335,9 @@ struct CardElementCustomizationSheet: View {
                         .padding(.vertical, 16)
                         .padding(.horizontal, 14)
                     }
-                    .accessibilityLabel(Text("Choisir une image de fond depuis la galerie"))
+                    .accessibilityLabel(Text("Ouvrir la galerie photo"))
                     .onChange(of: pack.cardBackgroundPhotoItem.wrappedValue) { _, new in
-                        Task { await actions.loadCardBackgroundFromPicker(new) }
+                        Task { await presentCropFromGallery(item: new, spec: .walletCardBackground) }
                     }
 
                     if hasBackground {
@@ -409,75 +368,160 @@ struct CardElementCustomizationSheet: View {
         }
     }
 
-    // MARK: - Règles du programme (tap zone points / tampons)
+    private var backgroundImageBlock: some View {
+        cardBackgroundImagePickerSection
+    }
+
+    // MARK: - Système de carte (icônes tampons / image fond points — récompenses dans l’autre feuille)
 
     private var mainMetricsBlock: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Picker("Type de programme", selection: pack.programType) {
-                Text("Points").tag("points")
-                Text("Tampons").tag("stamps")
+        VStack(alignment: .leading, spacing: 14) {
+            if pack.programType.wrappedValue == "stamps" {
+                stampsStyleSection
             }
-            .pickerStyle(.segmented)
-            .onChange(of: pack.programType.wrappedValue) { _, new in
-                if new == "stamps" {
-                    pack.requiredStamps.wrappedValue = 10
-                    if pack.previewStampsCount.wrappedValue > 10 { pack.previewStampsCount.wrappedValue = 10 }
-                }
-            }
-
             if pack.programType.wrappedValue == "points" {
-                pointsRulesContent
-            } else {
-                stampsRulesContent
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Image de fond")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(AppTheme.Colors.textPrimary)
+                    cardBackgroundImagePickerSection
+                }
             }
         }
     }
 
-    // MARK: - Couleurs (menu Autres réglages)
+    private var stampsStyleSection: some View {
+        let columns = Array(repeating: GridItem(.flexible(minimum: 34, maximum: 56), spacing: 8), count: 6)
+        let selectedIconKey = StampIconCatalog.normalizeKey(pack.stampEmoji.wrappedValue)
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("Tampons")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(AppTheme.Colors.textPrimary)
+            Text("Choisissez l’icône affichée sur les cases tampon.")
+                .font(.caption)
+                .foregroundStyle(AppTheme.Colors.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            LazyVGrid(columns: columns, spacing: 8) {
+                PhotosPicker(selection: pack.stampIconPhotoItem, matching: .images, photoLibrary: .shared()) {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(AppTheme.Colors.cardBackground)
+                        .frame(height: 48)
+                        .overlay {
+                            Image(systemName: "plus")
+                                .font(.system(size: 18, weight: .bold))
+                                .foregroundStyle(AppTheme.Colors.textPrimary)
+                        }
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .strokeBorder(AppTheme.Colors.textSecondary.opacity(0.2), lineWidth: 1)
+                        )
+                }
+                .buttonStyle(.plain)
+
+                ForEach(StampIconCatalog.selectableKeys, id: \.self) { iconKey in
+                    Button {
+                        pack.stampEmoji.wrappedValue = iconKey
+                        actions.resetStampIcon(iconKey)
+                    } label: {
+                        StampIconView(stampEmoji: iconKey, size: 40, tint: AppTheme.Colors.textPrimary)
+                            .frame(height: 48)
+                            .frame(maxWidth: .infinity)
+                            .background(
+                                (selectedIconKey == iconKey ? AppTheme.Colors.primary.opacity(0.2) : Color.clear)
+                            )
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.vertical, 4)
+        }
+        .onChange(of: pack.stampIconPhotoItem.wrappedValue) { _, new in
+            Task { await presentCropFromGallery(item: new, spec: .squareIcon) }
+        }
+    }
+
+    // MARK: - Couleurs seules (menu Autres réglages — pas d’image de fond ici)
 
     private var cardAppearanceBlock: some View {
         VStack(alignment: .leading, spacing: 16) {
-            if !logoDominantColors.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Suggestions depuis votre logo")
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(AppTheme.Colors.textPrimary)
-                    logoDominantSwatchesRow
-                }
+            if !cardImageSuggestedColors.isEmpty {
+                Text("Pastilles tout à gauche (après +) = couleurs tirées du logo et du fond ; à droite, palette générale.")
+                    .font(.caption)
+                    .foregroundStyle(AppTheme.Colors.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            ColorPickerRow(title: "Fond", hex: pack.primaryHex)
-            ColorPickerRow(title: "Texte principal", hex: pack.accentHex)
-            ColorPickerRow(title: "Libellés", hex: pack.labelHex)
+            LabeledCanvaColorPalette(title: "Fond de la carte", hex: pack.primaryHex, imageSuggestions: cardImageSuggestedColors)
+            LabeledCanvaColorPalette(title: "Titres", hex: pack.labelHex, imageSuggestions: cardImageSuggestedColors)
+            LabeledCanvaColorPalette(title: "Textes", hex: pack.accentHex, imageSuggestions: cardImageSuggestedColors)
         }
     }
 
     private var pointsRulesContent: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Paliers sur la carte")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(AppTheme.Colors.textPrimary)
+        VStack(alignment: .leading, spacing: 12) {
+            startGameRewardRow
             ForEach(0..<5, id: \.self) { i in
                 pointsTierRow(index: i)
             }
         }
     }
 
-    private static let tierSeuilExamples = ["10", "50", "100", "200", "500"]
+    /// Palier « Début du jeu » (1ʳᵉ récompense) : seuil verrouillé, libellé de récompense modifiable par le commerçant.
+    private var startGameRewardRow: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Text("Début du jeu")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(AppTheme.Colors.textPrimary)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .minimumScaleFactor(0.75)
+                .frame(width: 76)
+                .padding(.vertical, 12)
+                .padding(.horizontal, 6)
+                .background(AppTheme.Colors.cardBackground.opacity(0.6))
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(AppTheme.Colors.textSecondary.opacity(0.12), lineWidth: 1)
+                )
+                .accessibilityAddTraits(.isStaticText)
+                .accessibilityLabel(Text("Début du jeu — palier verrouillé"))
+            TextField(
+                "",
+                text: pack.startGameRewardLabel,
+                prompt: Text(Self.startGameRewardPlaceholder).foregroundStyle(AppTheme.Colors.textSecondary.opacity(0.85))
+            )
+            .textFieldStyle(.plain)
+            .padding(.vertical, 12)
+            .padding(.horizontal, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(AppTheme.Colors.cardBackground)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(AppTheme.Colors.textSecondary.opacity(0.12), lineWidth: 1)
+            )
+            .accessibilityLabel(Text("Récompense début du jeu"))
+        }
+    }
+
+    private static let startGameRewardPlaceholder = "Tour de roue offert"
+    private static let tierSeuilExamples = ["10€", "50€", "100€", "200€", "500€"]
     private static let tierRewardExamples = [
-        "1 café offert",
-        "Menu midi offert",
-        "-10 % sur l’addition",
-        "Dessert au choix",
-        "Carte VIP 1 mois"
+        "1 boisson offerte",
+        "-10% sur l’addition",
+        "Dessert offert",
+        "-50% sur l’addition",
+        "Menu + dessert offert"
     ]
 
+    private static let stamp5PassageRewardPlaceholder = "-50% sur l’addition"
+    private static let stamp10PassageRewardPlaceholder = "Menu offert"
+
     private func pointsTierRow(index: Int) -> some View {
-        let seuilPrompt = "ex. \(Self.tierSeuilExamples[index])"
-        let rewardPrompt = "ex. \(Self.tierRewardExamples[index])"
+        let seuilPrompt = Self.tierSeuilExamples[index]
+        let rewardPrompt = Self.tierRewardExamples[index]
         return VStack(alignment: .leading, spacing: 8) {
-            Text("Palier \(index + 1)")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(AppTheme.Colors.textSecondary)
             HStack(alignment: .top, spacing: 10) {
                 TextField("", text: Binding(
                     get: {
@@ -529,255 +573,72 @@ struct CardElementCustomizationSheet: View {
         }
     }
 
-    private var stampsRulesContent: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("La grille compte 10 tampons par carte (comme sur le web).")
-                .font(.caption)
-                .foregroundStyle(AppTheme.Colors.textSecondary)
-            Text("Emoji ou icône sur les tampons")
-                .font(.subheadline.weight(.medium))
+    private func stampsPassageRewardRow(passageLabel: String, reward: Binding<String>, prompt: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Text(passageLabel)
+                .font(.subheadline.weight(.semibold))
                 .foregroundStyle(AppTheme.Colors.textPrimary)
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 12) {
-                    ForEach(StampEmojiPresets.all, id: \.self) { emoji in
-                        Button {
-                            pack.stampEmoji.wrappedValue = pack.stampEmoji.wrappedValue == emoji ? "" : emoji
-                        } label: {
-                            StampIconView(stampEmoji: emoji, size: 36, tint: AppTheme.Colors.textPrimary)
-                                .frame(width: 44, height: 44)
-                                .background((pack.stampEmoji.wrappedValue == emoji ? AppTheme.Colors.primary.opacity(0.2) : Color.clear))
-                                .clipShape(RoundedRectangle(cornerRadius: 10))
-                        }
-                    }
-                    Button {
-                        pack.stampEmoji.wrappedValue = ""
-                    } label: {
-                        Text("Aucun")
-                            .font(.caption)
-                            .foregroundStyle(AppTheme.Colors.textSecondary)
-                            .frame(width: 60, height: 44)
-                            .background(pack.stampEmoji.wrappedValue.isEmpty ? AppTheme.Colors.primary.opacity(0.2) : Color.clear)
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
-                    }
-                }
-                .padding(.vertical, 4)
-            }
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Icône tampon personnalisée (image)")
-                    .font(.caption)
-                    .foregroundStyle(AppTheme.Colors.textSecondary)
-                HStack(spacing: 12) {
-                    PhotosPicker(selection: pack.stampIconPhotoItem, matching: .images, photoLibrary: .shared()) {
-                        Label("Importer", systemImage: "photo")
-                            .font(.callout)
-                    }
-                    .onChange(of: pack.stampIconPhotoItem.wrappedValue) { _, new in
-                        Task { await actions.loadStampIconFromPicker(new) }
-                    }
-                    Button("Réinitialiser") {
-                        actions.resetStampIcon()
-                    }
-                    .font(.caption)
-                }
-            }
-            VStack(alignment: .leading, spacing: 8) {
-                Text("5ᵉ tampon")
-                    .font(.caption.weight(.semibold))
-                Toggle("Pas de récompense à la 5ᵉ visite", isOn: pack.stampSkipMidReward)
-                    .font(.subheadline)
-                    .onChange(of: pack.stampSkipMidReward.wrappedValue) { _, skip in
-                        if skip { pack.stampMidRewardLabel.wrappedValue = "" }
-                    }
-                TextField("Récompense intermédiaire (5ᵉ)", text: pack.stampMidRewardLabel)
-                    .textFieldStyle(.plain)
-                    .padding(10)
-                    .background(AppTheme.Colors.cardBackground)
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                    .disabled(pack.stampSkipMidReward.wrappedValue)
-                    .opacity(pack.stampSkipMidReward.wrappedValue ? 0.45 : 1)
-            }
-            VStack(alignment: .leading, spacing: 8) {
-                Text("10ᵉ tampon — récompense carte complète")
-                    .font(.caption.weight(.semibold))
-                TextField("ex. Menu offert", text: pack.stampRewardLabel)
-                    .textFieldStyle(.plain)
-                    .padding(10)
-                    .background(AppTheme.Colors.cardBackground)
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-            }
+                .multilineTextAlignment(.center)
+                .frame(width: 76)
+                .padding(.vertical, 12)
+                .padding(.horizontal, 8)
+                .background(AppTheme.Colors.cardBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(AppTheme.Colors.textSecondary.opacity(0.12), lineWidth: 1)
+                )
+                .accessibilityAddTraits(.isStaticText)
+            TextField("", text: reward, prompt: Text(prompt).foregroundStyle(AppTheme.Colors.textSecondary.opacity(0.85)))
+                .textFieldStyle(.plain)
+                .padding(.vertical, 12)
+                .padding(.horizontal, 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(AppTheme.Colors.cardBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(AppTheme.Colors.textSecondary.opacity(0.12), lineWidth: 1)
+                )
         }
     }
 
-    // MARK: - Récompenses (sous-ensemble règles)
-
-    private var rewardColumnBlock: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Contenu affiché sous « Récompense » sur la carte.")
-                .font(.caption)
-                .foregroundStyle(AppTheme.Colors.textSecondary)
-            if pack.programType.wrappedValue == "points" {
-                ForEach(0..<5, id: \.self) { i in
-                    pointsTierRow(index: i)
-                }
-            } else {
-                VStack(alignment: .leading, spacing: 8) {
-                    Toggle("Pas de récompense à la 5ᵉ visite", isOn: pack.stampSkipMidReward)
-                        .font(.subheadline)
-                        .onChange(of: pack.stampSkipMidReward.wrappedValue) { _, skip in
-                            if skip { pack.stampMidRewardLabel.wrappedValue = "" }
-                        }
-                    TextField("Récompense intermédiaire (5ᵉ)", text: pack.stampMidRewardLabel)
-                        .textFieldStyle(.plain)
-                        .padding(10)
-                        .background(AppTheme.Colors.cardBackground)
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
-                        .disabled(pack.stampSkipMidReward.wrappedValue)
-                        .opacity(pack.stampSkipMidReward.wrappedValue ? 0.45 : 1)
-                    TextField("Récompense 10ᵉ tampon", text: pack.stampRewardLabel)
-                        .textFieldStyle(.plain)
-                        .padding(10)
-                        .background(AppTheme.Colors.cardBackground)
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
-                }
-            }
-            Text("Couleur de fond : touchez une zone vide du fond coloré (autour du QR, sous les champs…) ou « Autres réglages » → Couleurs. Règles du programme : touchez uniquement Points ou la grille de tampons.")
-                .font(.caption2)
-                .foregroundStyle(AppTheme.Colors.textSecondary)
+    private var stampsRulesContent: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            startGameRewardRow
+            stampsPassageRewardRow(
+                passageLabel: "5ᵉ",
+                reward: pack.stampMidRewardLabel,
+                prompt: Self.stamp5PassageRewardPlaceholder
+            )
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(Text("5ᵉ passage, récompense"))
+            stampsPassageRewardRow(
+                passageLabel: "10ᵉ",
+                reward: pack.stampRewardLabel,
+                prompt: Self.stamp10PassageRewardPlaceholder
+            )
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(Text("10ᵉ passage, récompense"))
         }
     }
 
     // MARK: - Membre
 
     private var memberColumnBlock: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Nom du commerce (aperçu carte)")
-                .font(.caption)
-                .foregroundStyle(AppTheme.Colors.textSecondary)
-            TextField("Ma Carte Fidélité", text: pack.displayName)
-                .textFieldStyle(.plain)
-                .padding(10)
-                .background(AppTheme.Colors.cardBackground)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-            Text("Titre au-dessus du nom client (colonne droite)")
-                .font(.caption)
-                .foregroundStyle(AppTheme.Colors.textSecondary)
-            TextField("Membre", text: pack.labelMember)
-                .textFieldStyle(.plain)
-                .padding(10)
-                .background(AppTheme.Colors.cardBackground)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-            Text("Libellé mode tampons (ex. tampons restants)")
-                .font(.caption)
-                .foregroundStyle(AppTheme.Colors.textSecondary)
-            TextField("Restants", text: pack.labelRestants)
-                .textFieldStyle(.plain)
-                .padding(10)
-                .background(AppTheme.Colors.cardBackground)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-            ColorPickerRow(title: "Couleur des libellés", hex: pack.labelHex)
-        }
-    }
-
-    // MARK: - QR / lien
-
-    private var qrCodeBlock: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            if let slug = AuthStorage.currentBusinessSlug,
-               let pageURL = LegalURLs.fidelityCardPage(slug: slug) {
-                Text("Lien où vos clients ajoutent la carte (identique au QR).")
-                    .font(.caption)
-                    .foregroundStyle(AppTheme.Colors.textSecondary)
-                Text(pageURL.absoluteString)
-                    .font(.caption)
-                    .textSelection(.enabled)
-                    .foregroundStyle(AppTheme.Colors.textPrimary)
-                HStack(spacing: 12) {
-                    Button {
-                        UIPasteboard.general.string = pageURL.absoluteString
-                    } label: {
-                        Label("Copier le lien", systemImage: "doc.on.doc")
-                    }
-                    .buttonStyle(.bordered)
-                    ShareLink(item: pageURL) {
-                        Label("Partager", systemImage: "square.and.arrow.up")
-                    }
-                    .buttonStyle(.bordered)
-                }
-
-                qrFlyerPreviewSection(slug: slug)
-            } else {
-                Text("Connectez-vous et chargez un commerce pour afficher votre lien FidPass.")
-                    .font(.caption)
-                    .foregroundStyle(AppTheme.Colors.textSecondary)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func qrFlyerPreviewSection(slug: String) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Flyer QR code")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(AppTheme.Colors.textPrimary)
-                .padding(.top, 8)
-            Text("Même design que l’onglet « Flyer QR » du tableau de bord : synchronisé sur le serveur. Modifiez-le sur le web ou dans le SaaS ; l’aperçu se met à jour à la réouverture de cette feuille.")
-                .font(.caption)
-                .foregroundStyle(AppTheme.Colors.textSecondary)
-
-            if flyerPreviewFailed {
-                Text("Impossible de charger l’aperçu du flyer. Vérifiez la connexion ou réessayez.")
+            TextField("", text: pack.labelMember, prompt: Text("Membre").foregroundStyle(AppTheme.Colors.textSecondary.opacity(0.85)))
+                .textFieldStyle(.plain)
+                .padding(10)
+                .background(AppTheme.Colors.cardBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+            if !cardImageSuggestedColors.isEmpty {
+                Text("Même palette que ci-dessus : couleurs détectées dans vos images.")
                     .font(.caption)
                     .foregroundStyle(AppTheme.Colors.textSecondary)
-            } else if flyerAPIBusy && flyerBootstrapBase64 == nil {
-                ProgressView()
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 24)
-            } else if let b64 = flyerBootstrapBase64, !b64.isEmpty {
-                ZStack {
-                    FlyerPreviewWebView(bootstrapBase64: b64, isLoading: $flyerWebRendering)
-                        .aspectRatio(2400 / 3600, contentMode: .fit)
-                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    if flyerWebRendering {
-                        ProgressView()
-                            .padding(20)
-                            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    }
-                }
-                .frame(maxHeight: 440)
             }
-
-            if let url = URL(string: "https://myfidpass.fr/app#flyer-qr") {
-                Link(destination: url) {
-                    Label("Personnaliser le flyer sur le web", systemImage: "safari")
-                }
-                .font(.subheadline)
-            }
-        }
-        .onAppear {
-            Task { await refreshFlyerBootstrapIfNeeded(slug: slug) }
-        }
-    }
-
-    private func refreshFlyerBootstrapIfNeeded(slug: String) async {
-        guard AuthStorage.isLoggedIn, !slug.isEmpty else { return }
-        await MainActor.run {
-            flyerAPIBusy = true
-            flyerPreviewFailed = false
-        }
-        do {
-            let data = try await APIClient.shared.requestData(.dashboardFlyerGet(slug: slug))
-            let b64 = data.base64EncodedString()
-            await MainActor.run {
-                flyerBootstrapBase64 = b64
-                flyerWebRendering = true
-                flyerAPIBusy = false
-            }
-        } catch {
-            await MainActor.run {
-                flyerPreviewFailed = true
-                flyerBootstrapBase64 = nil
-                flyerAPIBusy = false
-            }
+            LabeledCanvaColorPalette(title: "Titres", hex: pack.labelHex, imageSuggestions: cardImageSuggestedColors)
+            LabeledCanvaColorPalette(title: "Textes", hex: pack.accentHex, imageSuggestions: cardImageSuggestedColors)
         }
     }
 
@@ -786,43 +647,34 @@ struct CardElementCustomizationSheet: View {
     private var walletPassBackBlock: some View {
         Group {
             if dashboardSettingsHydrated {
-                VStack(alignment: .leading, spacing: 14) {
-                    Text("Conditions / mentions (verso du pass)")
-                        .font(.caption)
-                        .foregroundStyle(AppTheme.Colors.textSecondary)
+                VStack(alignment: .leading, spacing: 12) {
                     TextEditor(text: pack.backTerms)
                         .frame(minHeight: 72)
                         .padding(8)
                         .background(AppTheme.Colors.cardBackground)
                         .clipShape(RoundedRectangle(cornerRadius: 10))
-                    Text("Contact (verso)")
-                        .font(.caption)
-                        .foregroundStyle(AppTheme.Colors.textSecondary)
+                        .accessibilityLabel(Text("Conditions et mentions, verso du pass"))
                     TextEditor(text: pack.backContact)
                         .frame(minHeight: 56)
                         .padding(8)
                         .background(AppTheme.Colors.cardBackground)
                         .clipShape(RoundedRectangle(cornerRadius: 10))
-                    TextField("Titre notification pass (optionnel)", text: pack.notificationTitleOverride)
+                        .accessibilityLabel(Text("Contact, verso du pass"))
+                    TextField("", text: pack.notificationTitleOverride, prompt: Text("Titre notification").foregroundStyle(AppTheme.Colors.textSecondary.opacity(0.85)))
                         .textFieldStyle(.plain)
                         .padding(10)
                         .background(AppTheme.Colors.cardBackground)
                         .clipShape(RoundedRectangle(cornerRadius: 10))
-                    TextField("Message changement pass", text: pack.notificationChangeMessage)
+                    TextField("", text: pack.notificationChangeMessage, prompt: Text("Message changement pass").foregroundStyle(AppTheme.Colors.textSecondary.opacity(0.85)))
                         .textFieldStyle(.plain)
                         .padding(10)
                         .background(AppTheme.Colors.cardBackground)
                         .clipShape(RoundedRectangle(cornerRadius: 10))
                 }
             } else {
-                VStack(alignment: .leading, spacing: 8) {
-                    ProgressView()
-                    Text("Chargement des réglages…")
-                        .font(.caption)
-                        .foregroundStyle(AppTheme.Colors.textSecondary)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 24)
+                ProgressView()
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 24)
             }
         }
     }

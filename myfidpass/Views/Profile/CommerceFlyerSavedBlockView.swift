@@ -95,8 +95,15 @@ private enum CommerceFlyerPublicBgThumbnail {
 
 /// Remplace la ligne « Créer le flyer » lorsque le flyer est personnalisé / enregistré.
 struct CommerceFlyerSavedBlockView: View {
+    @Environment(\.colorScheme) private var colorScheme
+
     /// Ratio canvas flyer (embed) — miniature alignée sur l’aperçu studio, pas un carré arbitraire.
     private static let flyerThumbAspect: CGFloat = 2400.0 / 3600.0
+    /// Teaser : ~80 % du flyer visible ; le bas disparaît en alpha (pas de calque couleur par-dessus).
+    private static let flyerTeaserVisibleFraction: CGFloat = 0.8
+    private static let flyerTeaserFadeBand: CGFloat = 0.14
+    /// Hauteur max du bloc teaser (flyer un peu plus compact sur la page Commerce).
+    private static let flyerTeaserMaxHeight: CGFloat = 330
 
     let customBgDataURL: String?
     /// Même JSON que l’éditeur (`FlyerBootstrapPreviewPayload` en base64) : QR, roue, textes, logo — pas seulement le PNG de fond.
@@ -113,6 +120,8 @@ struct CommerceFlyerSavedBlockView: View {
     @State private var loadedPublicThumbnail: UIImage?
     @State private var isLoadingPublicThumbnail = false
     @State private var compositeWebLoading = false
+    /// Évite d’afficher le fond d’un autre commerce si le slug change sans recréer la vue.
+    @State private var hydratedForSlug: String?
 
     private var rasterThumbnail: UIImage? { cachedDataURLThumbnail ?? loadedPublicThumbnail }
 
@@ -121,135 +130,223 @@ struct CommerceFlyerSavedBlockView: View {
         return !b.isEmpty
     }
 
-    var body: some View {
-        Button {
-                UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                onOpenFlyerHub()
-            } label: {
-                HStack(alignment: .center, spacing: 14) {
-                    Group {
-                        if hasBootstrapComposite,
-                           let rawB64 = bootstrapPreviewBase64?.trimmingCharacters(in: .whitespacesAndNewlines),
-                           !rawB64.isEmpty
-                        {
-                            let under: UIImage? = cachedDataURLThumbnail ?? loadedPublicThumbnail
-                            // Utilise le bootstrap allégé (sans bg) si l’image bg est affichée en UIImage dessous.
-                            let webB64 = (under != nil ? cachedStrippedBootstrapB64 : nil) ?? rawB64
-                            ZStack {
-                                if let u = under {
-                                    Image(uiImage: u)
-                                        .resizable()
-                                        .scaledToFit()
-                                }
-                                FlyerPreviewWebView(
-                                    bootstrapBase64: webB64,
-                                    isLoading: $compositeWebLoading,
-                                    skipCanvasSolidBackground: under != nil
-                                )
-                                if compositeWebLoading {
-                                    ProgressView()
-                                        .scaleEffect(0.85)
-                                }
-                            }
-                            .aspectRatio(Self.flyerThumbAspect, contentMode: .fit)
-                            .frame(width: 76)
-                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                    .strokeBorder(Color.primary.opacity(0.12), lineWidth: 1)
-                            )
-                            .allowsHitTesting(false)
-                        } else if let ui = rasterThumbnail {
-                            Image(uiImage: ui)
-                                .resizable()
-                                .scaledToFill()
-                                .frame(width: 76, height: 76 / Self.flyerThumbAspect)
-                                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                        .strokeBorder(Color.primary.opacity(0.12), lineWidth: 1)
-                                )
-                        } else {
-                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .fill(AppTheme.Colors.textSecondary.opacity(0.1))
-                                .aspectRatio(Self.flyerThumbAspect, contentMode: .fit)
-                                .frame(width: 76)
-                                .overlay {
-                                    if isLoadingPublicThumbnail {
-                                        ProgressView()
-                                            .scaleEffect(0.9)
-                                    } else {
-                                        Image(systemName: "qrcode")
-                                            .font(.title2)
-                                            .foregroundStyle(AppTheme.Colors.primary.opacity(0.85))
-                                    }
-                                }
-                        }
-                    }
-                    .shadow(color: .black.opacity(0.12), radius: 10, y: 4)
+    /// Masque alpha sur la hauteur du flyer : haut opaque, puis fondu jusqu’à transparent (le bas du flyer « s’efface »).
+    private static func flyerTeaserAlphaMask(visibleFraction r: CGFloat, fadeBand: CGFloat) -> LinearGradient {
+        let fadeStart = max(0, r - fadeBand)
+        return LinearGradient(
+            stops: [
+                .init(color: .white, location: 0),
+                .init(color: .white, location: fadeStart),
+                .init(color: .clear, location: r)
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+    }
 
-                    VStack(alignment: .leading, spacing: 5) {
-                        HStack(spacing: 8) {
-                            Image(systemName: "checkmark.circle.fill")
-                                .font(.title3)
-                                .foregroundStyle(AppTheme.Colors.success)
-                            Text("Flyer enregistré")
-                                .font(.headline.weight(.semibold))
-                                .foregroundStyle(AppTheme.Colors.textPrimary)
-                        }
-                        Text("Appuyez pour voir le flyer en grand")
-                            .font(.caption)
-                            .foregroundStyle(AppTheme.Colors.textSecondary)
-                            .multilineTextAlignment(.leading)
+    /// Aperçu flyer large (composite WebView + fond ou image seule).
+    @ViewBuilder
+    private var commerceFlyerHeroPreview: some View {
+        Group {
+            if hasBootstrapComposite,
+               let rawB64 = bootstrapPreviewBase64?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !rawB64.isEmpty {
+                let under: UIImage? = cachedDataURLThumbnail ?? loadedPublicThumbnail
+                let webB64 = (under != nil ? cachedStrippedBootstrapB64 : nil) ?? rawB64
+                ZStack {
+                    if let u = under {
+                        Image(uiImage: u)
+                            .resizable()
+                            .scaledToFit()
                     }
-                    Spacer(minLength: 0)
-                    Image(systemName: "chevron.right.circle.fill")
-                        .font(.title2)
-                        .symbolRenderingMode(.hierarchical)
-                        .foregroundStyle(AppTheme.Colors.textSecondary.opacity(0.85))
+                    FlyerPreviewWebView(
+                        bootstrapBase64: webB64,
+                        isLoading: $compositeWebLoading,
+                        skipCanvasSolidBackground: under != nil
+                    )
+                    if compositeWebLoading {
+                        ProgressView()
+                            .scaleEffect(1.05)
+                            .tint(AppTheme.Colors.primary)
+                    }
                 }
-                .padding(14)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .fill(AppTheme.Colors.background.opacity(0.75))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .strokeBorder(AppTheme.Colors.textSecondary.opacity(0.15), lineWidth: 1)
-                )
-            }
-            .buttonStyle(.plain)
-        .task(id: "\(bootstrapPreviewBase64 ?? "")-\(customBgDataURL ?? "")-\(businessSlug ?? "")") {
-            // Réinitialise avant recalcul
-            cachedDataURLThumbnail = nil
-            cachedStrippedBootstrapB64 = nil
-            loadedPublicThumbnail = nil
-
-            // 1. Décode le data URL bg hors du main thread (peut être > 1 Mo de base64)
-            let bgURL = customBgDataURL
-            let decoded: UIImage? = await Task.detached(priority: .userInitiated) {
-                CommerceFlyerDataURLImage.uiImage(fromDataURLString: bgURL)
-            }.value
-            cachedDataURLThumbnail = decoded
-
-            // 2. Si pas d’image inline, charge depuis l’endpoint public
-            let bgImage: UIImage?
-            if let img = decoded {
-                bgImage = img
-                isLoadingPublicThumbnail = false
-            } else if let slug = businessSlug, !slug.isEmpty {
-                isLoadingPublicThumbnail = true
-                let pub = await CommerceFlyerPublicBgThumbnail.loadUIImage(slug: slug)
-                loadedPublicThumbnail = pub
-                isLoadingPublicThumbnail = false
-                bgImage = pub
+                .allowsHitTesting(false)
+            } else if let ui = rasterThumbnail {
+                Image(uiImage: ui)
+                    .resizable()
+                    .scaledToFit()
             } else {
-                isLoadingPublicThumbnail = false
-                bgImage = nil
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                AppTheme.Colors.textSecondary.opacity(0.06),
+                                AppTheme.Colors.textSecondary.opacity(0.12)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .aspectRatio(Self.flyerThumbAspect, contentMode: .fit)
+                    .overlay {
+                        if isLoadingPublicThumbnail {
+                            ProgressView()
+                                .scaleEffect(1.1)
+                        } else {
+                            VStack(spacing: 10) {
+                                Image(systemName: "qrcode")
+                                    .font(.system(size: 40, weight: .medium))
+                                    .foregroundStyle(AppTheme.Colors.primary.opacity(0.8))
+                                Text("Chargement de l’aperçu…")
+                                    .font(.caption.weight(.medium))
+                                    .foregroundStyle(AppTheme.Colors.textSecondary)
+                            }
+                        }
+                    }
+            }
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ZStack(alignment: .bottom) {
+                GeometryReader { geo in
+                    let w = geo.size.width
+                    let fullH = w / Self.flyerThumbAspect
+                    let r = Self.flyerTeaserVisibleFraction
+                    let shownH = fullH * r
+                    commerceFlyerHeroPreview
+                        .frame(width: w, height: fullH, alignment: .top)
+                        .mask(
+                            Self.flyerTeaserAlphaMask(visibleFraction: r, fadeBand: Self.flyerTeaserFadeBand)
+                        )
+                        .frame(width: w, height: shownH, alignment: .top)
+                        .clipped()
+                }
+                .aspectRatio(Self.flyerThumbAspect / Self.flyerTeaserVisibleFraction, contentMode: .fit)
+                .frame(maxWidth: .infinity)
+                .frame(maxHeight: Self.flyerTeaserMaxHeight)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .strokeBorder(
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(colorScheme == .dark ? 0.14 : 0.32),
+                                Color.white.opacity(0.05)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        lineWidth: 1
+                    )
+            )
+            .shadow(color: AppTheme.Colors.shadow, radius: 22, y: 12)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                onOpenFlyerHub()
             }
 
-            // 3. Strip bg du bootstrap hors main thread (parse JSON + ré-encode = coûteux)
+            VStack(spacing: 14) {
+                VStack(spacing: 8) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "sparkles")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundStyle(
+                                LinearGradient(
+                                    colors: [AppTheme.Colors.accent, AppTheme.Colors.primary],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                        Text("Votre flyer de jeu est prêt")
+                            .font(.system(.title3, design: .rounded, weight: .bold))
+                            .foregroundStyle(AppTheme.Colors.textPrimary)
+                            .multilineTextAlignment(.center)
+                    }
+                    .frame(maxWidth: .infinity)
+
+                    Text("Partagez-le en magasin ou en ligne : vos clients scannent le QR, ajoutent votre carte et jouent à la roue.")
+                        .font(.subheadline)
+                        .foregroundStyle(AppTheme.Colors.textSecondary)
+                        .multilineTextAlignment(.center)
+                        .lineSpacing(3)
+                        .padding(.horizontal, 4)
+                }
+
+                Button {
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    onOpenFlyerHub()
+                } label: {
+                    Text("Voir le flyer")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .background(Color.black, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+                .buttonStyle(MerchantPressableButtonStyle())
+                .accessibilityLabel("Voir le flyer")
+                .accessibilityHint("Ouvre l’aperçu plein écran du flyer.")
+            }
+            .padding(.top, 20)
+            .padding(.horizontal, 2)
+        }
+        .accessibilityElement(children: .contain)
+        .task(
+            id: CommerceFlyerHydrationFingerprint.token(
+                slug: businessSlug,
+                customBg: customBgDataURL,
+                bootstrapB64: bootstrapPreviewBase64
+            )
+        ) {
+            let slug = businessSlug?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !slug.isEmpty, let prev = hydratedForSlug, prev != slug {
+                cachedDataURLThumbnail = nil
+                cachedStrippedBootstrapB64 = nil
+                loadedPublicThumbnail = nil
+            }
+
+            let bgURL = customBgDataURL
+            let bgImage: UIImage?
+
+            if let bg = bgURL, !bg.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                if let mem = CommerceFlyerRasterCache.image(forCustomBgDataURL: bg) {
+                    cachedDataURLThumbnail = mem
+                    loadedPublicThumbnail = nil
+                    isLoadingPublicThumbnail = false
+                    bgImage = mem
+                } else {
+                    let decoded: UIImage? = await Task.detached(priority: .userInitiated) {
+                        CommerceFlyerDataURLImage.uiImage(fromDataURLString: bg)
+                    }.value
+                    guard !Task.isCancelled else { return }
+                    cachedDataURLThumbnail = decoded
+                    if let decoded {
+                        CommerceFlyerRasterCache.setImage(decoded, forCustomBgDataURL: bg)
+                    }
+                    loadedPublicThumbnail = nil
+                    isLoadingPublicThumbnail = false
+                    bgImage = decoded
+                }
+            } else {
+                cachedDataURLThumbnail = nil
+                if !slug.isEmpty {
+                    isLoadingPublicThumbnail = true
+                    let pub = await CommerceFlyerPublicBgThumbnail.loadUIImage(slug: slug)
+                    guard !Task.isCancelled else { return }
+                    loadedPublicThumbnail = pub
+                    isLoadingPublicThumbnail = false
+                    bgImage = pub
+                } else {
+                    isLoadingPublicThumbnail = false
+                    loadedPublicThumbnail = nil
+                    bgImage = nil
+                }
+            }
+
             let rawB64 = bootstrapPreviewBase64
             if bgImage != nil, let raw = rawB64, !raw.isEmpty {
                 cachedStrippedBootstrapB64 = await Task.detached(priority: .userInitiated) {
@@ -257,6 +354,10 @@ struct CommerceFlyerSavedBlockView: View {
                 }.value
             } else {
                 cachedStrippedBootstrapB64 = rawB64
+            }
+
+            if !slug.isEmpty {
+                hydratedForSlug = slug
             }
         }
     }
@@ -273,6 +374,10 @@ struct CommerceSavedFlyerLargePreviewView: View {
     let bootstrapPreviewBase64: String?
     let businessSlug: String?
     let onDismiss: () -> Void
+    /// Après confirmation dans l’alerte : fermer cet écran et ouvrir l’assistant (parent).
+    let onConfirmRecreate: () -> Void
+
+    @State private var showRecreateConfirm = false
 
     // ── Résultats calculés hors du view body (off main thread) ─────────────────
     @State private var cachedDataURLThumbnail: UIImage?
@@ -280,6 +385,7 @@ struct CommerceSavedFlyerLargePreviewView: View {
     @State private var compositeWebLoading = false
     @State private var loadedPublicThumbnail: UIImage?
     @State private var isLoadingPublicThumbnail = false
+    @State private var hydratedForSlug: String?
 
     private var rasterThumbnail: UIImage? { cachedDataURLThumbnail ?? loadedPublicThumbnail }
 
@@ -350,11 +456,52 @@ struct CommerceSavedFlyerLargePreviewView: View {
                         }
                         .padding(.horizontal, 16)
 
-                        Text("Pincement pour faire défiler · partagez l’image ou le lien clients")
+                        Text("Pincement pour faire défiler")
                             .font(.caption)
                             .foregroundStyle(.white.opacity(0.55))
                             .multilineTextAlignment(.center)
                             .padding(.horizontal, 24)
+
+                        VStack(spacing: 14) {
+                            HStack(spacing: 12) {
+                                Button {
+                                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                                    let items = buildShareItems()
+                                    if !items.isEmpty {
+                                        CommerceNativeSharePresenter.present(activityItems: items)
+                                    }
+                                } label: {
+                                    Label("Télécharger", systemImage: "square.and.arrow.down")
+                                        .font(.subheadline.weight(.semibold))
+                                        .frame(maxWidth: .infinity)
+                                        .padding(.vertical, 14)
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .tint(.white)
+                                .foregroundStyle(.black)
+                                .disabled(!canShare)
+
+                                Button {
+                                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                    showRecreateConfirm = true
+                                } label: {
+                                    Label("Recréer", systemImage: "arrow.triangle.2.circlepath")
+                                        .font(.subheadline.weight(.semibold))
+                                        .frame(maxWidth: .infinity)
+                                        .padding(.vertical, 14)
+                                }
+                                .buttonStyle(.bordered)
+                                .tint(.white)
+                            }
+
+                            Text("Télécharger ouvre le partage (image + lien page clients). Recréer : une seule régénération gratuite — réfléchissez à votre brief.")
+                                .font(.caption2)
+                                .foregroundStyle(.white.opacity(0.45))
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal, 8)
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.top, 8)
                     }
                     .padding(.vertical, 12)
                 }
@@ -367,51 +514,73 @@ struct CommerceSavedFlyerLargePreviewView: View {
                         onDismiss()
                     }
                 }
-                ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        let items = buildShareItems()
-                        if !items.isEmpty {
-                            CommerceNativeSharePresenter.present(activityItems: items)
-                        }
-                    } label: {
-                        Image(systemName: "square.and.arrow.up")
-                    }
-                    .disabled(!canShare)
-                }
             }
             .toolbarBackground(.visible, for: .navigationBar)
             .toolbarColorScheme(.dark, for: .navigationBar)
+            .alert("Recréer votre flyer ?", isPresented: $showRecreateConfirm) {
+                Button("Annuler", role: .cancel) {}
+                Button("Continuer vers l’assistant", role: .destructive) {
+                    onConfirmRecreate()
+                }
+            } message: {
+                Text(
+                    "Vous n’avez droit qu’à une seule régénération gratuite avec l’assistant. Soyez précis : nom du commerce, style visuel, textes et consignes importantes. Vérifiez votre brief avant de lancer — il sera utilisé pour générer le nouveau flyer."
+                )
+            }
         }
         .preferredColorScheme(.dark)
-        .task(id: "\(bootstrapPreviewBase64 ?? "")-\(customBgDataURL ?? "")-\(businessSlug ?? "")") {
-            cachedDataURLThumbnail = nil
-            cachedStrippedBootstrapB64 = nil
-            loadedPublicThumbnail = nil
-
-            // 1. Décode le data URL bg hors du main thread
-            let bgURL = customBgDataURL
-            let decoded: UIImage? = await Task.detached(priority: .userInitiated) {
-                CommerceFlyerDataURLImage.uiImage(fromDataURLString: bgURL)
-            }.value
-            cachedDataURLThumbnail = decoded
-
-            // 2. Si pas d’image inline, charge depuis l’endpoint public
-            let bgImage: UIImage?
-            if let img = decoded {
-                bgImage = img
-                isLoadingPublicThumbnail = false
-            } else if let slug = businessSlug, !slug.isEmpty {
-                isLoadingPublicThumbnail = true
-                let pub = await CommerceFlyerPublicBgThumbnail.loadUIImage(slug: slug)
-                loadedPublicThumbnail = pub
-                isLoadingPublicThumbnail = false
-                bgImage = pub
-            } else {
-                isLoadingPublicThumbnail = false
-                bgImage = nil
+        .task(
+            id: CommerceFlyerHydrationFingerprint.token(
+                slug: businessSlug,
+                customBg: customBgDataURL,
+                bootstrapB64: bootstrapPreviewBase64
+            )
+        ) {
+            let slug = businessSlug?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !slug.isEmpty, let prev = hydratedForSlug, prev != slug {
+                cachedDataURLThumbnail = nil
+                cachedStrippedBootstrapB64 = nil
+                loadedPublicThumbnail = nil
             }
 
-            // 3. Strip bg du bootstrap hors main thread
+            let bgURL = customBgDataURL
+            let bgImage: UIImage?
+
+            if let bg = bgURL, !bg.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                if let mem = CommerceFlyerRasterCache.image(forCustomBgDataURL: bg) {
+                    cachedDataURLThumbnail = mem
+                    loadedPublicThumbnail = nil
+                    isLoadingPublicThumbnail = false
+                    bgImage = mem
+                } else {
+                    let decoded: UIImage? = await Task.detached(priority: .userInitiated) {
+                        CommerceFlyerDataURLImage.uiImage(fromDataURLString: bg)
+                    }.value
+                    guard !Task.isCancelled else { return }
+                    cachedDataURLThumbnail = decoded
+                    if let decoded {
+                        CommerceFlyerRasterCache.setImage(decoded, forCustomBgDataURL: bg)
+                    }
+                    loadedPublicThumbnail = nil
+                    isLoadingPublicThumbnail = false
+                    bgImage = decoded
+                }
+            } else {
+                cachedDataURLThumbnail = nil
+                if !slug.isEmpty {
+                    isLoadingPublicThumbnail = true
+                    let pub = await CommerceFlyerPublicBgThumbnail.loadUIImage(slug: slug)
+                    guard !Task.isCancelled else { return }
+                    loadedPublicThumbnail = pub
+                    isLoadingPublicThumbnail = false
+                    bgImage = pub
+                } else {
+                    isLoadingPublicThumbnail = false
+                    loadedPublicThumbnail = nil
+                    bgImage = nil
+                }
+            }
+
             let rawB64 = bootstrapPreviewBase64
             if bgImage != nil, let raw = rawB64, !raw.isEmpty {
                 cachedStrippedBootstrapB64 = await Task.detached(priority: .userInitiated) {
@@ -419,6 +588,10 @@ struct CommerceSavedFlyerLargePreviewView: View {
                 }.value
             } else {
                 cachedStrippedBootstrapB64 = rawB64
+            }
+
+            if !slug.isEmpty {
+                hydratedForSlug = slug
             }
         }
     }

@@ -1,0 +1,371 @@
+//
+//  BodyScanStepView.swift
+//  Process
+//
+//  Vue principale du scan corporel - Orchestre tout le processus
+//
+
+import SwiftUI
+import AVFoundation
+
+struct BodyScanStepView: View {
+    @EnvironmentObject var profileService: UnifiedProfileService
+    @StateObject private var scanService = BodyScanService.shared
+    @StateObject private var cameraManager = BodyScanCameraManager()
+    @StateObject private var hapticManager = HapticManager.shared
+    
+    @Binding var height: Double
+    @Binding var weight: Double
+    @Binding var age: Int
+    @Binding var gender: Gender?
+    
+    var onValidationChanged: ((Bool) -> Void)?
+    var onComplete: (() -> Void)?
+    var onBack: (() -> Void)?
+    
+    @State private var scanState: BodyScanState = .idle
+    @State private var currentPhase: ScanPhase = .instructions
+    @State private var showSilhouette: Bool = false
+    @State private var isBodyDetected: Bool = false
+    @State private var showPermissionAlert: Bool = false
+    @State private var rotationProgress: Double = 0.0
+    
+    enum ScanPhase {
+        case instructions      // Instructions initiales
+        case positioning       // Positionnement dans la silhouette
+        case scanning          // Scan en cours (rotation)
+        case analyzing         // Analyse des données
+        case results           // Affichage des résultats
+    }
+    
+    var body: some View {
+        ZStack {
+            // Fond noir
+            Color.black
+                .ignoresSafeArea()
+            
+            switch currentPhase {
+            case .instructions:
+                instructionsView
+            case .positioning, .scanning:
+                cameraScanView
+            case .analyzing:
+                analyzingView
+            case .results:
+                resultsView
+            }
+            
+            // Titre en overlay
+            VStack {
+                OnboardingTitleView(titleText)
+                    .padding(.top, OnboardingConstants.titleTopPadding)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 20)
+                Spacer()
+            }
+        }
+        .onAppear {
+            requestCameraPermission()
+        }
+        .onDisappear {
+            cameraManager.stopSession()
+        }
+        .alert("Accès à la caméra requis", isPresented: $showPermissionAlert) {
+            Button("Paramètres") {
+                if let url = URL(string: UIApplication.openSettingsURLString) {
+                    UIApplication.shared.open(url)
+                }
+            }
+            Button("Passer", role: .cancel) {
+                cameraManager.stopSession()
+                onComplete?()
+            }
+        } message: {
+            Text("Process a besoin d'accéder à ta caméra pour scanner ton corps et analyser ta posture.")
+        }
+    }
+    
+    // MARK: - Titre dynamique
+    
+    private var titleText: String {
+        switch currentPhase {
+        case .instructions:
+            return "Scanne ton corps"
+        case .positioning:
+            return "Aligne-toi avec la silhouette"
+        case .scanning:
+            return "Rotation à 360°"
+        case .analyzing:
+            return "Analyse en cours..."
+        case .results:
+            return "Résultats du scan"
+        }
+    }
+    
+    // MARK: - Vue Instructions
+    
+    private var instructionsView: some View {
+        VStack(spacing: 32) {
+            Spacer()
+                .frame(height: OnboardingConstants.titleAreaHeight + OnboardingConstants.titleToContentSpacing + 40)
+            
+            VStack(spacing: 24) {
+                // Icône
+                Image(systemName: "camera.viewfinder")
+                    .font(.system(size: 60))
+                    .foregroundColor(.white.opacity(0.9))
+                    .padding(.bottom, 20)
+                
+                // Instructions
+                VStack(spacing: 16) {
+                    InstructionItem(icon: "1.circle.fill", text: "Porte des vêtements moulants")
+                    InstructionItem(icon: "2.circle.fill", text: "Place-toi devant un fond neutre")
+                    InstructionItem(icon: "3.circle.fill", text: "Assure-toi d'avoir un bon éclairage")
+                    InstructionItem(icon: "4.circle.fill", text: "Tiens-toi droit et immobile")
+                }
+                .padding(.horizontal, 40)
+                
+                Spacer()
+                    .frame(height: 40)
+                
+                // Bouton commencer
+                Button(action: {
+                    hapticManager.impact(.medium)
+                    startScanning()
+                }) {
+                    Text("COMMENCER LE SCAN")
+                        .font(.system(size: 18, weight: .black))
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 50)
+                }
+                .glassStyle()
+                .buttonBorderShape(.roundedRectangle(radius: 50))
+                .padding(.horizontal, 40)
+                .padding(.bottom, 40)
+            }
+        }
+    }
+    
+    // MARK: - Vue Caméra Scan
+    
+    private var cameraScanView: some View {
+        ZStack {
+            // Caméra avec overlay
+            BodyScanCameraView(
+                cameraManager: cameraManager,
+                isBodyDetected: $isBodyDetected,
+                showSilhouette: $showSilhouette,
+                onCapture: captureImage
+            )
+            
+            // Contrôles en bas
+            VStack {
+                Spacer()
+                
+                VStack(spacing: 20) {
+                    // Indicateur de détection
+                    if isBodyDetected {
+                        HStack {
+                            Circle()
+                                .fill(Color.green)
+                                .frame(width: 12, height: 12)
+                            Text("Corps détecté")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundColor(.white)
+                        }
+                        .padding(.vertical, 12)
+                        .padding(.horizontal, 20)
+                        .background(
+                            Capsule()
+                                .fill(Color.green.opacity(0.2))
+                                .overlay(
+                                    Capsule()
+                                        .stroke(Color.green, lineWidth: 1)
+                                )
+                        )
+                        .transition(.opacity.combined(with: .scale))
+                    }
+                    
+                    // Bouton capture
+                    Button(action: {
+                        hapticManager.impact(.medium)
+                        captureImage()
+                    }) {
+                        Circle()
+                            .fill(Color.white)
+                            .frame(width: 70, height: 70)
+                            .overlay(
+                                Circle()
+                                    .stroke(Color.black.opacity(0.3), lineWidth: 3)
+                            )
+                            .opacity(isBodyDetected ? 1.0 : 0.5)
+                    }
+                    .disabled(!isBodyDetected)
+                    .padding(.bottom, 40)
+                }
+            }
+        }
+    }
+    
+    // MARK: - Vue Analyse
+    
+    private var analyzingView: some View {
+        VStack(spacing: 32) {
+            Spacer()
+                .frame(height: OnboardingConstants.titleAreaHeight + OnboardingConstants.titleToContentSpacing + 40)
+            
+            ProgressView()
+                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                .scaleEffect(2.0)
+            
+            Text("Analyse de votre posture...")
+                .font(.system(size: 18, weight: .medium))
+                .foregroundColor(.white.opacity(0.8))
+            
+            Text("Calcul des mensurations...")
+                .font(.system(size: 16, weight: .regular))
+                .foregroundColor(.white.opacity(0.6))
+                .padding(.top, 8)
+            
+            Spacer()
+        }
+    }
+    
+    // MARK: - Vue Résultats
+    
+    private var resultsView: some View {
+        Group {
+            if let scanData = scanService.scanData {
+                BodyScanResultsView(scanData: scanData) {
+                    hapticManager.impact(.medium)
+                    onComplete?()
+                }
+            } else {
+                // Erreur ou données non disponibles
+                VStack(spacing: 24) {
+                    Spacer()
+                        .frame(height: OnboardingConstants.titleAreaHeight + OnboardingConstants.titleToContentSpacing + 40)
+                    
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.system(size: 50))
+                        .foregroundColor(.orange)
+                    
+                    Text("Scan non disponible")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundColor(.white)
+                    
+                    Button(action: {
+                        hapticManager.impact(.medium)
+                        onComplete?()
+                    }) {
+                        Text("CONTINUER")
+                            .font(.system(size: 18, weight: .black))
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 50)
+                    }
+                    .glassStyle()
+                    .buttonBorderShape(.roundedRectangle(radius: 50))
+                    .padding(.horizontal, 40)
+                    
+                    Spacer()
+                }
+            }
+        }
+    }
+    
+    // MARK: - Actions
+    
+    private func requestCameraPermission() {
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized:
+            // Permission déjà accordée
+            break
+        case .notDetermined:
+            AVCaptureDevice.requestAccess(for: .video) { granted in
+                if !granted {
+                    DispatchQueue.main.async {
+                        showPermissionAlert = true
+                    }
+                }
+            }
+        default:
+            showPermissionAlert = true
+        }
+    }
+    
+    private func startScanning() {
+        scanService.startScan(
+            height: height,
+            weight: weight,
+            age: age,
+            gender: gender
+        )
+        
+        currentPhase = .positioning
+        showSilhouette = true
+        cameraManager.startSession()
+        
+        // Configurer les callbacks
+        cameraManager.onBodyDetected = { detected in
+            isBodyDetected = detected
+        }
+    }
+    
+    private func captureImage() {
+        guard isBodyDetected else { return }
+        
+        cameraManager.onImageCaptured = { image in
+            Task { @MainActor in
+                await processCapturedImage(image)
+            }
+        }
+        
+        cameraManager.capturePhoto()
+    }
+    
+    private func processCapturedImage(_ image: UIImage) async {
+        // Analyser l'image
+        await scanService.analyzeImage(image, orientation: .front)
+        
+        // Finaliser le scan
+        await scanService.finalizeScan()
+        
+        // Passer à l'analyse
+        await MainActor.run {
+            currentPhase = .analyzing
+        }
+        
+        // Simuler l'analyse (2 secondes)
+        try? await Task.sleep(nanoseconds: 2_000_000_000)
+        
+        // Passer aux résultats
+        await MainActor.run {
+            currentPhase = .results
+            cameraManager.stopSession()
+            onValidationChanged?(true)
+        }
+    }
+}
+
+// MARK: - Composant Instruction
+struct InstructionItem: View {
+    let icon: String
+    let text: String
+    
+    var body: some View {
+        HStack(spacing: 16) {
+            Image(systemName: icon)
+                .font(.system(size: 24))
+                .foregroundColor(.white.opacity(0.9))
+                .frame(width: 32)
+            
+            Text(text)
+                .font(.system(size: 16, weight: .medium))
+                .foregroundColor(.white.opacity(0.8))
+            
+            Spacer()
+        }
+    }
+}

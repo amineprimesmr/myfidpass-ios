@@ -15,15 +15,28 @@ enum FlyerEmbedWarmup {
 
     private static var poolViews: [WKWebView] = []
     private static var readyViews: [WKWebView] = []
-    private static let maxPool = 2
+    /// 1 vue préchargée après délai (hors pic cold start) : ouverture flyer-embed plus fluide.
+    /// Le démarrage est décalé depuis l’onglet Commerce, pas au lancement global de l’app.
+    private static let maxPool = 1
     private static let warmupDelegate = WarmupNavigationDelegate()
+    private static var delayedStartWorkItem: DispatchWorkItem?
 
     // MARK: - Init
 
     /// Appelé au lancement de l'app. Remplit le pool.
+    /// Délai léger : évite de créer 2× WKWebView + JavaScriptCore en même temps que la 1ʳᵉ sync Core Data
+    /// (concurrence disque / mémoire au cold start — threads JSC visibles dans les crash malloc).
     static func startIfNeeded() {
+        guard maxPool > 0 else { return }
         guard poolViews.isEmpty else { return }
-        replenish()
+        guard delayedStartWorkItem == nil else { return }
+        let work = DispatchWorkItem {
+            delayedStartWorkItem = nil
+            guard poolViews.isEmpty else { return }
+            replenish()
+        }
+        delayedStartWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.4, execute: work)
     }
 
     // MARK: - Pool management

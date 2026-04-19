@@ -145,41 +145,42 @@ struct MenuActionView: View {
         let openDuration = MenuAnimation.openDuration
         let closeDuration = MenuAnimation.closeDuration
 
-        HStack(spacing: 20) {
-            Image(systemName: action.symbolImage)
-                .font(.title3)
-                .frame(width: 40, height: 40)
-                .background {
-                    Circle()
-                        .fill(.background)
-                        .shadow(radius: 1.5)
-                }
-                .scaleEffect(animateContent ? 1 : 0.5)
-                .opacity(animateContent ? 1 : 0)
-                .blur(radius: animateContent ? 0 : 6)
-                .animation(.easeOut(duration: animateContent ? openDuration : closeDuration).delay(animateContent ? itemDelay : 0), value: animateContent)
+        Button(action: { action.action() }) {
+            HStack(spacing: 20) {
+                Image(systemName: action.symbolImage)
+                    .font(.title3)
+                    .frame(width: 40, height: 40)
+                    .background {
+                        Circle()
+                            .fill(.background)
+                            .shadow(radius: 1.5)
+                    }
+                    .scaleEffect(animateContent ? 1 : 0.5)
+                    .opacity(animateContent ? 1 : 0)
+                    .blur(radius: animateContent ? 0 : 6)
+                    .animation(.easeOut(duration: animateContent ? openDuration : closeDuration).delay(animateContent ? itemDelay : 0), value: animateContent)
 
-            Text(action.text)
-                .font(.system(size: 19))
-                .fontWeight(.medium)
-                .lineLimit(1)
-                .opacity(animateLabels ? 1 : 0)
-                .blur(radius: animateLabels ? 0 : 4)
-                .animation(.easeOut(duration: animateLabels ? 0.28 : 0.12).delay(animateLabels ? itemDelay + MenuAnimation.labelsDelay : 0), value: animateLabels)
+                Text(action.text)
+                    .font(.system(size: 19))
+                    .fontWeight(.medium)
+                    .lineLimit(1)
+                    .opacity(animateLabels ? 1 : 0)
+                    .blur(radius: animateLabels ? 0 : 4)
+                    .animation(.easeOut(duration: animateLabels ? 0.28 : 0.12).delay(animateLabels ? itemDelay + MenuAnimation.labelsDelay : 0), value: animateLabels)
+            }
+            .visualEffect { [animateContent] content, geometry in
+                content
+                    .offset(
+                        x: animateContent ? 0 : sourceLocation.minX - geometry.frame(in: .global).minX,
+                        y: animateContent ? 0 : sourceLocation.minY - geometry.frame(in: .global).minY
+                    )
+            }
+            .animation(.easeOut(duration: animateContent ? openDuration : closeDuration).delay(animateContent ? itemDelay : 0), value: animateContent)
+            .frame(height: 70)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(.rect)
         }
-        .visualEffect { [animateContent] content, geometry in
-            content
-                .offset(
-                    x: animateContent ? 0 : sourceLocation.minX - geometry.frame(in: .global).minX,
-                    y: animateContent ? 0 : sourceLocation.minY - geometry.frame(in: .global).minY
-                )
-        }
-        .animation(.easeOut(duration: animateContent ? openDuration : closeDuration).delay(animateContent ? itemDelay : 0), value: animateContent)
-        .frame(height: 70)
-        .contentShape(.rect)
-        .onTapGesture {
-            action.action()
-        }
+        .buttonStyle(.borderless)
     }
 }
 
@@ -190,20 +191,22 @@ struct MenuSourceButton<Content: View>: View {
     var onTap: () -> Void
 
     var body: some View {
-        content
-            .contentShape(.rect)
-            .onTapGesture {
-                onTap()
-                config.sourceView = AnyView(content)
-                config.showMenu.toggle()
-            }
-            .onGeometryChange(for: CGRect.self) { view in
-                view.frame(in: .global)
-            } action: { newValue in
-                config.sourceLocation = newValue
-            }
-            .opacity(config.hideSouceView ? 0.01 : 1)
-            .animation(.easeOut(duration: 0.2), value: config.hideSouceView)
+        Button {
+            onTap()
+            config.sourceView = AnyView(content)
+            config.showMenu.toggle()
+        } label: {
+            content
+        }
+        .buttonStyle(.borderless)
+        .contentShape(.rect)
+        .onGeometryChange(for: CGRect.self) { view in
+            view.frame(in: .global)
+        } action: { newValue in
+            config.sourceLocation = newValue
+        }
+        .opacity(config.hideSouceView ? 0.01 : 1)
+        .animation(.easeOut(duration: 0.2), value: config.hideSouceView)
     }
 }
 

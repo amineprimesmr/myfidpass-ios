@@ -2,7 +2,8 @@
 //  AppUpdateView.swift
 //  myfidpass
 //
-//  Écran de mise à jour disponible (réutilisé depuis VersionAppCheck). S’affiche à chaque ouverture si une nouvelle version est sur l’App Store.
+//  Feuille « Mise à jour disponible » : uniquement si la version App Store est **strictement** supérieure à l’installée
+//  (comparaison robuste + « Plus tard » mémorisé par version store).
 //
 
 import SwiftUI
@@ -12,6 +13,8 @@ struct AppUpdateView: View {
     @Binding var forcedUpdate: Bool
     @Environment(\.dismiss) var dismiss
     @Environment(\.openURL) var openURL
+    /// « Mettre à jour » ouvre l’App Store : ne pas mémoriser « Plus tard » dans ce cas.
+    @State private var skipPersistDismissed = false
 
     var body: some View {
         VStack(spacing: 15) {
@@ -33,6 +36,7 @@ struct AppUpdateView: View {
             VStack(spacing: 8) {
                 if let appURL = URL(string: appInfo.appURL) {
                     Button {
+                        skipPersistDismissed = true
                         openURL(appURL)
                         if !forcedUpdate {
                             dismiss()
@@ -62,12 +66,15 @@ struct AppUpdateView: View {
         }
         .fontDesign(.rounded)
         .padding([.horizontal, .top], 20)
-        .padding(.bottom, isiOS26 ? 30 : 10)
+        .onDisappear {
+            guard !forcedUpdate else { return }
+            guard !skipPersistDismissed else { return }
+            VersionCheckManager.shared.markUpdatePromptDismissed(forStoreVersion: appInfo.availableVersion)
+        }
+        .appUpdateSheetPresentationChrome()
         .presentationDetents([.height(450)])
-        .presentationCornerRadius(isiOS26 ? nil : 30)
         .interactiveDismissDisabled(forcedUpdate)
         .presentationBackground(.background)
-        .ignoresSafeArea(.all, edges: isiOS26 ? .all : [])
     }
 
     private var updateIllustration: some View {
@@ -92,10 +99,23 @@ struct AppUpdateView: View {
         .frame(height: 140)
     }
 
-    private var isiOS26: Bool {
+}
+
+// MARK: - Feuille : coins système iOS 26 vs rayon fixe < 26 (évite `presentationCornerRadius(nil)` hors garde API)
+
+private extension View {
+    @ViewBuilder
+    func appUpdateSheetPresentationChrome() -> some View {
         if #available(iOS 26, *) {
-            return true
+            self
+                .padding(.bottom, 30)
+                .presentationCornerRadius(nil)
+                .ignoresSafeArea(.all, edges: .all)
+        } else {
+            self
+                .padding(.bottom, 10)
+                .presentationCornerRadius(30)
+                .ignoresSafeArea(.all, edges: [])
         }
-        return false
     }
 }

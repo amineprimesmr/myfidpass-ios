@@ -18,6 +18,7 @@ private let statPeriods: [(id: String, label: String)] = [
     ("30d", "30 jours"),
     ("this_month", "Ce mois"),
     ("6m", "6 mois"),
+    ("12m", "12 mois"),
 ]
 
 struct AdvancedStatsView: View {

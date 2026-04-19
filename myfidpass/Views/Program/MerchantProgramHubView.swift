@@ -75,7 +75,6 @@ struct MerchantProgramHubView: View {
             }
         }
         .toolbar(.hidden, for: .navigationBar)
-        .toolbar(.hidden, for: .tabBar)
         .navigationDestination(isPresented: $navigateToMyCard) {
             MyCardView(context: viewContext)
                 .environmentObject(syncService)
@@ -108,6 +107,7 @@ struct MerchantProgramHubView: View {
 
 // MARK: - Racine onglet Flyer (IA + éditeur)
 
+@MainActor
 private struct ProgramFlyerTabRoot: View {
     let slug: String
     let palette: DashboardRevolutPalette
@@ -184,7 +184,8 @@ private enum FlyerGeneratedImageDecode {
         if let u = UIImage(data: data) { return u }
         guard let source = CGImageSourceCreateWithData(data as CFData, nil),
               let cg = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
-        return UIImage(cgImage: cg, scale: UIScreen.main.scale, orientation: .up)
+        // Pas d’accès à `UIScreen.main` ici (Swift 6 : hors MainActor) — repli décodage uniquement.
+        return UIImage(cgImage: cg, scale: 1.0, orientation: .up)
     }
 }
 
@@ -267,7 +268,12 @@ private final class ProgramFlyerEditorModel: ObservableObject {
     private var undoStack: [FlyerEditSnapshot] = []
     private var redoStack: [FlyerEditSnapshot] = []
     /// Dernier chargement réussi depuis l’API — évite un GET à chaque retour sur l’onglet Flyer (fluide, état local conservé).
-    private var lastSuccessfulServerLoadAt: Date?
+    /// Accès fichier uniquement (`ProgramFlyerEditorModel` est `private`).
+    var lastSuccessfulServerLoadAt: Date?
+    /// Au moins un `load()` réussi (l’assistant ne doit pas lire la date brute, réservée au modèle).
+    var hasCompletedSuccessfulFlyerLoad: Bool { lastSuccessfulServerLoadAt != nil }
+    /// Après « Recréer » / régénérer : n’injecte pas l’ancien `custom_logo_data_url` du dashboard dans le bootstrap (sinon WKWebView garde l’ancien logo jusqu’au prochain enregistrement).
+    var suppressDashboardCustomLogoForPreview = false
 
     var canUndo: Bool { !undoStack.isEmpty }
     var canRedo: Bool { !redoStack.isEmpty }
@@ -300,7 +306,11 @@ private final class ProgramFlyerEditorModel: ObservableObject {
         }
         logoPayload = p
         switch p {
-        case .clear, .dataURL:
+        case .dataURL:
+            suppressDashboardCustomLogoForPreview = false
+            cachedPublicLogoDataUrl = nil
+            refreshPreviewBootstrap()
+        case .clear:
             cachedPublicLogoDataUrl = nil
             refreshPreviewBootstrap()
         case .leaveUnchanged:
@@ -382,12 +392,27 @@ private final class ProgramFlyerEditorModel: ObservableObject {
     }
 
     /// Bootstrap WK : `""` = pas de logo sur le canvas **et** pas de repli `/public/logo` (évite le logo « Ma Carte » après effacement).
+    /// `nil` = omettre la clé → `flyer-embed` charge le logo public `/public/flyer-qr-logo` (comportement attendu après « Recréer » tant qu’aucun nouveau logo n’est choisi).
     private func customLogoDataUrlForBootstrap() -> String? {
+        if suppressDashboardCustomLogoForPreview {
+            switch logoPayload {
+            case .clear: return ""
+            case .dataURL(let s): return s
+            case .leaveUnchanged: return nil
+            }
+        }
         switch logoPayload {
         case .clear: return ""
         case .dataURL(let s): return s
         case .leaveUnchanged: return effectiveLogoPreview()
         }
+    }
+
+    /// Appelé au début d’une session « recréer / régénérer » : l’aperçu ne doit plus refléter l’ancien logo enregistré.
+    func beginFlyerRecreateSessionForPreview() {
+        suppressDashboardCustomLogoForPreview = true
+        cachedPublicLogoDataUrl = nil
+        refreshPreviewBootstrap()
     }
 
     /// Même source que la page jeu QR et `/public/flyer-qr-logo` — pas le logo « bandeau Wallet » (évite le carré vert texte).
@@ -686,6 +711,7 @@ private final class ProgramFlyerEditorModel: ObservableObject {
                 return false
             }
             _ = try await APIClient.shared.request(APIEndpoint.dashboardFlyerPut(slug: slug, payload: payload)) as FlyerPutAPIResponse
+            suppressDashboardCustomLogoForPreview = false
             logoPayload = .leaveUnchanged
             bgPayload = .leaveUnchanged
             /// Miroir optimiste : si le GET suivant échoue (réseau), l’UI reflète quand même ce qui vient d’être accepté par le PUT.
@@ -740,7 +766,7 @@ private enum FlyerPickerUIImageLoader {
         if let ui = UIImage(data: data) { return ui }
         guard let source = CGImageSourceCreateWithData(data as CFData, nil),
               let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
-        let scale = UIScreen.main.scale
+        let scale = await MainActor.run { UIScreen.main.scale }
         return UIImage(cgImage: cgImage, scale: scale, orientation: .up)
     }
 }
@@ -817,8 +843,32 @@ private enum FlyerGenerationAuthenticRevealTiming {
         0.96,
         1.0
     ]
-    static let initialDelayNs: UInt64 = 320_000_000
-    static let stepDelayNs: UInt64 = 900_000_000
+    /// Dévoilement plus rapide : moins d’effet « saccadé » en fin de génération.
+    static let initialDelayNs: UInt64 = 72_000_000
+    static let stepDelayNs: UInt64 = 110_000_000
+}
+
+/// Cadre neutre pendant la génération IA : aucun aperçu flyer (pas de WKWebView, pas de dévoilement partiel roue/QR).
+private struct FlyerGeneratingHeroPlaceholder: View {
+    var cornerRadius: CGFloat = 20
+    var maxWidth: CGFloat = 300
+    var aspectRatio: CGFloat
+
+    var body: some View {
+        ZStack {
+            Color(white: 0.1)
+            FlyerGenerationScanOverlay(cornerRadius: cornerRadius)
+                .allowsHitTesting(false)
+        }
+        .background(Color(white: 0.1))
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.2), lineWidth: 1)
+        )
+        .aspectRatio(aspectRatio, contentMode: .fit)
+        .frame(maxWidth: maxWidth)
+    }
 }
 
 /// Pendant l’appel IA : dévoilement progressif du **vrai** rendu (`WKWebView` + fond natif), aligné sur la mise en page du flyer embarqué — pas de roue / QR / titre factices en SwiftUI.
@@ -862,7 +912,7 @@ private struct FlyerGenerationAuthenticCanvasReveal<Content: View>: View {
                         startRevealSequence()
                     } else {
                         cancelSequence()
-                        withAnimation(.spring(response: 0.48, dampingFraction: 0.88)) {
+                        withAnimation(.spring(response: 0.32, dampingFraction: 0.92)) {
                             revealPhase = FlyerGenerationAuthenticRevealTiming.maxPhase
                         }
                     }
@@ -896,6 +946,198 @@ private struct FlyerGenerationAuthenticCanvasReveal<Content: View>: View {
     }
 }
 
+// MARK: - Sources média IA (JPEG snapshot pour labels PhotosPicker @Sendable / Swift 6)
+
+private enum FlyerAISourcePickerJPEG {
+    static let quality: CGFloat = 0.92
+}
+
+private struct FlyerAISourceThumbImage: View {
+    let ui: UIImage
+    var extraCountBadge: Int = 0
+
+    private static let thumbHeight: CGFloat = 92
+
+    var body: some View {
+        Color.clear
+            .frame(maxWidth: .infinity)
+            .frame(height: Self.thumbHeight)
+            .overlay {
+                Image(uiImage: ui)
+                    .resizable()
+                    .scaledToFill()
+            }
+            .clipped()
+            .overlay(alignment: .bottomTrailing) {
+                if extraCountBadge > 0 {
+                    Text("+\(extraCountBadge)")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(FlyerAIEditorTheme.textPrimary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(FlyerAIEditorTheme.promptSurface.opacity(0.92), in: Capsule())
+                        .overlay(Capsule().strokeBorder(FlyerAIEditorTheme.hairline, lineWidth: 1))
+                        .padding(6)
+                }
+            }
+    }
+}
+
+private struct FlyerAISourceThumbEmpty: View {
+    let systemImage: String
+    let label: String
+
+    private static let thumbHeight: CGFloat = 92
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 14, style: .continuous)
+            .fill(FlyerAIEditorTheme.canvas)
+            .frame(maxWidth: .infinity)
+            .frame(height: Self.thumbHeight)
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(FlyerAIEditorTheme.hairline, style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
+            )
+            .overlay {
+                HStack(spacing: 8) {
+                    Image(systemName: systemImage)
+                        .font(.subheadline.weight(.semibold))
+                    Text(label)
+                        .font(.caption.weight(.semibold))
+                }
+                .foregroundStyle(FlyerAIEditorTheme.textSecondary)
+            }
+    }
+}
+
+private struct FlyerAISourcePickerCard<Content: View>: View {
+    let title: String
+    let symbol: String
+    let isActive: Bool
+    @ViewBuilder var preview: () -> Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                Image(systemName: symbol)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(isActive ? FlyerStudioTheme.accent : FlyerAIEditorTheme.textSecondary)
+                Text(title)
+                    .font(.system(.subheadline, design: .rounded, weight: .semibold))
+                    .foregroundStyle(FlyerAIEditorTheme.textPrimary)
+                Spacer(minLength: 0)
+                if isActive {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.footnote.weight(.bold))
+                        .foregroundStyle(FlyerStudioTheme.accent.opacity(0.95))
+                }
+            }
+            preview()
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(FlyerAIEditorTheme.sourceCard)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(
+                    isActive ? FlyerStudioTheme.accent.opacity(0.45) : FlyerAIEditorTheme.hairline,
+                    lineWidth: isActive ? 1.25 : 1
+                )
+        )
+        .overlay(
+            VStack(spacing: 0) {
+                LinearGradient(
+                    colors: [Color.white.opacity(0.06), Color.white.opacity(0.02), .clear],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(height: 5)
+                Spacer(minLength: 0)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .allowsHitTesting(false)
+        )
+        .shadow(color: Color.black.opacity(0.35), radius: 16, y: 8)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .animation(.spring(response: 0.28, dampingFraction: 0.86), value: isActive)
+    }
+}
+
+private struct FlyerAILogoPhotosPickerSlot: View {
+    @Binding var selection: PhotosPickerItem?
+    var logoJPEG: Data?
+
+    var body: some View {
+        let isActive = logoJPEG != nil
+        PhotosPicker(selection: $selection, matching: .images) {
+            FlyerAISourcePickerCard(
+                title: "Logo",
+                symbol: "building.2.crop.circle",
+                isActive: isActive,
+                preview: {
+                    if let logoJPEG, let ui = UIImage(data: logoJPEG) {
+                        FlyerAISourceThumbImage(ui: ui, extraCountBadge: 0)
+                    } else {
+                        FlyerAISourceThumbEmpty(
+                            systemImage: "photo.badge.plus",
+                            label: "Importer le logo"
+                        )
+                    }
+                }
+            )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct FlyerAIStylePhotosPickerSlot: View {
+    @Binding var selection: [PhotosPickerItem]
+    var styleJPEGs: [Data]
+
+    var body: some View {
+        let isActive = !styleJPEGs.isEmpty
+        let firstJPEG = styleJPEGs.first
+        let extra = max(0, styleJPEGs.count - 1)
+        PhotosPicker(selection: $selection, maxSelectionCount: 3, matching: .images) {
+            FlyerAISourcePickerCard(
+                title: "Inspiration DA",
+                symbol: "sparkles",
+                isActive: isActive,
+                preview: {
+                    if let firstJPEG, let ui = UIImage(data: firstJPEG) {
+                        FlyerAISourceThumbImage(ui: ui, extraCountBadge: extra)
+                    } else {
+                        FlyerAISourceThumbEmpty(
+                            systemImage: "rectangle.stack.badge.plus",
+                            label: "Importer des références"
+                        )
+                    }
+                }
+            )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// Masque la tab bar sur l’écran de création (saisie, aperçu hors génération) ; la réaffiche **uniquement** pendant l’animation de génération IA pour permettre de naviguer dans l’app.
+private struct MerchantFlyerTabBarForCreationVisibility: ViewModifier {
+    let isTabRoot: Bool
+    let isGenerating: Bool
+
+    func body(content: Content) -> some View {
+        if isTabRoot && !isGenerating {
+            content.toolbar(.hidden, for: .tabBar)
+        } else {
+            content
+        }
+    }
+}
+
+@MainActor
 private struct FlyerAIGeneratorSheet: View {
     let slug: String
     let palette: DashboardRevolutPalette
@@ -915,7 +1157,7 @@ private struct FlyerAIGeneratorSheet: View {
 
     @State private var brandName = ""
     @State private var cuisineOrConcept = ""
-    /// Couleurs flyer IA : ordre = priorité pour l’API (max 3).
+    /// Couleur flyer IA : une teinte (priorité pour l’API).
     @State private var flyerPalettePriorityHexes: [String] = ["#FF6B9D"]
     /// Mise à jour programmée (init, prefill, extraction logo) — ne pas marquer la couleur comme personnalisée.
     @State private var isUpdatingAccentFromEngine = false
@@ -936,7 +1178,6 @@ private struct FlyerAIGeneratorSheet: View {
     @State private var didPrefillCommerce = false
     /// Grand aperçu flyer + zone scan : visible après « Générer le flyer » (ou si un rendu existe déjà).
     @State private var flyerHeroRevealed = false
-    @State private var heroTiltDegrees: Double = 0
     @State private var heroCompositePreviewLoading = false
     @State private var flyerInteractiveWebLoading = false
     @FocusState private var isPromptFieldFocused: Bool
@@ -971,10 +1212,15 @@ private struct FlyerAIGeneratorSheet: View {
     private var flyerHeroCompositeBootstrap: String? {
         guard let raw = generatedBase64, !raw.isEmpty else { return nil }
         let dataURL = "data:image/png;base64,\(raw)"
-        let provisionalLogo = logoPreview.flatMap {
+        let fromPicker = logoPreview.flatMap {
             $0.flyerLogoPNGDataURLForAI(maxEncodedLength: FlyerDashboardFlyerPrefsLimits.logoPngMaxEncodedUtf8Bytes)
                 ?? $0.normalizedFlyerDataURLForFlyerAI()
         }
+        /// Si l’export data URL depuis `UIImage` échoue, le modèle peut déjà porter le même logo (`.dataURL`) — évite de retomber sur l’ancien logo serveur.
+        let provisionalLogo: String? = fromPicker ?? {
+            if case .dataURL(let s) = flyerModel.logoPayload { return s }
+            return nil
+        }()
         return flyerModel.encodedPreviewBootstrapBase64(
             provisionalCustomBgDataURL: dataURL,
             provisionalCustomLogoDataURL: provisionalLogo
@@ -1000,34 +1246,37 @@ private struct FlyerAIGeneratorSheet: View {
     }
 
     private var bottomScrollPadding: CGFloat {
-        if isGenerating { return 36 }
+        if isGenerating { return 52 }
         return flyerHeroRevealed ? 120 : 140
     }
 
-    var body: some View {
+    /// Découpé du `body` pour accélérer l’inférence de types du compilateur.
+    private var flyerAIGeneratorScrollAndChrome: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                // Bouton retour custom (nav bar cachée)
-                HStack {
-                    Button {
-                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                        dismiss()
-                    } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: "chevron.left")
-                                .font(.system(size: 15, weight: .semibold))
-                            Text("Retour")
-                                .font(.system(size: 16, weight: .medium))
+                // Retour masqué pendant la génération IA (navigation via tab bar ; la génération continue en arrière-plan).
+                if !isGenerating {
+                    HStack {
+                        Button {
+                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                            dismiss()
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "chevron.left")
+                                    .font(.system(size: 15, weight: .semibold))
+                                Text("Retour")
+                                    .font(.system(size: 16, weight: .medium))
+                            }
+                            .foregroundStyle(FlyerAIEditorTheme.textSecondary)
+                            .padding(.vertical, 8)
+                            .padding(.trailing, 12)
+                            .contentShape(Rectangle())
                         }
-                        .foregroundStyle(FlyerAIEditorTheme.textSecondary)
-                        .padding(.vertical, 8)
-                        .padding(.trailing, 12)
-                        .contentShape(Rectangle())
+                        .buttonStyle(.plain)
+                        Spacer(minLength: 0)
                     }
-                    .buttonStyle(.plain)
-                    Spacer(minLength: 0)
+                    .padding(.top, 4)
                 }
-                .padding(.top, 4)
 
                 fieldsBlock
                     .transition(
@@ -1050,7 +1299,7 @@ private struct FlyerAIGeneratorSheet: View {
             .padding(.bottom, bottomScrollPadding)
         }
         .scrollIndicators(.hidden)
-        .scrollDisabled(isGenerating)
+        // Scroll autorisé pendant la génération (tab bar utilisable ; pas de blocage « figé » sur l’écran).
         .background {
             ZStack {
                 FlyerAIEditorTheme.canvas
@@ -1066,10 +1315,14 @@ private struct FlyerAIGeneratorSheet: View {
                 stickyGenerateBar
             }
         }
+    }
+
+    var body: some View {
+        flyerAIGeneratorScrollAndChrome
         .alert("Régénérer le flyer ?", isPresented: $showRegenerateFlyerConfirm) {
             Button("Annuler", role: .cancel) {}
             Button("Continuer") {
-                performFlyerRegenerationFromValidated()
+                Task { await performFlyerRegenerationFromValidated() }
             }
         } message: {
             Text(
@@ -1094,18 +1347,11 @@ private struct FlyerAIGeneratorSheet: View {
             }
             syncFlyerHeroRevealedForPersistedServerFlyer()
         }
-        .onChange(of: flyerModel.serverBgDataUrl) { _, _ in
-            syncFlyerHeroRevealedForPersistedServerFlyer()
-        }
-        .onChange(of: flyerModel.bootstrapPreviewBase64) { _, _ in
+        .onReceive(flyerModel.objectWillChange.receive(on: RunLoop.main)) { _ in
             syncFlyerHeroRevealedForPersistedServerFlyer()
         }
         .onChange(of: scenePhase) { _, newPhase in
-            if newPhase == .active {
-                Task { @MainActor in
-                    await resumePendingFlyerJobIfNeeded()
-                }
-            }
+            flyerScenePhaseChanged(newPhase)
         }
         .onChange(of: flyerPalettePriorityHexes) { _, _ in
             guard !isUpdatingAccentFromEngine else { return }
@@ -1116,9 +1362,6 @@ private struct FlyerAIGeneratorSheet: View {
                 startScanAnimation()
             } else {
                 stopScanAnimation()
-            }
-            withAnimation(.spring(response: 0.58, dampingFraction: 0.82)) {
-                heroTiltDegrees = newValue ? -12 : 0
             }
         }
         .onChange(of: stylePickerItems) { _, new in
@@ -1137,10 +1380,29 @@ private struct FlyerAIGeneratorSheet: View {
                 await resumePendingFlyerJobIfNeeded()
                 await retryPendingValidateIfNeeded()
             }
+            if seedRecreateFlyerSession {
+                /// Le parent lance `load()` en parallèle : attendre la fin du GET avant d’ignorer l’ancien logo persistant (sinon course).
+                var spins = 0
+                while flyerModel.isLoading, spins < 400 {
+                    try? await Task.sleep(nanoseconds: 50_000_000)
+                    spins += 1
+                }
+                if !flyerModel.hasCompletedSuccessfulFlyerLoad {
+                    await flyerModel.load()
+                }
+            }
             if seedRecreateFlyerSession, !didApplyRecreateSeed {
                 didApplyRecreateSeed = true
-                performFlyerRegenerationFromValidated()
+                await performFlyerRegenerationFromValidated()
             }
+        }
+        .modifier(MerchantFlyerTabBarForCreationVisibility(isTabRoot: isTabRoot, isGenerating: isGenerating))
+    }
+
+    private func flyerScenePhaseChanged(_ newPhase: ScenePhase) {
+        guard newPhase == .active else { return }
+        Task { @MainActor in
+            await resumePendingFlyerJobIfNeeded()
         }
     }
 
@@ -1387,9 +1649,9 @@ private struct FlyerAIGeneratorSheet: View {
                             )
                         )
                 }
-                if !isGenerating {
-                    aiPromptComposerCard
-                }
+                // Toujours afficher la carte : pendant la génération elle contient `FlyerAIGenerationProgressExperience`
+                // (barre + étapes). Avant : `if !isGenerating` masquait toute la carte → aucune barre visible.
+                aiPromptComposerCard
             }
             .animation(.spring(response: 0.52, dampingFraction: 0.86), value: flyerHeroRevealed)
         }
@@ -1399,13 +1661,30 @@ private struct FlyerAIGeneratorSheet: View {
         HStack {
             Spacer(minLength: 0)
             Group {
-                if let rawBootstrap = effectiveFlyerPreviewBootstrap, !rawBootstrap.isEmpty {
+                if isGenerating {
+                    FlyerGeneratingHeroPlaceholder(
+                        cornerRadius: 20,
+                        maxWidth: Self.flyerHeroMaxWidth,
+                        aspectRatio: Self.flyerCanvasAspect
+                    )
+                    .shadow(color: .black.opacity(0.4), radius: 22, y: 12)
+                    .modifier(FlyerHeroGenerationLiveMotion(isGenerating: isGenerating))
+                    .matchedGeometryEffect(id: "flyerValidateHero", in: flyerValidateMorph)
+                    .transition(
+                        .asymmetric(
+                            insertion: .move(edge: .top)
+                                .combined(with: .opacity)
+                                .combined(with: .scale(scale: 0.9, anchor: .top)),
+                            removal: .opacity
+                        )
+                    )
+                } else if let rawBootstrap = effectiveFlyerPreviewBootstrap, !rawBootstrap.isEmpty {
                     /// Fond IA : JSON allégé (sans `custom_bg_data_url`) + UIImage natif sous la WebView (session ou fond serveur décodé).
                     let pair = strippedBootstrapAndUnderlayPair(rawBootstrap: rawBootstrap)
                     let webBootstrap = pair?.bootstrap ?? rawBootstrap
                     let underlay = pair?.underlay
                     ZStack {
-                        FlyerGenerationAuthenticCanvasReveal(isGenerating: isGenerating) {
+                        FlyerGenerationAuthenticCanvasReveal(isGenerating: false) {
                             ZStack {
                                 if let u = underlay {
                                     Image(uiImage: u)
@@ -1419,24 +1698,17 @@ private struct FlyerAIGeneratorSheet: View {
                                 )
                             }
                         }
-                        .allowsHitTesting(!isGenerating)
+                        .allowsHitTesting(true)
                         .shadow(color: .black.opacity(0.4), radius: 22, y: 12)
-
-                        if isGenerating {
-                            scanningOverlay
-                                .opacity(0.72)
-                                .allowsHitTesting(false)
-                        }
                     }
-                    .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+                    .background(Color(white: 0.1))
+                    .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
                     .overlay(
-                        RoundedRectangle(cornerRadius: 24, style: .continuous)
-                            .strokeBorder(Color.white.opacity(0.18), lineWidth: 1)
+                        RoundedRectangle(cornerRadius: 20, style: .continuous)
+                            .strokeBorder(Color.white.opacity(0.2), lineWidth: 1)
                     )
-                    .frame(maxWidth: 320)
-                    .aspectRatio(2400.0 / 3600.0, contentMode: .fit)
-                    .scaleEffect(isGenerating ? 1.028 : 1.0)
-                    .animation(.spring(response: 0.52, dampingFraction: 0.86), value: isGenerating)
+                    .aspectRatio(Self.flyerCanvasAspect, contentMode: .fit)
+                    .frame(maxWidth: Self.flyerHeroMaxWidth)
                     .matchedGeometryEffect(id: "flyerValidateHero", in: flyerValidateMorph)
                     .transition(
                         .asymmetric(
@@ -1516,343 +1788,164 @@ private struct FlyerAIGeneratorSheet: View {
         return (stripped, u)
     }
 
-    private var flyerGenerationHeroCard: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 28, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            Color(red: 0.80, green: 0.90, blue: 0.98),
-                            Color(red: 0.90, green: 0.84, blue: 0.96),
-                            Color(red: 0.84, green: 0.92, blue: 0.98)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
+    private static let flyerCanvasAspect: CGFloat = 2400.0 / 3600.0
+    private static let flyerHeroMaxWidth: CGFloat = 300
 
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .fill(Color.black.opacity(0.12))
-                .padding(26)
-                .overlay {
-                    Group {
-                        if let b64 = flyerHeroCompositeBootstrap {
-                            let heroPair = strippedBootstrapAndUnderlayPair(rawBootstrap: b64)
-                            let webB64 = heroPair?.bootstrap ?? b64
-                            let heroUnder = heroPair?.underlay
-                            FlyerGenerationAuthenticCanvasReveal(isGenerating: isGenerating) {
-                                ZStack(alignment: .topTrailing) {
-                                    ZStack {
-                                        if let u = heroUnder {
-                                            Image(uiImage: u)
-                                                .resizable()
-                                                .scaledToFit()
-                                                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                                        }
-                                        FlyerPreviewWebView(
-                                            bootstrapBase64: webB64,
-                                            isLoading: $heroCompositePreviewLoading,
-                                            skipCanvasSolidBackground: heroUnder != nil
-                                        )
-                                    }
-                                    .aspectRatio(2400.0 / 3600.0, contentMode: .fit)
-                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                                    .allowsHitTesting(false)
-                                    if heroCompositePreviewLoading {
-                                        ProgressView()
-                                            .controlSize(.small)
-                                            .tint(.white)
-                                            .padding(10)
-                                            .background(.ultraThinMaterial, in: Capsule())
-                                            .padding(10)
-                                    }
+    private var flyerGenerationHeroCard: some View {
+        let corner: CGFloat = 20
+        return ZStack {
+            Group {
+                if isGenerating {
+                    Color(white: 0.1)
+                } else if let b64 = flyerHeroCompositeBootstrap {
+                    let heroPair = strippedBootstrapAndUnderlayPair(rawBootstrap: b64)
+                    let webB64 = heroPair?.bootstrap ?? b64
+                    let heroUnder = heroPair?.underlay
+                    FlyerGenerationAuthenticCanvasReveal(isGenerating: false) {
+                        ZStack(alignment: .topTrailing) {
+                            ZStack {
+                                if let u = heroUnder {
+                                    Image(uiImage: u)
+                                        .resizable()
+                                        .scaledToFit()
                                 }
+                                FlyerPreviewWebView(
+                                    bootstrapBase64: webB64,
+                                    isLoading: $heroCompositePreviewLoading,
+                                    skipCanvasSolidBackground: heroUnder != nil
+                                )
                             }
-                        } else if let image = generatedUIImage {
-                            FlyerGenerationAuthenticCanvasReveal(isGenerating: isGenerating) {
-                                Image(uiImage: image)
-                                    .resizable()
-                                    .scaledToFill()
+                            .allowsHitTesting(false)
+                            if heroCompositePreviewLoading {
+                                ProgressView()
+                                    .controlSize(.small)
+                                    .tint(.white)
+                                    .padding(10)
+                                    .background(.ultraThinMaterial, in: Capsule())
+                                    .padding(10)
                             }
-                        } else {
-                            VStack(spacing: 10) {
-                                Image(systemName: "doc.richtext.fill")
-                                    .font(.system(size: 44, weight: .semibold))
-                                Text("Votre flyer apparaîtra ici")
-                                    .font(.subheadline.weight(.semibold))
-                            }
-                            .foregroundStyle(Color.white.opacity(0.8))
                         }
                     }
-                    .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-                    .padding(30)
-                    .animation(.spring(response: 0.5, dampingFraction: 0.84), value: generatedBase64)
+                } else if let image = generatedUIImage {
+                    FlyerGenerationAuthenticCanvasReveal(isGenerating: false) {
+                        Image(uiImage: image)
+                            .resizable()
+                            .scaledToFit()
+                    }
+                } else {
+                    VStack(spacing: 10) {
+                        Image(systemName: "doc.richtext.fill")
+                            .font(.system(size: 44, weight: .semibold))
+                        Text("Votre flyer apparaîtra ici")
+                            .font(.subheadline.weight(.semibold))
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .foregroundStyle(Color.white.opacity(0.85))
+                    .background(Color(white: 0.12))
                 }
+            }
+            .aspectRatio(Self.flyerCanvasAspect, contentMode: .fit)
+            .frame(maxWidth: Self.flyerHeroMaxWidth)
+            .background(Color(white: 0.1))
+            .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
 
             if isGenerating {
-                scanningOverlay
-                    .padding(26)
-                    .opacity(0.72)
+                FlyerGenerationScanOverlay(cornerRadius: corner)
                     .allowsHitTesting(false)
-                    .transition(.opacity.combined(with: .scale(scale: 0.98)))
+                    .transition(.opacity)
             }
         }
-        .frame(maxWidth: isGenerating ? 284 : 320)
-        .aspectRatio(2400.0 / 3600.0, contentMode: .fit)
-        .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+        .animation(.easeOut(duration: 0.2), value: isGenerating)
         .overlay(
-            RoundedRectangle(cornerRadius: 28, style: .continuous)
+            RoundedRectangle(cornerRadius: corner, style: .continuous)
                 .strokeBorder(Color.white.opacity(0.22), lineWidth: 1)
         )
-        .shadow(color: .black.opacity(0.32), radius: 24, y: 12)
-        .scaleEffect(isGenerating ? 1.012 : 1.0)
-        .animation(.spring(response: 0.55, dampingFraction: 0.86), value: isGenerating)
-        .modifier(FlyerHeroGeneratingVerticalMotion(isGenerating: isGenerating))
-        .rotation3DEffect(
-            .degrees(heroTiltDegrees),
-            axis: (x: 1, y: 0, z: 0),
-            anchor: .center,
-            anchorZ: 0,
-            perspective: 0.48
-        )
-    }
-
-    private var scanningOverlay: some View {
-        GeometryReader { proxy in
-            let h = proxy.size.height
-            ZStack {
-                VStack {
-                    Spacer(minLength: 0)
-                    DotMatrixOverlay()
-                        .frame(height: 110)
-                        .opacity(0.8)
-                }
-                .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-
-                Capsule()
-                    .fill(.ultraThinMaterial)
-                    .frame(width: 132, height: 44)
-                    .overlay {
-                        Text("Génération")
-                            .font(.headline.weight(.semibold))
-                            .foregroundStyle(.white)
-                    }
-                    .shadow(color: .cyan.opacity(0.35), radius: 14, y: 2)
-                    .shadow(color: .black.opacity(0.25), radius: 8, y: 4)
-
-                /// Ligne / shimmer pilotés par le temps : `withAnimation(.repeatForever)` sur `@State` est souvent sans effet fiable sur les builds récents.
-                TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { context in
-                    let t = context.date.timeIntervalSinceReferenceDate
-                    let sweep = (t * 0.38).truncatingRemainder(dividingBy: 1.0)
-                    let yBand = CGFloat(sweep) * max(h * 0.88, 1) + h * 0.06 - h * 0.5
-                    let shimmer = 0.14 + (sin(t * 2.35) * 0.5 + 0.5) * 0.5
-                    RoundedRectangle(cornerRadius: 20, style: .continuous)
-                        .fill(
-                            LinearGradient(
-                                colors: [Color.white.opacity(0.02), Color.white.opacity(0.26), Color.white.opacity(0.02)],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            )
-                        )
-                        .frame(height: 82)
-                        .blur(radius: 8)
-                        .opacity(shimmer)
-                        .offset(y: yBand)
-                }
-            }
-        }
+        .shadow(color: .black.opacity(0.38), radius: 22, y: 11)
+        .modifier(FlyerHeroGenerationLiveMotion(isGenerating: isGenerating))
+        .animation(.spring(response: 0.5, dampingFraction: 0.86), value: generatedBase64)
     }
 
     private var aiSourceRow: some View {
         HStack(alignment: .top, spacing: 12) {
-            PhotosPicker(selection: $logoPickerItem, matching: .images) {
-                aiSourceCard(
-                    title: "Logo",
-                    symbol: "building.2.crop.circle",
-                    isActive: logoPreview != nil,
-                    preview: {
-                        if let logoPreview {
-                            flyerAiSourceImageThumbnail(logoPreview, extraCountBadge: 0)
-                        } else {
-                            flyerAiSourceEmptyThumbnail(
-                                systemImage: "photo.badge.plus",
-                                label: "Importer le logo"
-                            )
-                        }
-                    }
-                )
-            }
-            .buttonStyle(.plain)
-
-            PhotosPicker(selection: $stylePickerItems, maxSelectionCount: 3, matching: .images) {
-                aiSourceCard(
-                    title: "Inspiration DA",
-                    symbol: "sparkles",
-                    isActive: !stylePreviews.isEmpty,
-                    preview: {
-                        if let first = stylePreviews.first {
-                            flyerAiSourceImageThumbnail(first, extraCountBadge: max(0, stylePreviews.count - 1))
-                        } else {
-                            flyerAiSourceEmptyThumbnail(
-                                systemImage: "rectangle.stack.badge.plus",
-                                label: "Importer des références"
-                            )
-                        }
-                    }
-                )
-            }
-            .buttonStyle(.plain)
-        }
-    }
-
-    /// Hauteur fixe : l’image ne peut pas imposer son ratio à toute la carte (évite de « casser » la rangée Logo / DA).
-    private func flyerAiSourceImageThumbnail(_ ui: UIImage, extraCountBadge: Int) -> some View {
-        Color.clear
-            .frame(maxWidth: .infinity)
-            .frame(height: Self.flyerAiSourceThumbnailHeight)
-            .overlay {
-                Image(uiImage: ui)
-                    .resizable()
-                    .scaledToFill()
-            }
-            .clipped()
-            .overlay(alignment: .bottomTrailing) {
-                if extraCountBadge > 0 {
-                    Text("+\(extraCountBadge)")
-                        .font(.caption2.weight(.bold))
-                        .foregroundStyle(FlyerAIEditorTheme.textPrimary)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 3)
-                        .background(FlyerAIEditorTheme.promptSurface.opacity(0.92), in: Capsule())
-                        .overlay(Capsule().strokeBorder(FlyerAIEditorTheme.hairline, lineWidth: 1))
-                        .padding(6)
-                }
-            }
-    }
-
-    private func flyerAiSourceEmptyThumbnail(systemImage: String, label: String) -> some View {
-        RoundedRectangle(cornerRadius: 14, style: .continuous)
-            .fill(FlyerAIEditorTheme.canvas)
-            .frame(maxWidth: .infinity)
-            .frame(height: Self.flyerAiSourceThumbnailHeight)
-            .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .strokeBorder(FlyerAIEditorTheme.hairline, style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
+            FlyerAILogoPhotosPickerSlot(
+                selection: $logoPickerItem,
+                logoJPEG: logoPreview.flatMap { $0.jpegData(compressionQuality: FlyerAISourcePickerJPEG.quality) }
             )
-            .overlay {
-                HStack(spacing: 8) {
-                    Image(systemName: systemImage)
-                        .font(.subheadline.weight(.semibold))
-                    Text(label)
-                        .font(.caption.weight(.semibold))
-                }
-                .foregroundStyle(FlyerAIEditorTheme.textSecondary)
-            }
-    }
-
-    private static let flyerAiSourceThumbnailHeight: CGFloat = 92
-
-    private func aiSourceCard<Preview: View>(
-        title: String,
-        symbol: String,
-        isActive: Bool,
-        @ViewBuilder preview: () -> Preview
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 6) {
-                Image(systemName: symbol)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(isActive ? FlyerStudioTheme.accent : FlyerAIEditorTheme.textSecondary)
-                Text(title)
-                    .font(.system(.subheadline, design: .rounded, weight: .semibold))
-                    .foregroundStyle(FlyerAIEditorTheme.textPrimary)
-                Spacer(minLength: 0)
-                if isActive {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.footnote.weight(.bold))
-                        .foregroundStyle(FlyerStudioTheme.accent.opacity(0.95))
-                }
-            }
-            preview()
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            FlyerAIStylePhotosPickerSlot(
+                selection: $stylePickerItems,
+                styleJPEGs: stylePreviews.compactMap { $0.jpegData(compressionQuality: FlyerAISourcePickerJPEG.quality) }
+            )
         }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(FlyerAIEditorTheme.sourceCard)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .strokeBorder(
-                    isActive ? FlyerStudioTheme.accent.opacity(0.45) : FlyerAIEditorTheme.hairline,
-                    lineWidth: isActive ? 1.25 : 1
-                )
-        )
-        .overlay(
-            VStack(spacing: 0) {
-                LinearGradient(
-                    colors: [Color.white.opacity(0.06), Color.white.opacity(0.02), .clear],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .frame(height: 5)
-                Spacer(minLength: 0)
-            }
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .allowsHitTesting(false)
-        )
-        .shadow(color: Color.black.opacity(0.35), radius: 16, y: 8)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .animation(.spring(response: 0.28, dampingFraction: 0.86), value: isActive)
     }
 
     private var aiPromptComposerCard: some View {
-        VStack(spacing: 0) {
+        Group {
             if isGenerating {
-                generationInProgressBlock
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 18)
+                // Pendant la génération : barre + étapes affichées directement sur le fond sombre,
+                // sans carte grise, sans bordure, sans ombre.
+                FlyerAIGenerationProgressExperience(isGenerating: isGenerating, totalDuration: 70)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 6)
             } else {
-                TextField(
-                    "",
-                    text: $cuisineOrConcept,
-                    prompt: Text(generationPromptPlaceholder)
-                        .foregroundStyle(FlyerAIEditorTheme.textTertiary),
-                    axis: .vertical
+                VStack(spacing: 0) {
+                    TextField(
+                        "",
+                        text: $cuisineOrConcept,
+                        prompt: Text(generationPromptPlaceholder)
+                            .foregroundStyle(FlyerAIEditorTheme.textTertiary),
+                        axis: .vertical
+                    )
+                    .lineLimit(flyerHeroRevealed ? 2...4 : 5...10)
+                    .textFieldStyle(.plain)
+                    .focused($isPromptFieldFocused)
+                    .foregroundStyle(FlyerAIEditorTheme.textPrimary)
+                    .tint(FlyerStudioTheme.accent)
+                    .padding(14)
+                    .frame(minHeight: flyerHeroRevealed ? 76 : 148, alignment: .topLeading)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        Divider()
+                            .background(FlyerAIEditorTheme.hairline.opacity(0.55))
+                            .padding(.horizontal, 14)
+                        Text("Couleur du flyer")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(FlyerAIEditorTheme.textSecondary)
+                            .padding(.horizontal, 14)
+                        FlyerAIPriorityPaletteRow(
+                            orderedHexes: $flyerPalettePriorityHexes,
+                            suggestedFromImages: collectFlyerImageDistinctHex6List(),
+                            compactEmbedded: true,
+                            selectionRingColor: FlyerStudioTheme.accent,
+                            maxSlots: 1
+                        )
+                        .padding(.bottom, 10)
+                    }
+                }
+                .background(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(FlyerAIEditorTheme.promptSurface)
                 )
-                .lineLimit(flyerHeroRevealed ? 2...4 : 5...10)
-                .textFieldStyle(.plain)
-                .focused($isPromptFieldFocused)
-                .foregroundStyle(FlyerAIEditorTheme.textPrimary)
-                .tint(FlyerStudioTheme.accent)
-                .padding(14)
-                .frame(minHeight: flyerHeroRevealed ? 76 : 148, alignment: .topLeading)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .strokeBorder(FlyerAIEditorTheme.hairline, lineWidth: 1)
+                )
+                .overlay(
+                    VStack(spacing: 0) {
+                        LinearGradient(
+                            colors: [Color.white.opacity(0.07), Color.white.opacity(0.02), .clear],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                        .frame(height: 5)
+                        Spacer(minLength: 0)
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .allowsHitTesting(false)
+                )
+                .shadow(color: Color.black.opacity(0.4), radius: 20, y: 10)
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
             }
         }
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(FlyerAIEditorTheme.promptSurface)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .strokeBorder(FlyerAIEditorTheme.hairline, lineWidth: 1)
-        )
-        .overlay(
-            VStack(spacing: 0) {
-                LinearGradient(
-                    colors: [Color.white.opacity(0.07), Color.white.opacity(0.02), .clear],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .frame(height: 5)
-                Spacer(minLength: 0)
-            }
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .allowsHitTesting(false)
-        )
-        .shadow(color: Color.black.opacity(0.4), radius: 20, y: 10)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
     /// Barre fixe : génération (saisie complète) ou réessai d’enregistrement si la sauvegarde serveur a échoué — plus de glisser pour valider.
@@ -1934,19 +2027,6 @@ private struct FlyerAIGeneratorSheet: View {
         )
     }
 
-    private var generationInProgressBlock: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "sparkles")
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.9))
-            Text("Génération du flyer")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(FlyerAIEditorTheme.textPrimary)
-            AnimatedThreeDots()
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
     private func labeledField(_ title: String, text: Binding<String>, prompt: String, axis: Axis = .horizontal) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title)
@@ -1964,88 +2044,6 @@ private struct FlyerAIGeneratorSheet: View {
             .padding(12)
             .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.primary.opacity(0.05)))
         }
-    }
-
-    private func colorRow(_ title: String, hex: Binding<String>, optional: Bool = false) -> some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(palette.onCanvasSecondary)
-                TextField("#RRVVBB", text: hex)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .font(.system(.body, design: .monospaced))
-                    .textFieldStyle(.plain)
-                    .padding(10)
-                    .background(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(
-                                LinearGradient(
-                                    colors: [Color.white.opacity(colorScheme == .dark ? 0.12 : 0.98), Color.white.opacity(colorScheme == .dark ? 0.05 : 0.88)],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                )
-                            )
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .strokeBorder(Color.primary.opacity(colorScheme == .dark ? 0.2 : 0.1), lineWidth: 1)
-                    )
-            }
-            ColorPicker(
-                "",
-                selection: Binding(
-                    get: { Color(hex: hex.wrappedValue) },
-                    set: { hex.wrappedValue = $0.toHexRGBString() }
-                ),
-                supportsOpacity: false
-            )
-            .labelsHidden()
-            if optional {
-                Button("Effacer") {
-                    hex.wrappedValue = ""
-                }
-                .font(.caption.weight(.semibold))
-                .buttonStyle(.bordered)
-            }
-        }
-        .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            Color(red: 1.00, green: 0.997, blue: 0.992).opacity(colorScheme == .dark ? 0.2 : 0.995),
-                            Color(red: 0.998, green: 0.985, blue: 0.965).opacity(colorScheme == .dark ? 0.14 : 0.95),
-                            Color(red: 0.995, green: 0.97, blue: 0.93).opacity(colorScheme == .dark ? 0.1 : 0.9)
-                        ],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                )
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(Color.primary.opacity(colorScheme == .dark ? 0.18 : 0.09), lineWidth: 1)
-        )
-        .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.14 : 0.05), radius: 4, y: 2)
-        .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.08 : 0.03), radius: 7, y: 3)
-        .shadow(color: FlyerStudioTheme.accent.opacity(0.06), radius: 8, y: 4)
-        .overlay(alignment: .top) {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [Color.white.opacity(colorScheme == .dark ? 0.2 : 0.46), Color.white.opacity(colorScheme == .dark ? 0.05 : 0.15), .clear],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                )
-                .frame(height: 6)
-                .padding(1)
-                .allowsHitTesting(false)
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
     private var canSubmit: Bool {
@@ -2107,7 +2105,7 @@ private struct FlyerAIGeneratorSheet: View {
     }
 
     private func startScanAnimation() {
-        /// Ligne de scan, points et léger « flottement » carte : `TimelineView` dans `scanningOverlay` / `FlyerHeroGeneratingVerticalMotion`.
+        /// Animation génération : `FlyerGenerationScanOverlay` + `FlyerHeroGenerationLiveMotion`.
     }
 
     private func stopScanAnimation() {}
@@ -2141,6 +2139,16 @@ private struct FlyerAIGeneratorSheet: View {
     }
 
     /// Reprend un job serveur après fermeture de l’app ou changement d’onglet (polling).
+    /// Polling **hors** de l’arborescence de tâches SwiftUI (bouton / `.task`) pour qu’un changement d’onglet n’annule pas le job serveur.
+    /// Délègue au coordinateur (polling non annulé par changement d’onglet — voir `respectsTaskCancellation` côté coordinator).
+    private func pollFlyerJobInDetachedTask(slug: String, jobId: String) async throws -> FlyerAIGenerateJobStatusResponseDTO {
+        try await FlyerAIGenerationCoordinator.shared.pollUntilComplete(
+            slug: slug,
+            jobId: jobId,
+            respectsTaskCancellation: false
+        )
+    }
+
     @MainActor
     private func resumePendingFlyerJobIfNeeded() async {
         guard let pending = FlyerAIGenerationCoordinator.shared.peekPending(), pending.slug == slug else { return }
@@ -2162,7 +2170,7 @@ private struct FlyerAIGeneratorSheet: View {
         }
         defer { isGenerating = false }
         do {
-            let status = try await FlyerAIGenerationCoordinator.shared.pollUntilComplete(slug: slug, jobId: pending.jobId)
+            let status = try await pollFlyerJobInDetachedTask(slug: slug, jobId: pending.jobId)
             applyFlyerGenerationResult(status: status, accent: accent, sec: sec)
             UINotificationFeedbackGenerator().notificationOccurred(.success)
             // Validation automatique : plus besoin de glisser pour valider
@@ -2170,6 +2178,9 @@ private struct FlyerAIGeneratorSheet: View {
         } catch {
             if isTabRoot {
                 flyerValidatedOnTab = validatedSnapshot
+            }
+            if case APIError.notFound = error {
+                FlyerAIGenerationCoordinator.shared.clearPending()
             }
             errorMessage = flyerGenerationFailureUserMessage(from: error)
             UINotificationFeedbackGenerator().notificationOccurred(.error)
@@ -2221,7 +2232,7 @@ private struct FlyerAIGeneratorSheet: View {
                 .dashboardFlyerAIGenerate(slug: slug, body: body)
             )
             FlyerAIGenerationCoordinator.shared.savePending(slug: slug, jobId: enqueue.jobId)
-            let status = try await FlyerAIGenerationCoordinator.shared.pollUntilComplete(slug: slug, jobId: enqueue.jobId)
+            let status = try await pollFlyerJobInDetachedTask(slug: slug, jobId: enqueue.jobId)
             applyFlyerGenerationResult(status: status, accent: accent, sec: sec)
             UINotificationFeedbackGenerator().notificationOccurred(.success)
             // Validation automatique : plus besoin de glisser pour valider
@@ -2229,6 +2240,9 @@ private struct FlyerAIGeneratorSheet: View {
         } catch {
             if isTabRoot {
                 flyerValidatedOnTab = validatedSnapshot
+            }
+            if case APIError.notFound = error {
+                FlyerAIGenerationCoordinator.shared.clearPending()
             }
             errorMessage = flyerGenerationFailureUserMessage(from: error)
             UINotificationFeedbackGenerator().notificationOccurred(.error)
@@ -2294,8 +2308,13 @@ private struct FlyerAIGeneratorSheet: View {
     }
 
     /// Quitte le mode « flyer enregistré » compact : formulaire vierge (nouveau prompt / visuels), sans relancer une génération automatiquement.
-    private func performFlyerRegenerationFromValidated() {
+    private func performFlyerRegenerationFromValidated() async {
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        if !flyerModel.hasCompletedSuccessfulFlyerLoad {
+            await flyerModel.load()
+        }
+        /// L’aperçu WK ne doit plus réinjecter l’ancien `custom_logo_data_url` du dashboard (clé omise → logo public commerce ou vide selon embed).
+        flyerModel.beginFlyerRecreateSessionForPreview()
         cuisineOrConcept = ""
         stylePickerItems = []
         stylePreviews = []
@@ -2408,63 +2427,160 @@ private struct FlyerAIGeneratorSheet: View {
     }
 }
 
-/// Flottement vertical de la carte héros pendant `isGenerating` — évite `repeatForever` sur `@State`.
-private struct FlyerHeroGeneratingVerticalMotion: ViewModifier {
+/// Découpage explicite pour le type-checker (Swift 6 / gros `Canvas`).
+private enum FlyerGenerationScanParticleDrawing {
+    static func draw(into cx: GraphicsContext, size: CGSize, time: TimeInterval) {
+        let cols = max(10, Int(size.width / 22))
+        let rows = max(16, Int(size.height / 14))
+        let cellW = size.width / CGFloat(cols)
+        let cellH = size.height / CGFloat(rows)
+        let drift = CGFloat(time * 72).truncatingRemainder(dividingBy: cellH * 2)
+
+        var rowIdx = -1
+        while rowIdx < rows + 2 {
+            var colIdx = 0
+            while colIdx < cols {
+                let col = CGFloat(colIdx)
+                let row = CGFloat(rowIdx)
+                let x = col * cellW + cellW * 0.5
+                let yRaw = row * cellH + drift
+                let y = yRaw.truncatingRemainder(dividingBy: size.height + cellH) - cellH * 0.5
+
+                let wave = sin(time * 4.0 + Double(colIdx) * 0.14 + Double(rowIdx) * 0.07)
+                let normalized: Double = wave * 0.5 + 0.5
+                let opacity: Double = 0.12 + 0.55 * normalized
+
+                let rect = CGRect(x: x - 1.6, y: y - 1.6, width: 3.2, height: 3.2)
+                let p = Path(ellipseIn: rect)
+                cx.fill(p, with: .color(Color.white.opacity(opacity)))
+
+                colIdx += 1
+            }
+            rowIdx += 1
+        }
+    }
+}
+
+/// Points animés sur tout le flyer + pastille « Génération » + **barre de progression** (même fenêtre ~70 s que l’écran du bas).
+private struct FlyerGenerationScanOverlay: View {
+    let cornerRadius: CGFloat
+    /// Aligné sur `FlyerAIGenerationProgressExperience.totalDuration` (estimation visuelle).
+    private let totalDuration: TimeInterval = 70
+
+    @State private var sessionStart: Date?
+
+    var body: some View {
+        GeometryReader { geo in
+            let w = geo.size.width
+            let h = geo.size.height
+            let barWidth = min(w * 0.72, 220)
+            ZStack {
+                TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { context in
+                    let t = context.date.timeIntervalSinceReferenceDate
+                    Canvas { cx, size in
+                        FlyerGenerationScanParticleDrawing.draw(into: cx, size: size, time: t)
+                    }
+                    .frame(width: w, height: h)
+                }
+                .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+
+                VStack(spacing: 10) {
+                    TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
+                        let p = overlayProgress(at: context.date)
+                        VStack(spacing: 8) {
+                            ZStack(alignment: .leading) {
+                                Capsule()
+                                    .fill(Color.white.opacity(0.22))
+                                Capsule()
+                                    .fill(
+                                        LinearGradient(
+                                            colors: [
+                                                Color(red: 0.65, green: 0.55, blue: 1),
+                                                Color(red: 0.45, green: 0.35, blue: 0.96)
+                                            ],
+                                            startPoint: .leading,
+                                            endPoint: .trailing
+                                        )
+                                    )
+                                    .frame(width: max(6, barWidth * CGFloat(p)))
+                            }
+                            .frame(width: barWidth, height: 8)
+                            .clipShape(Capsule())
+
+                            HStack {
+                                Text("Génération")
+                                    .font(.subheadline.weight(.bold))
+                                    .foregroundStyle(.white)
+                                Spacer(minLength: 8)
+                                Text("\(Int(round(p * 100)))%")
+                                    .font(.caption.weight(.bold).monospacedDigit())
+                                    .foregroundStyle(.white.opacity(0.92))
+                                    .contentTransition(.numericText())
+                            }
+                            .frame(width: barWidth)
+                        }
+                    }
+
+                    ProgressView()
+                        .controlSize(.regular)
+                        .tint(.white)
+                }
+                .padding(.horizontal, 18)
+                .padding(.vertical, 14)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.28), lineWidth: 1)
+                )
+                .shadow(color: .black.opacity(0.4), radius: 14, y: 5)
+            }
+            .onAppear {
+                if sessionStart == nil { sessionStart = Date() }
+            }
+        }
+    }
+
+    private func overlayProgress(at date: Date) -> Double {
+        guard let start = sessionStart else { return 0 }
+        let elapsed = date.timeIntervalSince(start)
+        return min(1, max(0, elapsed / totalDuration))
+    }
+}
+
+/// Respiration + léger roulis / tangage pendant la génération (TimelineView, pas `repeatForever` sur `@State`).
+/// Le canvas réel est masqué pendant l’IA : seul le placeholder neutre est animé.
+private struct FlyerHeroGenerationLiveMotion: ViewModifier {
     let isGenerating: Bool
 
     func body(content: Content) -> some View {
         Group {
             if isGenerating {
-                TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
-                    let t = context.date.timeIntervalSinceReferenceDate
-                    let y = sin(t * 1.12) * 6.5
-                    content.offset(y: y)
+                TimelineView(.animation(minimumInterval: 1.0 / 45.0)) { ctx in
+                    let t = ctx.date.timeIntervalSinceReferenceDate
+                    let breathe = 1.0 + 0.024 * sin(t * 2.1)
+                    let bob = 3.2 * sin(t * 1.85)
+                    let tiltX = 3.8 * sin(t * 0.92)
+                    let tiltY = 2.6 * sin(t * 1.15)
+                    content
+                        .scaleEffect(breathe)
+                        .rotation3DEffect(
+                            .degrees(tiltX),
+                            axis: (x: 1, y: 0, z: 0),
+                            anchor: .center,
+                            anchorZ: 0,
+                            perspective: 0.92
+                        )
+                        .rotation3DEffect(
+                            .degrees(tiltY),
+                            axis: (x: 0, y: 1, z: 0),
+                            anchor: .center,
+                            anchorZ: 0,
+                            perspective: 0.95
+                        )
+                        .offset(y: bob)
                 }
             } else {
-                content.offset(y: 0)
-            }
-        }
-    }
-}
-
-private struct DotMatrixOverlay: View {
-    private static let cols = 18
-    private static let rows = 10
-
-    var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 45.0)) { context in
-            let t = context.date.timeIntervalSinceReferenceDate
-            /// `LazyVGrid` + rafraîchissement ~45 Hz : beaucoup de builds iOS ne redessinent pas les cellules lazy correctement → points « figés ».
-            VStack(spacing: 6) {
-                ForEach(0..<Self.rows, id: \.self) { row in
-                    HStack(spacing: 6) {
-                        ForEach(0..<Self.cols, id: \.self) { col in
-                            let wave = sin(t * 2.8 + Double(row) * 0.35 + Double(col) * 0.08) * 0.5 + 0.5
-                            Circle()
-                                .fill(Color.white.opacity(0.28 + wave * 0.52))
-                                .frame(width: 4.5, height: 4.5)
-                        }
-                    }
-                }
-            }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 10)
-        }
-    }
-}
-
-private struct AnimatedThreeDots: View {
-    var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 24.0)) { context in
-            let t = context.date.timeIntervalSinceReferenceDate
-            HStack(spacing: 5) {
-                ForEach(0..<3, id: \.self) { idx in
-                    let phase = sin(t * 6.0 - Double(idx) * 0.75) * 0.5 + 0.5
-                    Circle()
-                        .fill(Color.white.opacity(0.35 + phase * 0.65))
-                        .frame(width: 6.5, height: 6.5)
-                        .offset(y: -phase * 2.2)
-                }
+                content
             }
         }
     }

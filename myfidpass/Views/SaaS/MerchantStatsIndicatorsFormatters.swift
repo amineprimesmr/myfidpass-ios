@@ -1,0 +1,53 @@
+import Foundation
+
+// MARK: - Formatters FR
+
+enum StatsFR {
+    private static let intFormatter: NumberFormatter = {
+        let f = NumberFormatter()
+        f.numberStyle = .decimal
+        f.locale = Locale(identifier: "fr_FR")
+        f.groupingSeparator = " "
+        f.maximumFractionDigits = 0
+        f.minimumFractionDigits = 0
+        return f
+    }()
+
+    private static let euroFormatter: NumberFormatter = {
+        let f = NumberFormatter()
+        f.numberStyle = .decimal
+        f.locale = Locale(identifier: "fr_FR")
+        f.groupingSeparator = " "
+        f.minimumFractionDigits = 0
+        f.maximumFractionDigits = 2
+        return f
+    }()
+
+    static func formatInt(_ n: Int) -> String {
+        intFormatter.string(from: NSNumber(value: n)) ?? "\(n)"
+    }
+
+    static func formatEuro(_ n: Double) -> String {
+        euroFormatter.string(from: NSNumber(value: n)) ?? String(format: "%.2f", n)
+    }
+
+    static func formatPct(_ pct: Double) -> String {
+        String(format: "%.0f %%", pct)
+    }
+
+    static func formatDoubleSmart(_ v: Double) -> String {
+        let rounded = v.rounded()
+        if abs(v - rounded) < 1e-9 {
+            return intFormatter.string(from: NSNumber(value: Int(rounded))) ?? "\(Int(rounded))"
+        }
+        // 1 decimal maximum (ex: points moyens)
+        let f = NumberFormatter()
+        f.numberStyle = .decimal
+        f.locale = Locale(identifier: "fr_FR")
+        f.minimumFractionDigits = 0
+        f.maximumFractionDigits = 1
+        f.groupingSeparator = " "
+        return f.string(from: NSNumber(value: v)) ?? "\(v)"
+    }
+}
+

@@ -35,6 +35,9 @@ struct FullDashboardSettingsPatch: Encodable {
     var pointsRewardTiers: [PointsRewardTierPayload]?
     var sector: String?
     var logoBase64: String?
+    var logoIconBase64: String?
+    /// Icône campagnes / push uniquement (ne modifie pas `logo` / `logo_icon`).
+    var notificationIconBase64: String?
     var logoUrl: String?
     var cardBackgroundBase64: String?
     var stampIconBase64: String?
@@ -46,8 +49,16 @@ struct FullDashboardSettingsPatch: Encodable {
     var headerRightText: String?
     var notificationTitleOverride: String?
     var notificationChangeMessage: String?
+    /// Règles campagnes automatiques (remplace l’objet côté serveur).
+    var campaignAutomation: CampaignAutomationConfigDTO?
     /// À n’envoyer que si vous avez chargé l’état complet depuis le GET (sinon risque d’écraser la config web).
     var engagementRewards: EngagementRewardsFullPatch?
+    /// 0 = illimité (persisté NULL côté serveur).
+    var scanMaxPassesPerMemberPerDay: Int?
+    /// 0 = illimité.
+    var scanMaxPointsPerTransaction: Int?
+    var requireReceiptQrValidation: Bool?
+    var receiptQrToleranceCents: Int?
 
     private enum CK: String, CodingKey {
         case organizationName = "organization_name"
@@ -74,6 +85,8 @@ struct FullDashboardSettingsPatch: Encodable {
         case pointsRewardTiers = "points_reward_tiers"
         case sector
         case logoBase64 = "logo_base64"
+        case logoIconBase64 = "logo_icon_base64"
+        case notificationIconBase64 = "notification_icon_base64"
         case logoUrl = "logo_url"
         case cardBackgroundBase64 = "card_background_base64"
         case stampIconBase64 = "stamp_icon_base64"
@@ -85,7 +98,12 @@ struct FullDashboardSettingsPatch: Encodable {
         case headerRightText = "header_right_text"
         case notificationTitleOverride = "notification_title_override"
         case notificationChangeMessage = "notification_change_message"
+        case campaignAutomation = "campaign_automation"
         case engagementRewards = "engagement_rewards"
+        case scanMaxPassesPerMemberPerDay = "scan_max_passes_per_member_per_day"
+        case scanMaxPointsPerTransaction = "scan_max_points_per_transaction"
+        case requireReceiptQrValidation = "require_receipt_qr_validation"
+        case receiptQrToleranceCents = "receipt_qr_tolerance_cents"
     }
 
     func encode(to encoder: Encoder) throws {
@@ -118,6 +136,8 @@ struct FullDashboardSettingsPatch: Encodable {
         if let v = pointsRewardTiers { try c.encode(v, forKey: .pointsRewardTiers) }
         if let v = sector { try c.encode(v, forKey: .sector) }
         if let v = logoBase64 { try c.encode(v, forKey: .logoBase64) }
+        if let v = logoIconBase64 { try c.encode(v, forKey: .logoIconBase64) }
+        if let v = notificationIconBase64 { try c.encode(v, forKey: .notificationIconBase64) }
         if let v = logoUrl { try c.encode(v, forKey: .logoUrl) }
         if let v = cardBackgroundBase64 { try c.encode(v, forKey: .cardBackgroundBase64) }
         if let v = stampIconBase64 { try c.encode(v, forKey: .stampIconBase64) }
@@ -129,7 +149,12 @@ struct FullDashboardSettingsPatch: Encodable {
         if let v = headerRightText { try c.encode(v, forKey: .headerRightText) }
         if let v = notificationTitleOverride { try c.encode(v, forKey: .notificationTitleOverride) }
         if let v = notificationChangeMessage { try c.encode(v, forKey: .notificationChangeMessage) }
+        if let v = campaignAutomation { try c.encode(v, forKey: .campaignAutomation) }
         if let v = engagementRewards { try c.encode(v, forKey: .engagementRewards) }
+        if let v = scanMaxPassesPerMemberPerDay { try c.encode(v, forKey: .scanMaxPassesPerMemberPerDay) }
+        if let v = scanMaxPointsPerTransaction { try c.encode(v, forKey: .scanMaxPointsPerTransaction) }
+        if let v = requireReceiptQrValidation { try c.encode(v ? 1 : 0, forKey: .requireReceiptQrValidation) }
+        if let v = receiptQrToleranceCents { try c.encode(v, forKey: .receiptQrToleranceCents) }
     }
 }
 
@@ -140,6 +165,9 @@ struct EngagementRewardsFullPatch: Encodable {
     let tiktokFollow: SimpleUrlPatch
     let facebookFollow: SimpleUrlPatch
     let twitterFollow: SimpleUrlPatch
+    let snapchatFollow: SimpleUrlPatch
+    let linkedinFollow: SimpleUrlPatch
+    let youtubeFollow: SimpleUrlPatch
     let trustpilotReview: SimpleUrlPatch
     let tripadvisorReview: SimpleUrlPatch
 
@@ -178,24 +206,57 @@ struct EngagementRewardsFullPatch: Encodable {
         case tiktokFollow = "tiktok_follow"
         case facebookFollow = "facebook_follow"
         case twitterFollow = "twitter_follow"
+        case snapchatFollow = "snapchat_follow"
+        case linkedinFollow = "linkedin_follow"
+        case youtubeFollow = "youtube_follow"
         case trustpilotReview = "trustpilot_review"
         case tripadvisorReview = "tripadvisor_review"
     }
 
     init(from dto: EngagementRewardsDTO?) {
         let d = dto
-        googleReview = .init(
-            enabled: d?.googleReview?.enabled ?? false,
-            points: d?.googleReview?.points ?? 50,
-            placeId: d?.googleReview?.placeId ?? "",
-            autoVerifyEnabled: d?.googleReview?.autoVerifyEnabled ?? true
+        self.init(
+            googleReview: .init(
+                enabled: d?.googleReview?.enabled ?? false,
+                points: d?.googleReview?.points ?? 50,
+                placeId: d?.googleReview?.placeId ?? "",
+                autoVerifyEnabled: d?.googleReview?.autoVerifyEnabled ?? true
+            ),
+            instagramFollow: .init(enabled: d?.instagramFollow?.enabled ?? false, points: d?.instagramFollow?.points ?? 10, url: d?.instagramFollow?.url ?? ""),
+            tiktokFollow: .init(enabled: d?.tiktokFollow?.enabled ?? false, points: d?.tiktokFollow?.points ?? 10, url: d?.tiktokFollow?.url ?? ""),
+            facebookFollow: .init(enabled: d?.facebookFollow?.enabled ?? false, points: d?.facebookFollow?.points ?? 10, url: d?.facebookFollow?.url ?? ""),
+            twitterFollow: .init(enabled: d?.twitterFollow?.enabled ?? false, points: d?.twitterFollow?.points ?? 10, url: d?.twitterFollow?.url ?? ""),
+            snapchatFollow: .init(enabled: d?.snapchatFollow?.enabled ?? false, points: d?.snapchatFollow?.points ?? 10, url: d?.snapchatFollow?.url ?? ""),
+            linkedinFollow: .init(enabled: d?.linkedinFollow?.enabled ?? false, points: d?.linkedinFollow?.points ?? 10, url: d?.linkedinFollow?.url ?? ""),
+            youtubeFollow: .init(enabled: d?.youtubeFollow?.enabled ?? false, points: d?.youtubeFollow?.points ?? 10, url: d?.youtubeFollow?.url ?? ""),
+            trustpilotReview: .init(enabled: d?.trustpilotReview?.enabled ?? false, points: d?.trustpilotReview?.points ?? 10, url: d?.trustpilotReview?.url ?? ""),
+            tripadvisorReview: .init(enabled: d?.tripadvisorReview?.enabled ?? false, points: d?.tripadvisorReview?.points ?? 10, url: d?.tripadvisorReview?.url ?? "")
         )
-        instagramFollow = .init(enabled: d?.instagramFollow?.enabled ?? false, points: d?.instagramFollow?.points ?? 10, url: d?.instagramFollow?.url ?? "")
-        tiktokFollow = .init(enabled: d?.tiktokFollow?.enabled ?? false, points: d?.tiktokFollow?.points ?? 10, url: d?.tiktokFollow?.url ?? "")
-        facebookFollow = .init(enabled: d?.facebookFollow?.enabled ?? false, points: d?.facebookFollow?.points ?? 10, url: d?.facebookFollow?.url ?? "")
-        twitterFollow = .init(enabled: d?.twitterFollow?.enabled ?? false, points: d?.twitterFollow?.points ?? 10, url: d?.twitterFollow?.url ?? "")
-        trustpilotReview = .init(enabled: d?.trustpilotReview?.enabled ?? false, points: d?.trustpilotReview?.points ?? 10, url: d?.trustpilotReview?.url ?? "")
-        tripadvisorReview = .init(enabled: d?.tripadvisorReview?.enabled ?? false, points: d?.tripadvisorReview?.points ?? 10, url: d?.tripadvisorReview?.url ?? "")
+    }
+
+    /// Formulaire profil / SaaS : toutes les missions sont envoyées en un bloc JSON serveur.
+    init(
+        googleReview: GoogleReviewPatch,
+        instagramFollow: SimpleUrlPatch,
+        tiktokFollow: SimpleUrlPatch,
+        facebookFollow: SimpleUrlPatch,
+        twitterFollow: SimpleUrlPatch,
+        snapchatFollow: SimpleUrlPatch,
+        linkedinFollow: SimpleUrlPatch,
+        youtubeFollow: SimpleUrlPatch,
+        trustpilotReview: SimpleUrlPatch,
+        tripadvisorReview: SimpleUrlPatch
+    ) {
+        self.googleReview = googleReview
+        self.instagramFollow = instagramFollow
+        self.tiktokFollow = tiktokFollow
+        self.facebookFollow = facebookFollow
+        self.twitterFollow = twitterFollow
+        self.snapchatFollow = snapchatFollow
+        self.linkedinFollow = linkedinFollow
+        self.youtubeFollow = youtubeFollow
+        self.trustpilotReview = trustpilotReview
+        self.tripadvisorReview = tripadvisorReview
     }
 
     func encode(to encoder: Encoder) throws {
@@ -205,6 +266,9 @@ struct EngagementRewardsFullPatch: Encodable {
         try c.encode(tiktokFollow, forKey: .tiktokFollow)
         try c.encode(facebookFollow, forKey: .facebookFollow)
         try c.encode(twitterFollow, forKey: .twitterFollow)
+        try c.encode(snapchatFollow, forKey: .snapchatFollow)
+        try c.encode(linkedinFollow, forKey: .linkedinFollow)
+        try c.encode(youtubeFollow, forKey: .youtubeFollow)
         try c.encode(trustpilotReview, forKey: .trustpilotReview)
         try c.encode(tripadvisorReview, forKey: .tripadvisorReview)
     }

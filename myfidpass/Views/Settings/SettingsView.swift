@@ -12,12 +12,17 @@ import CoreData
 struct SettingsView: View {
     /// Contenu fusionné (sans `ScrollView`) pour l’onglet « Réglages » du hub Commerce.
     var embedInProfile: Bool = false
+    /// Si non nil : « Statistiques » appelle ce bloc (ex. paywall bloquant : fermer le sheet puis pousser la route).
+    /// Si nil : fermeture du sheet Réglages + notification pour pousser sur la pile Commerce.
+    var onRequestOpenStatistics: (() -> Void)? = nil
 
     @Environment(\.openURL) private var openURL
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.managedObjectContext) private var viewContext
+    @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var authService: AuthService
     @EnvironmentObject private var syncService: SyncService
+    @EnvironmentObject private var revenueCatSubscriptionState: RevenueCatSubscriptionState
 
     @ObservedObject private var notifications = NotificationsService.shared
 
@@ -36,12 +41,6 @@ struct SettingsView: View {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
     }
 
-    private var accountEmailSubtitle: String {
-        let e = authService.currentUserEmail ?? AuthStorage.userEmail ?? ""
-        let t = e.trimmingCharacters(in: .whitespacesAndNewlines)
-        return t.isEmpty ? "Identité, adresse, sécurité" : t
-    }
-
     private static let relativeSyncFormatter: RelativeDateTimeFormatter = {
         let f = RelativeDateTimeFormatter()
         f.locale = Locale(identifier: "fr_FR")
@@ -52,6 +51,13 @@ struct SettingsView: View {
     private var lastSyncText: String {
         guard let d = syncService.lastSyncDate else { return "Jamais" }
         return Self.relativeSyncFormatter.localizedString(for: d, relativeTo: Date())
+    }
+
+    private var subscriptionSettingsSubtitle: String? {
+        if authService.subscriptionAccessUnlocked(revenueCatPremium: revenueCatSubscriptionState.hasPremiumEntitlement) {
+            return "Accès actif"
+        }
+        return "Essai 1 mois, mensuel ou annuel"
     }
 
     var body: some View {
@@ -139,6 +145,29 @@ struct SettingsView: View {
         .frame(maxWidth: .infinity, maxHeight: embedInProfile ? nil : .infinity)
     }
 
+    private var statisticsNavigationRow: some View {
+        Button {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            if let onRequestOpenStatistics {
+                onRequestOpenStatistics()
+            } else {
+                dismiss()
+                DispatchQueue.main.async {
+                    NotificationCenter.default.post(name: .myfidpassOpenMerchantStatistics, object: nil)
+                }
+            }
+        } label: {
+            GroupedSettingsNavigationRow(
+                icon: "chart.xyaxis.line",
+                title: "Statistiques",
+                subtitle: nil,
+                value: nil,
+                showsChevron: true
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
     // MARK: - Contenu fusionné
 
     @ViewBuilder
@@ -168,7 +197,7 @@ struct SettingsView: View {
                     GroupedSettingsNavigationRow(
                         icon: "person.crop.circle.fill",
                         title: "Compte",
-                        subtitle: accountEmailSubtitle,
+                        subtitle: nil,
                         value: nil,
                         showsChevron: true
                     )
@@ -176,31 +205,22 @@ struct SettingsView: View {
                 .buttonStyle(.plain)
                 GroupedSettingsRowDivider()
                 Button {
-                    inAppSafariURL = LegalURLs.dashboardLogin
+                    dismiss()
+                    DispatchQueue.main.async {
+                        NotificationCenter.default.post(name: .myfidpassOpenMerchantSubscriptionSheet, object: nil)
+                    }
                 } label: {
                     GroupedSettingsNavigationRow(
-                        icon: "safari",
-                        title: "Tableau de bord web",
-                        subtitle: "Ouvrir dans le navigateur",
+                        icon: "crown.fill",
+                        title: "Abonnement PRO",
+                        subtitle: subscriptionSettingsSubtitle,
                         value: nil,
                         showsChevron: true
                     )
                 }
                 .buttonStyle(.plain)
                 GroupedSettingsRowDivider()
-                NavigationLink {
-                    MerchantStatisticsDashboardScreen()
-                        .environment(\.managedObjectContext, viewContext)
-                } label: {
-                    GroupedSettingsNavigationRow(
-                        icon: "chart.xyaxis.line",
-                        title: "Statistiques",
-                        subtitle: "CA estimé, panier, catégories",
-                        value: nil,
-                        showsChevron: true
-                    )
-                }
-                .buttonStyle(.plain)
+                statisticsNavigationRow
             }
 
             GroupedSettingsCard {
@@ -213,7 +233,7 @@ struct SettingsView: View {
                     GroupedSettingsNavigationRow(
                         icon: "bubble.left.and.bubble.right.fill",
                         title: "Avis & réseaux",
-                        subtitle: "Fiche Google Maps, réseaux, autres avis",
+                        subtitle: nil,
                         value: nil,
                         showsChevron: true
                     )
@@ -233,7 +253,7 @@ struct SettingsView: View {
                     GroupedSettingsNavigationRow(
                         icon: "shield.lefthalf.filled",
                         title: "Sécurité caisse & scan",
-                        subtitle: "Limite de passages et plafond de points",
+                        subtitle: nil,
                         value: nil,
                         showsChevron: true
                     )
@@ -259,7 +279,7 @@ struct SettingsView: View {
                     GroupedSettingsNavigationRow(
                         icon: "doc.richtext.fill",
                         title: "Traçabilité & exports",
-                        subtitle: "CSV, PDF, filtres période et type",
+                        subtitle: nil,
                         value: nil,
                         showsChevron: true
                     )
@@ -273,7 +293,7 @@ struct SettingsView: View {
                     GroupedSettingsNavigationRow(
                         icon: "square.and.arrow.up.on.square",
                         title: "Import / export CSV",
-                        subtitle: "Membres + export transactions 30 j.",
+                        subtitle: nil,
                         value: nil,
                         showsChevron: true
                     )
@@ -281,27 +301,20 @@ struct SettingsView: View {
                 .buttonStyle(.plain)
             }
 
-            VStack(alignment: .leading, spacing: 8) {
-                GroupedSettingsCard {
-                    Button {
-                        inAppSafariURL = LegalURLs.termsOfUse
-                    } label: {
-                        GroupedSettingsNavigationRow(icon: "doc.text", title: "Conditions d’utilisation", subtitle: nil, value: nil, showsChevron: true)
-                    }
-                    .buttonStyle(.plain)
-                    GroupedSettingsRowDivider()
-                    Button {
-                        inAppSafariURL = LegalURLs.privacyPolicy
-                    } label: {
-                        GroupedSettingsNavigationRow(icon: "hand.raised", title: "Politique de confidentialité", subtitle: nil, value: nil, showsChevron: true)
-                    }
-                    .buttonStyle(.plain)
+            GroupedSettingsCard {
+                Button {
+                    inAppSafariURL = LegalURLs.termsOfUse
+                } label: {
+                    GroupedSettingsNavigationRow(icon: "doc.text", title: "Conditions d’utilisation", subtitle: nil, value: nil, showsChevron: true)
                 }
-                Text("Copie locale (membres, transactions) pour la rapidité. La source de vérité est sur les serveurs MyFidpass.")
-                    .font(.caption)
-                    .foregroundStyle(Color(UIColor.secondaryLabel))
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, GroupedSettingsMetrics.horizontalPadding + 4)
+                .buttonStyle(.plain)
+                GroupedSettingsRowDivider()
+                Button {
+                    inAppSafariURL = LegalURLs.privacyPolicy
+                } label: {
+                    GroupedSettingsNavigationRow(icon: "hand.raised", title: "Politique de confidentialité", subtitle: nil, value: nil, showsChevron: true)
+                }
+                .buttonStyle(.plain)
             }
 
             GroupedSettingsCard {
@@ -459,6 +472,7 @@ struct SettingsVisualTheme {
         SettingsView()
             .environmentObject(AuthService())
             .environmentObject(SyncService(container: PersistenceController.preview.container))
+            .environmentObject(RevenueCatSubscriptionState())
             .environment(\.managedObjectContext, PersistenceController.preview.container.viewContext)
     }
 }

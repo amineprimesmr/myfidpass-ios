@@ -30,17 +30,21 @@ struct ContentView: View {
     /// Masque la pastille « Abonnez-vous 1 € » quand le clavier recouvre l’écran (saisie de texte).
     @State private var isSoftwareKeyboardVisible = false
     @State private var didScheduleStartupVersionCheck = false
-    /// Une seule planification du Safari abonnement après inscription (évite deux `Task` identiques depuis `.task` + `onAppear`).
-    @State private var didSchedulePostSignupTrialSafari = false
 
     var body: some View {
         Group {
-            if merchantSubscriptionPaywallBlocking {
+            if shouldShowPostSignupSubscriptionGate {
+                MerchantSubscriptionGateView()
+                    .environmentObject(authService)
+                    .environmentObject(revenueCatSubscriptionState)
+                    .environment(\.managedObjectContext, viewContext)
+            } else if merchantSubscriptionPaywallBlocking {
                 MerchantSubscriptionPaywallBlockingView(
                     onContinue: { showMerchantSubscriptionSheet = true }
                 )
                 .environmentObject(authService)
                 .environmentObject(syncService)
+                .environmentObject(revenueCatSubscriptionState)
                 .environment(\.managedObjectContext, viewContext)
             } else {
                 mainMerchantTabStack
@@ -65,7 +69,6 @@ struct ContentView: View {
         .sheet(isPresented: $showMerchantSubscriptionSheet) {
             MerchantSubscriptionGateView()
                 .environmentObject(authService)
-                .environmentObject(syncService)
                 .environmentObject(revenueCatSubscriptionState)
                 .presentationDragIndicator(.visible)
         }
@@ -99,17 +102,20 @@ struct ContentView: View {
             AppUpdateView(appInfo: info, forcedUpdate: $forcedAppUpdate)
         }
         .onAppear {
-            Task { await schedulePostSignupTrialSafariIfNeeded() }
+            consumePostSignupPendingIfNotNeeded()
         }
         .task {
             await authService.reconcileStripeSubscriptionFromServer(force: true)
             await authService.refreshBusinessesIfNeeded()
-            await schedulePostSignupTrialSafariIfNeeded()
+            consumePostSignupPendingIfNotNeeded()
             await scheduleStartupVersionCheckIfNeeded()
         }
         .onChange(of: authService.merchantSubscriptionEligibilityResolved) { _, resolved in
             guard resolved else { return }
-            Task { await schedulePostSignupTrialSafariIfNeeded() }
+            consumePostSignupPendingIfNotNeeded()
+        }
+        .onChange(of: revenueCatSubscriptionState.hasPremiumEntitlement) { _, _ in
+            consumePostSignupPendingIfNotNeeded()
         }
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
@@ -124,43 +130,26 @@ struct ContentView: View {
         }
     }
 
-    /// Après inscription : même écran que la pastille d’essai (`InAppSafariView` → lien Stripe), **10 s** après l’accès à l’app.
+    /// Paywall **avant** les onglets : inscription récente sans abonnement actif.
+    private var shouldShowPostSignupSubscriptionGate: Bool {
+        AuthStorage.pendingOpenMerchantSubscriptionSheetAfterSignup
+            && AuthStorage.isLoggedIn
+            && authService.currentScreen == .authenticated
+            && !authService.isPlatformAdmin
+            && !authService.subscriptionAccessUnlocked(revenueCatPremium: revenueCatSubscriptionState.hasPremiumEntitlement)
+    }
+
+    /// Consomme le flag post-inscription si admin ou déjà abonné (évite un état coincé).
     @MainActor
-    private func schedulePostSignupTrialSafariIfNeeded() async {
+    private func consumePostSignupPendingIfNotNeeded() {
         guard AuthStorage.pendingOpenMerchantSubscriptionSheetAfterSignup else { return }
-        guard AuthStorage.isLoggedIn else { return }
-        guard authService.currentScreen == .authenticated else { return }
-        guard authService.merchantSubscriptionEligibilityResolved else { return }
         if authService.isPlatformAdmin {
             AuthStorage.pendingOpenMerchantSubscriptionSheetAfterSignup = false
-            didSchedulePostSignupTrialSafari = false
             return
         }
-        guard !didSchedulePostSignupTrialSafari else { return }
-        didSchedulePostSignupTrialSafari = true
-
-        try? await Task.sleep(for: .seconds(10))
-
-        // Ne pas ouvrir la feuille d’abonnement **par-dessous** l’overlay du tutoriel d’accueil :
-        // tant que le flag `pendingShowMerchantHomeTutorialAfterSignup` n’est pas consommé
-        // (fin / skip du tutoriel), on attend (max 2 min supplémentaires par sécurité).
-        for _ in 0..<120 {
-            if !AuthStorage.pendingShowMerchantHomeTutorialAfterSignup { break }
-            try? await Task.sleep(for: .seconds(1))
-        }
-
-        guard AuthStorage.pendingOpenMerchantSubscriptionSheetAfterSignup else { return }
-        guard AuthStorage.isLoggedIn else {
+        if authService.subscriptionAccessUnlocked(revenueCatPremium: revenueCatSubscriptionState.hasPremiumEntitlement) {
             AuthStorage.pendingOpenMerchantSubscriptionSheetAfterSignup = false
-            return
         }
-        guard authService.currentScreen == .authenticated else {
-            AuthStorage.pendingOpenMerchantSubscriptionSheetAfterSignup = false
-            return
-        }
-
-        AuthStorage.pendingOpenMerchantSubscriptionSheetAfterSignup = false
-        showTrialStripePaymentSafari = true
     }
 
     @MainActor
