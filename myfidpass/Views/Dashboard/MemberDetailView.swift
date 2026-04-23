@@ -27,6 +27,9 @@ struct MemberDetailView: View {
     @State private var successAlertTitle = "Succès"
     @State private var showDeleteMemberConfirm = false
     @State private var isDeletingMember = false
+    @State private var grantedRewards: [MemberGameRewardDTO] = []
+    @State private var isLoadingRewards = false
+    @State private var claimingGrantId: String?
     private var template: CardTemplate? { dataService.currentCardTemplate() }
 
     /// Identifiant serveur du membre (sync : `qrCodeValue` ; repli `clientIdentifier`).
@@ -160,6 +163,59 @@ struct MemberDetailView: View {
                 }
             }
 
+            let giftGrants = grantedRewards.filter { $0.reward?.kind == "gift" }
+            if !giftGrants.isEmpty || isLoadingRewards {
+                Section {
+                    if isLoadingRewards {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                            Text("Chargement…")
+                                .font(AppTheme.Fonts.body())
+                                .foregroundStyle(AppTheme.Colors.textSecondary)
+                        }
+                    } else {
+                        ForEach(giftGrants) { grant in
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(grant.displayLabel)
+                                        .font(AppTheme.Fonts.body().weight(.semibold))
+                                    if grant.status == "claimed" {
+                                        Text("Remis au client")
+                                            .font(AppTheme.Fonts.caption())
+                                            .foregroundStyle(.green)
+                                    } else {
+                                        Text("À remettre")
+                                            .font(AppTheme.Fonts.caption())
+                                            .foregroundStyle(AppTheme.Colors.textSecondary)
+                                    }
+                                }
+                                Spacer()
+                                if grant.status != "claimed" {
+                                    Button {
+                                        if let grantId = grant.grantId {
+                                            Task { await claimGiftReward(grantId: grantId) }
+                                        }
+                                    } label: {
+                                        if claimingGrantId == grant.grantId {
+                                            ProgressView()
+                                        } else {
+                                            Text("Remis")
+                                                .font(AppTheme.Fonts.body().weight(.semibold))
+                                                .foregroundStyle(AppTheme.Colors.accent)
+                                        }
+                                    }
+                                    .disabled(claimingGrantId != nil)
+                                }
+                            }
+                        }
+                    }
+                } header: {
+                    Text("Cadeaux roue (à remettre)")
+                } footer: {
+                    Text("Cadeaux gagnés par ce membre sur la roue. Appuyez sur « Remis » une fois le cadeau donné.")
+                }
+            }
+
             Section {
                 Button(role: .destructive) {
                     showDeleteMemberConfirm = true
@@ -202,6 +258,10 @@ struct MemberDetailView: View {
         }
         .refreshable {
             await syncService.syncAfterServerMutation()
+            await loadGiftRewards()
+        }
+        .task {
+            await loadGiftRewards()
         }
         .alert("Supprimer définitivement ce membre ?", isPresented: $showDeleteMemberConfirm) {
             Button("Annuler", role: .cancel) {}
@@ -578,6 +638,40 @@ struct MemberDetailView: View {
             await MainActor.run { isRedeeming = false }
         }
     }
+
+    private func loadGiftRewards() async {
+        guard let slug = AuthStorage.currentBusinessSlug, let memberId = resolvedMemberId else { return }
+        await MainActor.run { isLoadingRewards = true }
+        do {
+            let response: MemberRewardsListResponse = try await APIClient.shared.request(.memberRewardsList(slug: slug, memberId: memberId))
+            await MainActor.run {
+                grantedRewards = response.rewards
+                isLoadingRewards = false
+            }
+        } catch {
+            await MainActor.run { isLoadingRewards = false }
+        }
+    }
+
+    private func claimGiftReward(grantId: String) async {
+        guard let slug = AuthStorage.currentBusinessSlug, let memberId = resolvedMemberId else { return }
+        await MainActor.run { claimingGrantId = grantId }
+        do {
+            _ = try await APIClient.shared.request(.claimMemberReward(slug: slug, memberId: memberId, grantId: grantId)) as ClaimRewardResponse
+            await MainActor.run {
+                if let idx = grantedRewards.firstIndex(where: { $0.grantId == grantId }) {
+                    let old = grantedRewards[idx]
+                    grantedRewards[idx] = MemberGameRewardDTO(grantId: old.grantId, status: "claimed", reward: old.reward)
+                }
+                claimingGrantId = nil
+            }
+        } catch {
+            await MainActor.run {
+                errorMessage = (error as? APIError)?.errorDescription ?? "Impossible de valider ce cadeau."
+                claimingGrantId = nil
+            }
+        }
+    }
 }
 
 // MARK: - Sheet catégories (cocher / décocher pour ce membre)
@@ -598,7 +692,7 @@ struct MemberCategoriesSheet: View {
                 HStack(spacing: 10) {
                     if #available(iOS 26.0, *) {
                         Button("Annuler") { dismiss() }
-                            .buttonStyle(.glass)
+                            .buttonStyle(.glass(.regular))
                             .buttonBorderShape(.capsule)
                             .controlSize(.regular)
                     } else {
@@ -618,7 +712,7 @@ struct MemberCategoriesSheet: View {
                             saveCategories()
                         }
                         .disabled(isSaving)
-                        .buttonStyle(.glass)
+                        .buttonStyle(.glass(.regular))
                         .buttonBorderShape(.capsule)
                         .controlSize(.regular)
                         .tint(AppTheme.Colors.primary)
