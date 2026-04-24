@@ -20,6 +20,7 @@ enum AuthStorage {
     enum Key {
         static let isLoggedIn = "myfidpass.auth.isLoggedIn"
         static let userEmail = "myfidpass.auth.userEmail"
+        static let userStaffLogin = "myfidpass.auth.userStaffLogin"
         static let userPhone = "myfidpass.auth.userPhone"
         static let authProvider = "myfidpass.auth.authProvider"
         static let appleUserIdentifier = "myfidpass.auth.appleUserIdentifier"
@@ -31,6 +32,8 @@ enum AuthStorage {
         static let pendingOpenMerchantSubscriptionSheetAfterSignup = "myfidpass.auth.pendingOpenMerchantSubscriptionSheetAfterSignup"
         /// Identifiant utilisateur API (`GET /me` → `user.id`) — RevenueCat `logIn` (stable par compte).
         static let userId = "myfidpass.auth.userId"
+        /// Dernier `MerchantWorkspaceRole` connu (affichage au cold start avant `GET /me`).
+        static let merchantWorkspaceRole = "myfidpass.auth.merchantWorkspaceRole"
     }
 
     static var isLoggedIn: Bool {
@@ -41,6 +44,12 @@ enum AuthStorage {
     static var userEmail: String? {
         get { defaults.string(forKey: Key.userEmail) }
         set { defaults.set(newValue, forKey: Key.userEmail) }
+    }
+
+    /// Compte employé (connexion par identifiant sans e-mail).
+    static var userStaffLogin: String? {
+        get { defaults.string(forKey: Key.userStaffLogin) }
+        set { defaults.set(newValue, forKey: Key.userStaffLogin) }
     }
 
     static var userPhone: String? {
@@ -68,6 +77,9 @@ enum AuthStorage {
         if let id = userId { return id }
         if let em = userEmail?.trimmingCharacters(in: .whitespacesAndNewlines), !em.isEmpty {
             return em.lowercased()
+        }
+        if let s = userStaffLogin?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty {
+            return "staff:\(s.lowercased())"
         }
         return nil
     }
@@ -151,9 +163,21 @@ enum AuthStorage {
         set { defaults.set(newValue, forKey: Key.pendingOpenMerchantSubscriptionSheetAfterSignup) }
     }
 
+    static var merchantWorkspaceRoleRaw: String? {
+        get { defaults.string(forKey: Key.merchantWorkspaceRole) }
+        set {
+            if let v = newValue, !v.isEmpty { defaults.set(v, forKey: Key.merchantWorkspaceRole) }
+            else { defaults.removeObject(forKey: Key.merchantWorkspaceRole) }
+        }
+    }
+
+    /// Reprise au tap sur une notif (AppDelegate) avant chargement d’`AuthService`.
+    static var isCachedWorkspaceStaff: Bool { merchantWorkspaceRoleRaw == "staff" }
+
     static func clearSession() {
         defaults.removeObject(forKey: Key.isLoggedIn)
         defaults.removeObject(forKey: Key.userEmail)
+        defaults.removeObject(forKey: Key.userStaffLogin)
         defaults.removeObject(forKey: Key.userPhone)
         defaults.removeObject(forKey: Key.userId)
         defaults.removeObject(forKey: Key.authProvider)
@@ -164,6 +188,7 @@ enum AuthStorage {
         defaults.removeObject(forKey: Key.currentBusinessSlug)
         defaults.removeObject(forKey: Key.dashboardTokensBySlug)
         defaults.removeObject(forKey: Key.pendingOpenMerchantSubscriptionSheetAfterSignup)
+        defaults.removeObject(forKey: Key.merchantWorkspaceRole)
         defaults.removeObject(forKey: "myfidpass.auth.pendingShowMerchantHomeTutorialAfterSignup")
         defaults.removeObject(forKey: "myfidpass.merchantHomeTutorial.v2")
         defaults.removeObject(forKey: "myfidpass.merchantHomeTutorial.v1")

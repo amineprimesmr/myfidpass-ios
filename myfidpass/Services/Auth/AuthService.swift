@@ -27,6 +27,9 @@ private let merchantTrialEndIsoUserDefaultsKey = "myfidpass.merchantTrialEndsAtI
 final class AuthService: NSObject, ObservableObject {
     @Published private(set) var currentScreen: AuthScreen = .welcome
     @Published private(set) var currentUserEmail: String?
+
+    /// Identifiant employé (sans e-mail), si connexion par compte créé par le commerçant.
+    var currentUserStaffLogin: String? { AuthStorage.userStaffLogin }
     @Published private(set) var currentUserPhone: String?
     @Published private(set) var businesses: [BusinessDTO] = []
     /// Incrémenté après suppression de compte pour que `myfidpassApp` réaffiche l’onboarding premier lancement.
@@ -43,14 +46,21 @@ final class AuthService: NSObject, ObservableObject {
     @Published private(set) var isPlatformAdmin = false
     /// `false` = interface **Administration** (liste plateforme) ; `true` = interface commerçant classique (pilotage d’un commerce).
     @Published var adminShowsMerchantWorkspace = false
+    /// Rôle dans le commerce actif (`user.workspace_role` sur login / `GET /me`). Défaut `owner` si absent.
+    @Published private(set) var merchantWorkspaceRole: MerchantWorkspaceRole = .owner
 
     private var cancellables = Set<AnyCancellable>()
+
+    /// Employé (caisse) : interface réduite (pas d’onglet Commerce / Notifs marketing).
+    var isMerchantStaffUser: Bool { merchantWorkspaceRole == .staff }
 
     /// Pour l’UI freemium : abonnement Stripe actif **ou** compte admin plateforme (accès pilotage).
     var effectiveMerchantSubscriptionActive: Bool {
         if isPlatformAdmin { return true }
         return hasActiveMerchantSubscription
     }
+
+    var canManageMerchantTeam: Bool { merchantWorkspaceRole.canManageTeam }
 
     /// Abonnement encaissé côté Stripe (hors seule période d’essai **application**).
     var hasPaidStripeSubscription: Bool {
@@ -121,10 +131,15 @@ final class AuthService: NSObject, ObservableObject {
     private func loadFromStorage() {
         FirstLaunchOnboarding.bootstrapInstallAndMigrateMerchantPhaseIfNeeded()
         if AuthStorage.isLoggedIn {
-            currentUserEmail = AuthStorage.userEmail
+            currentUserEmail = AuthStorage.userEmail ?? AuthStorage.userStaffLogin
             currentUserPhone = AuthStorage.userPhone
             currentScreen = .authenticated
             merchantSubscriptionEligibilityResolved = false
+            if let raw = AuthStorage.merchantWorkspaceRoleRaw, let r = MerchantWorkspaceRole(rawValue: raw) {
+                merchantWorkspaceRole = r
+            } else {
+                merchantWorkspaceRole = .owner
+            }
             if merchantTrialEndsAt == nil,
                let iso = UserDefaults.standard.string(forKey: merchantTrialEndIsoUserDefaultsKey),
                !iso.isEmpty,
@@ -137,6 +152,7 @@ final class AuthService: NSObject, ObservableObject {
             hasActiveMerchantSubscription = false
             isPlatformAdmin = false
             adminShowsMerchantWorkspace = false
+            merchantWorkspaceRole = .owner
             UserDefaults.standard.removeObject(forKey: merchantTrialEndIsoUserDefaultsKey)
         }
     }
@@ -269,6 +285,7 @@ final class AuthService: NSObject, ObservableObject {
         if !isPlatformAdmin {
             adminShowsMerchantWorkspace = false
         }
+        applyWorkspaceRole(from: me.user)
     }
 
     /// Aligné sur le backend : `has_active_subscription` ou statut Stripe `subscription.status`.
@@ -290,12 +307,26 @@ final class AuthService: NSObject, ObservableObject {
         isMerchantSubscriptionActive(hasExplicit: me.hasActiveSubscription, subscription: me.subscription)
     }
 
+    private func applyWorkspaceRole(from user: AuthUser) {
+        let role = MerchantWorkspaceRole.resolve(fromAPIValue: user.workspaceRole)
+        merchantWorkspaceRole = role
+        if AuthStorage.isLoggedIn {
+            AuthStorage.merchantWorkspaceRoleRaw = role.rawValue
+        }
+    }
+
     private func applyAuthSuccess(_ response: AuthLoginResponse) {
         AuthStorage.isLoggedIn = true
         if let uid = response.user.id?.trimmingCharacters(in: .whitespacesAndNewlines), !uid.isEmpty {
             AuthStorage.userId = uid
         }
-        AuthStorage.userEmail = response.user.email
+        if let sl = response.user.staffLogin?.trimmingCharacters(in: .whitespacesAndNewlines), !sl.isEmpty {
+            AuthStorage.userStaffLogin = sl
+            AuthStorage.userEmail = nil
+        } else {
+            AuthStorage.userStaffLogin = nil
+            AuthStorage.userEmail = response.user.email
+        }
         if let ph = response.user.phone?.trimmingCharacters(in: .whitespacesAndNewlines), !ph.isEmpty {
             AuthStorage.userPhone = ph
         } else {
@@ -314,7 +345,7 @@ final class AuthService: NSObject, ObservableObject {
             AuthStorage.currentBusinessSlug = nil
         }
         DataService.seedBusinessesFromAuth(response.businesses, context: PersistenceController.shared.container.viewContext)
-        currentUserEmail = AuthStorage.userEmail
+        currentUserEmail = AuthStorage.userEmail ?? AuthStorage.userStaffLogin
         currentUserPhone = AuthStorage.userPhone
         hasActiveMerchantSubscription = Self.isMerchantSubscriptionActive(
             hasExplicit: response.hasActiveSubscription,
@@ -328,6 +359,7 @@ final class AuthService: NSObject, ObservableObject {
         if !isPlatformAdmin {
             adminShowsMerchantWorkspace = false
         }
+        applyWorkspaceRole(from: response.user)
         currentScreen = .authenticated
         NotificationsService.shared.syncPushTokenAfterLogin()
     }
@@ -343,16 +375,23 @@ final class AuthService: NSObject, ObservableObject {
         AuthStorage.currentBusinessSlug = trimmed
     }
 
-    /// Indique si un compte existe pour cet e-mail (POST /api/auth/check-email).
-    func checkAccountExists(email: String) async throws -> Bool {
+    /// Indique si un compte existe : e-mail (`POST /api/auth/check-email`) ou identifiant employé (`POST /api/auth/check-identifier`).
+    func checkAccountExists(identifier: String) async throws -> Bool {
         struct CheckEmailResponse: Decodable {
             let accountExists: Bool
         }
-        let emailNorm = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !emailNorm.isEmpty else { throw AuthError.invalidCredentials }
+        let norm = identifier.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !norm.isEmpty else { throw AuthError.invalidCredentials }
         do {
+            if norm.contains("@") {
+                let r: CheckEmailResponse = try await APIClient.shared.request(
+                    .authCheckEmail(email: norm),
+                    responseType: CheckEmailResponse.self
+                )
+                return r.accountExists
+            }
             let r: CheckEmailResponse = try await APIClient.shared.request(
-                .authCheckEmail(email: emailNorm),
+                .authCheckIdentifier(identifier: norm),
                 responseType: CheckEmailResponse.self
             )
             return r.accountExists
@@ -394,7 +433,6 @@ final class AuthService: NSObject, ObservableObject {
             MerchantLinkedPlaceCache.snapshotFromPendingOnboarding()
             FirstLaunchOnboarding.clearPendingEstablishmentFromOnboarding()
             applyAuthSuccess(response)
-            AuthStorage.pendingOpenMerchantSubscriptionSheetAfterSignup = true
         } catch let e as APIError {
             if case .server(let code, _) = e, code == 409 {
                 throw AuthError.emailAlreadyUsed
@@ -415,12 +453,12 @@ final class AuthService: NSObject, ObservableObject {
         _ = try await APIClient.shared.request(.authForgotPassword(email: emailNorm)) as ForgotPasswordAPIResponse
     }
 
-    /// Connexion email/mot de passe. POST /api/auth/login.
+    /// Connexion e-mail **ou** identifiant employé. POST /api/auth/login (body : `login` + `password`).
     func login(email: String, password: String) async throws {
-        let emailNorm = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !emailNorm.isEmpty else { throw AuthError.invalidCredentials }
+        let idNorm = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !idNorm.isEmpty else { throw AuthError.invalidCredentials }
         do {
-            let response: AuthLoginResponse = try await APIClient.shared.request(.authLogin(email: emailNorm, password: password))
+            let response: AuthLoginResponse = try await APIClient.shared.request(.authLogin(login: idNorm, password: password))
             applyAuthSuccess(response)
         } catch APIError.noAccountInLogiciel {
             throw AuthError.noAccountInLogiciel
@@ -454,9 +492,6 @@ final class AuthService: NSObject, ObservableObject {
             FirstLaunchOnboarding.clearPendingEstablishmentFromOnboarding()
         }
         applyAuthSuccess(response)
-        if isNewPhoneSignup {
-            AuthStorage.pendingOpenMerchantSubscriptionSheetAfterSignup = true
-        }
     }
 
     /// Connexion Apple. POST /api/auth/apple avec idToken (JWT). L’app envoie credential.identityToken.
@@ -478,9 +513,6 @@ final class AuthService: NSObject, ObservableObject {
                 FirstLaunchOnboarding.clearPendingEstablishmentFromOnboarding()
             }
             applyAuthSuccess(response)
-            if isNewAppleSignup {
-                AuthStorage.pendingOpenMerchantSubscriptionSheetAfterSignup = true
-            }
             currentUserEmail = response.user.email ?? email ?? "Compte Apple"
         } catch let e as APIError {
             switch e {
@@ -516,17 +548,10 @@ final class AuthService: NSObject, ObservableObject {
             FirstLaunchOnboarding.clearPendingEstablishmentFromOnboarding()
         }
         applyAuthSuccess(response)
-        if isNewGoogleSignup {
-            AuthStorage.pendingOpenMerchantSubscriptionSheetAfterSignup = true
-        }
     }
 
     /// Applique le JWT reçu après le redirect OAuth Google (myfidpass://auth?token=xxx&refreshToken=yyy), appelle /me puis met à jour la session.
     func applyTokenFromGoogleOAuthCallback(token: String, refreshToken: String?) async throws {
-        let pending = FirstLaunchOnboarding.readPendingEstablishment()
-        let isNewGoogleSignupFromOnboarding =
-            (pending.placeId != nil)
-            || (pending.description?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
         // Effacer d’abord toute session locale (ex. compte supprimé côté serveur) pour ne pas mélanger refresh / access avec les jetons OAuth neufs.
         AuthStorage.authToken = nil
         AuthStorage.refreshToken = nil
@@ -547,9 +572,6 @@ final class AuthService: NSObject, ObservableObject {
             merchantTrialEndsAt: me.merchantTrialEndsAt
         )
         applyAuthSuccess(response)
-        if isNewGoogleSignupFromOnboarding {
-            AuthStorage.pendingOpenMerchantSubscriptionSheetAfterSignup = true
-        }
     }
 
     /// Lance le flux OAuth Google (ouverture navigateur → redirect myfidpass://auth?token=…). En cas d’erreur ou d’annulation, throw.
@@ -705,6 +727,10 @@ final class AuthService: NSObject, ObservableObject {
         AuthenticatedMediaLoader.clearAllCaches()
         CardLogoStorage.removeAllLocalCardAssets()
         CardPreviewDisplaySnapshotStore.clearAllSnapshots()
+        NotificationSendLocalHistoryStore.clearForAllSlugs()
+        if let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines), !slug.isEmpty {
+            MerchantStatisticsDiskCache.clear(slug: slug)
+        }
         // Vider le cache CoreData pour éviter qu'un ancien commerce réapparaisse sur un nouveau compte
         DataService.clearAllLocalData(context: PersistenceController.shared.container.viewContext)
         // Effacer l'établissement pour forcer la re-sélection au prochain lancement (WelcomeFlow)
@@ -721,6 +747,7 @@ final class AuthService: NSObject, ObservableObject {
         UserDefaults.standard.removeObject(forKey: merchantTrialEndIsoUserDefaultsKey)
         isPlatformAdmin = false
         adminShowsMerchantWorkspace = false
+        merchantWorkspaceRole = .owner
         currentScreen = .welcome
     }
 

@@ -16,8 +16,10 @@ fileprivate func pathSegment(_ value: String) -> String {
 
 enum APIEndpoint {
     // MARK: - Auth
-    case authLogin(email: String, password: String)
+    case authLogin(login: String, password: String)
     case authCheckEmail(email: String)
+    /// E-mail **ou** identifiant employé (sans @) — POST /api/auth/check-identifier
+    case authCheckIdentifier(identifier: String)
     case authRegister(email: String, password: String, name: String?, googlePlaceId: String?, establishmentName: String?)
     /// Recherche d'établissements Google (même logique que le SaaS) — sans JWT.
     case placesAutocomplete(input: String)
@@ -46,10 +48,12 @@ enum APIEndpoint {
     // MARK: - Sync (dashboard / slug)
     case businessSettings(slug: String)
     case businessStats(slug: String, period: String?)
+    case businessStatsTraffic(slug: String, period: String?)
     case businessEvolution(slug: String, weeks: Int?, period: String?)
     case businessMembers(slug: String, limit: Int?, offset: Int?, search: String?, filter: String?, sort: String?)
     case businessMembersExport(slug: String, search: String?, filter: String?, sort: String?)
-    case businessTransactions(slug: String, limit: Int?, offset: Int?, memberId: String?, days: Int?, type: String?)
+    /// `sort` : ex. `desc` = plus récent d’abord (requis côté serveur pour offset correct).
+    case businessTransactions(slug: String, limit: Int?, offset: Int?, memberId: String?, days: Int?, type: String?, sort: String?)
     /// `format` : `csv` | `json` — `json` sert à générer le PDF dans l’app.
     case businessTransactionsExport(
         slug: String,
@@ -148,10 +152,18 @@ enum APIEndpoint {
     case adminBusinesses(q: String?, limit: Int?, offset: Int?)
     case adminEvents(limit: Int?, filter: String?)
 
+    // MARK: - Équipe (accès employés, owner/manager)
+    case businessTeamList(slug: String)
+    case businessTeamInvite(slug: String, body: WorkspaceTeamInviteBody)
+    /// Compte employé identifiant + mot de passe (sans e-mail).
+    case businessTeamStaffAccount(slug: String, body: WorkspaceTeamStaffAccountBody)
+    case businessTeamRevoke(slug: String, membershipId: String)
+
     var path: String {
         switch self {
         case .authLogin: return "/api/auth/login"
         case .authCheckEmail: return "/api/auth/check-email"
+        case .authCheckIdentifier: return "/api/auth/check-identifier"
         case .authRegister: return "/api/auth/register"
         case .placesAutocomplete: return "/api/places/autocomplete"
         case .placesPlaceDetails: return "/api/places/details"
@@ -172,10 +184,11 @@ enum APIEndpoint {
         case .paymentPortalSession: return "/api/payment/create-portal-session"
         case .businessSettings(let slug): return "/api/businesses/\(pathSegment(slug))/dashboard/settings"
         case .businessStats(let slug, _): return "/api/businesses/\(pathSegment(slug))/dashboard/stats"
+        case .businessStatsTraffic(let slug, _): return "/api/businesses/\(pathSegment(slug))/dashboard/stats/traffic"
         case .businessEvolution(let slug, _, _): return "/api/businesses/\(pathSegment(slug))/dashboard/evolution"
         case .businessMembers(let slug, _, _, _, _, _): return "/api/businesses/\(pathSegment(slug))/dashboard/members"
         case .businessMembersExport(let slug, _, _, _): return "/api/businesses/\(pathSegment(slug))/dashboard/members/export"
-        case .businessTransactions(let slug, _, _, _, _, _): return "/api/businesses/\(pathSegment(slug))/dashboard/transactions"
+        case .businessTransactions(let slug, _, _, _, _, _, _): return "/api/businesses/\(pathSegment(slug))/dashboard/transactions"
         case .businessTransactionsExport(let slug, _, _, _, _, _, _, _, _):
             return "/api/businesses/\(pathSegment(slug))/dashboard/transactions/export"
         case .businessCategories(let slug): return "/api/businesses/\(pathSegment(slug))/dashboard/categories"
@@ -230,6 +243,14 @@ enum APIEndpoint {
         case .adminUsers: return "/api/admin/users"
         case .adminBusinesses: return "/api/admin/businesses"
         case .adminEvents: return "/api/admin/events"
+        case .businessTeamList(let slug):
+            return "/api/businesses/\(pathSegment(slug))/dashboard/team"
+        case .businessTeamInvite(let slug, _):
+            return "/api/businesses/\(pathSegment(slug))/dashboard/team/invites"
+        case .businessTeamStaffAccount(let slug, _):
+            return "/api/businesses/\(pathSegment(slug))/dashboard/team/staff-accounts"
+        case .businessTeamRevoke(let slug, let membershipId):
+            return "/api/businesses/\(pathSegment(slug))/dashboard/team/members/\(pathSegment(membershipId))"
         }
     }
 
@@ -242,7 +263,7 @@ enum APIEndpoint {
     /// Pas de `ensureValidAccessToken` ni d’en-tête `Authorization` : évite d’envoyer d’anciens JWT (compte supprimé / reset BDD) sur `/api/auth/config` ou login, ce qui provoquait un refresh en échec et « Session expirée » au moment de Continuer avec Google.
     var skipsClientSessionBootstrap: Bool {
         switch self {
-        case .authConfig, .authLogin, .authCheckEmail, .authRegister, .authForgotPassword, .authResetPassword,
+        case .authConfig, .authLogin, .authCheckEmail, .authCheckIdentifier, .authRegister, .authForgotPassword, .authResetPassword,
              .authGoogle, .authApple, .authPhoneSendCode, .authPhoneVerify,
              .authRefresh, .authLogout, .placesAutocomplete, .placesPlaceDetails:
             return true
@@ -264,7 +285,7 @@ enum APIEndpoint {
 
     var method: String {
         switch self {
-        case .authLogin, .authCheckEmail, .authRegister, .authForgotPassword, .authResetPassword, .authGoogle, .authApple,
+        case .authLogin, .authCheckEmail, .authCheckIdentifier, .authRegister, .authForgotPassword, .authResetPassword, .authGoogle, .authApple,
              .authPhoneSendCode, .authPhoneVerify,
              .authRefresh, .authLogout,
              .scan, .deviceRegister, .notifyClients, .createCategory, .updateMemberCategories, .creditMember,
@@ -272,11 +293,11 @@ enum APIEndpoint {
              .removeMemberPoints, .redeemReward, .createBusiness, .paymentCheckout, .paymentReconcileSubscription, .paymentPortalSession, .dashboardNotificationSend, .dashboardRemoveTestDevice,
              .membersImport, .createMember, .memberTicketsConvert, .claimMemberReward, .deleteAllDashboardMembers,
              .dashboardFlyerAIGenerate, .dashboardCampaignAutomationParse,
-             .dashboardSocialMetricsRefresh, .dashboardSocialMetricsManual:
+             .dashboardSocialMetricsRefresh, .dashboardSocialMetricsManual, .businessTeamInvite, .businessTeamStaffAccount:
             return "POST"
         case .patchDashboardSettings, .updateCategory, .updateLocationSettings, .dashboardPatchGame:
             return "PATCH"
-        case .deleteCategory, .authDeleteAccount, .deleteDashboardMember:
+        case .deleteCategory, .authDeleteAccount, .deleteDashboardMember, .businessTeamRevoke:
             return "DELETE"
         case .dashboardGameRewardsPut, .dashboardFlyerPut:
             return "PUT"
@@ -290,6 +311,10 @@ enum APIEndpoint {
         var components = URLComponents(url: url, resolvingAgainstBaseURL: true)!
         switch self {
         case .businessStats(_, let period):
+            if let period, !period.isEmpty {
+                components.queryItems = [URLQueryItem(name: "period", value: period)]
+            }
+        case .businessStatsTraffic(_, let period):
             if let period, !period.isEmpty {
                 components.queryItems = [URLQueryItem(name: "period", value: period)]
             }
@@ -312,13 +337,14 @@ enum APIEndpoint {
             if let f = filter, !f.isEmpty { items.append(URLQueryItem(name: "filter", value: f)) }
             if let so = sort, !so.isEmpty { items.append(URLQueryItem(name: "sort", value: so)) }
             components.queryItems = items.isEmpty ? nil : items
-        case .businessTransactions(_, let limit, let offset, let memberId, let days, let type):
+        case .businessTransactions(_, let limit, let offset, let memberId, let days, let type, let sort):
             var items: [URLQueryItem] = []
             if let l = limit { items.append(URLQueryItem(name: "limit", value: "\(l)")) }
             if let o = offset { items.append(URLQueryItem(name: "offset", value: "\(o)")) }
             if let m = memberId, !m.isEmpty { items.append(URLQueryItem(name: "memberId", value: m)) }
             if let d = days { items.append(URLQueryItem(name: "days", value: "\(d)")) }
             if let t = type, !t.isEmpty { items.append(URLQueryItem(name: "type", value: t)) }
+            if let s = sort, !s.isEmpty { items.append(URLQueryItem(name: "sort", value: s)) }
             components.queryItems = items.isEmpty ? nil : items
         case .businessTransactionsExport(_, let format, let days, let type, let types, let dateFrom, let dateTo, let memberId, let limit):
             var items: [URLQueryItem] = [URLQueryItem(name: "format", value: format)]
@@ -379,16 +405,20 @@ enum APIEndpoint {
             if let l = limit { items.append(URLQueryItem(name: "limit", value: "\(l)")) }
             if let f = filter, !f.isEmpty { items.append(URLQueryItem(name: "filter", value: f)) }
             components.queryItems = items.isEmpty ? nil : items
+        case .businessTeamList, .businessTeamInvite, .businessTeamStaffAccount, .businessTeamRevoke:
+            break
         default:
             break
         }
         guard let finalURL = components.url else { throw APIError.invalidURL }
         var bodyData: Data?
         switch self {
-        case .authLogin(let email, let password):
-            bodyData = try encoder.encode(LoginPayload(email: email, password: password))
+        case .authLogin(let login, let password):
+            bodyData = try encoder.encode(LoginPayload(login: login, password: password))
         case .authCheckEmail(let email):
             bodyData = try encoder.encode(CheckEmailPayload(email: email))
+        case .authCheckIdentifier(let identifier):
+            bodyData = try encoder.encode(CheckIdentifierPayload(identifier: identifier))
         case .authRegister(let email, let password, let name, let googlePlaceId, let establishmentName):
             bodyData = try encoder.encode(
                 AuthRegisterPayload(email: email, password: password, name: name, googlePlaceId: googlePlaceId, establishmentName: establishmentName)
@@ -474,6 +504,10 @@ enum APIEndpoint {
             bodyData = try encoder.encode(RefreshTokenPayload(refreshToken: refreshToken))
         case .authLogout(let refreshToken):
             bodyData = try encoder.encode(RefreshTokenPayload(refreshToken: refreshToken))
+        case .businessTeamInvite(_, let body):
+            bodyData = try encoder.encode(body)
+        case .businessTeamStaffAccount(_, let body):
+            bodyData = try encoder.encode(body)
         default:
             break
         }
@@ -506,8 +540,12 @@ private struct RefreshTokenPayload: Encodable {
 private struct EmptyJSONBody: Encodable {}
 
 private struct LoginPayload: Encodable {
-    let email: String
+    let login: String
     let password: String
+}
+
+private struct CheckIdentifierPayload: Encodable {
+    let identifier: String
 }
 
 private struct CheckEmailPayload: Encodable {

@@ -22,6 +22,11 @@ final class MerchantTeamManagementViewModel: ObservableObject {
     @Published var showInviteSheet = false
     @Published var inviteEmail = ""
     @Published var inviteName = ""
+    @Published var showStaffCreateSheet = false
+    @Published var staffCreateLogin = ""
+    @Published var staffCreatePassword = ""
+    @Published var staffCreateName = ""
+    @Published var staffCreateInFlight = false
 
     private var slug: String? {
         let s = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -99,6 +104,43 @@ final class MerchantTeamManagementViewModel: ObservableObject {
         showRevokeConfirmation = true
     }
 
+    func createStaffAccount() async {
+        let login = staffCreateLogin.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let pw = staffCreatePassword
+        guard !login.isEmpty, pw.count >= 12 else {
+            errorMessage = "Identifiant requis, mot de passe d’au moins 12 caractères (règles MyFidpass)."
+            return
+        }
+        guard let slug else { return }
+        errorMessage = nil
+        successMessage = nil
+        staffCreateInFlight = true
+        defer { staffCreateInFlight = false }
+        do {
+            let nameTrim = staffCreateName.trimmingCharacters(in: .whitespacesAndNewlines)
+            let name: String? = nameTrim.isEmpty ? nil : nameTrim
+            let body = WorkspaceTeamStaffAccountBody(staffLogin: login, password: pw, name: name, role: "staff")
+            let r: WorkspaceTeamStaffAccountResponse = try await APIClient.shared.request(
+                .businessTeamStaffAccount(slug: slug, body: body)
+            )
+            if r.ok == false {
+                errorMessage = r.message ?? "Création refusée."
+            } else {
+                successMessage = r.message
+                    ?? "Compte employé créé. L’employé se connecte dans l’app avec cet identifiant et le mot de passe (Connexion → identifiant + mot de passe)."
+                showStaffCreateSheet = false
+                staffCreateLogin = ""
+                staffCreatePassword = ""
+                staffCreateName = ""
+            }
+            await load()
+        } catch let e as APIError {
+            errorMessage = e.errorDescription
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
     func performRevoke() async {
         guard let rawId = pendingRevokeId else { return }
         showRevokeConfirmation = false
@@ -128,12 +170,17 @@ final class MerchantTeamManagementViewModel: ObservableObject {
         return nil
     }
 
-    func canRevoke(_ member: WorkspaceTeamMemberDTO, currentUserEmail: String?) -> Bool {
+    func canRevoke(_ member: WorkspaceTeamMemberDTO, currentUserEmail: String?, currentUserStaffLogin: String?) -> Bool {
         let r = (member.role ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if r == "owner" { return false }
         if let em = member.email?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
            let cur = currentUserEmail?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
            !em.isEmpty, !cur.isEmpty, em == cur {
+            return false
+        }
+        if let sl = member.staffLogin?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+           let curS = currentUserStaffLogin?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+           !sl.isEmpty, !curS.isEmpty, sl == curS {
             return false
         }
         return revokeableId(for: member) != nil
@@ -184,21 +231,38 @@ struct MerchantTeamManagementView: View {
                     }
 
                     GroupedSettingsCard {
-                        Button {
-                            model.showInviteSheet = true
-                        } label: {
-                            HStack {
-                                GroupedSettingsIconBox(systemName: "person.badge.plus")
-                                Text("Inviter par e-mail")
-                                    .font(.body.weight(.semibold))
-                                Spacer()
-                                Image(systemName: "chevron.right")
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(.tertiary)
+                        VStack(alignment: .leading, spacing: 12) {
+                            Button {
+                                model.showStaffCreateSheet = true
+                            } label: {
+                                HStack {
+                                    GroupedSettingsIconBox(systemName: "person.crop.circle.badge.plus")
+                                    Text("Créer un employé (identifiant + mot de passe)")
+                                        .font(.body.weight(.semibold))
+                                    Spacer()
+                                    Image(systemName: "chevron.right")
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(.tertiary)
+                                }
                             }
+                            .buttonStyle(.plain)
+                            .disabled(model.staffCreateInFlight || model.isLoading)
+                            Button {
+                                model.showInviteSheet = true
+                            } label: {
+                                HStack {
+                                    GroupedSettingsIconBox(systemName: "person.badge.plus")
+                                    Text("Inviter un compte existant (e-mail)")
+                                        .font(.body.weight(.semibold))
+                                    Spacer()
+                                    Image(systemName: "chevron.right")
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(.tertiary)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(model.inviteInFlight || model.isLoading)
                         }
-                        .buttonStyle(.plain)
-                        .disabled(model.inviteInFlight || model.isLoading)
                     }
 
                     if model.isLoading && model.members.isEmpty {
@@ -249,6 +313,9 @@ struct MerchantTeamManagementView: View {
         .sheet(isPresented: $model.showInviteSheet) {
             inviteSheet
         }
+        .sheet(isPresented: $model.showStaffCreateSheet) {
+            staffCreateSheet
+        }
         .confirmationDialog(
             "Retirer l’accès de cet utilisateur ?",
             isPresented: $model.showRevokeConfirmation,
@@ -269,7 +336,11 @@ struct MerchantTeamManagementView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text((m.name?.isEmpty == false) ? (m.name ?? "—") : (m.email ?? "Utilisateur"))
                     .font(.body.weight(.semibold))
-                if let e = m.email, !e.isEmpty {
+                if let s = m.staffLogin, !s.isEmpty {
+                    Text("Identifiant : \(s)")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                } else if let e = m.email, !e.isEmpty {
                     Text(e)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
@@ -281,7 +352,8 @@ struct MerchantTeamManagementView: View {
                 }
             }
             Spacer(minLength: 8)
-            if let rid = model.revokeableId(for: m), model.canRevoke(m, currentUserEmail: authService.currentUserEmail) {
+            if let rid = model.revokeableId(for: m),
+               model.canRevoke(m, currentUserEmail: authService.currentUserEmail, currentUserStaffLogin: authService.currentUserStaffLogin) {
                 Button {
                     model.requestRevoke(id: rid)
                 } label: {
@@ -321,6 +393,38 @@ struct MerchantTeamManagementView: View {
                     } else {
                         Button("Envoyer") {
                             Task { await model.sendInvite() }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var staffCreateSheet: some View {
+        NavigationStack {
+            List {
+                Section {
+                    TextField("Identifiant (3–32 caractères)", text: $model.staffCreateLogin)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    SecureField("Mot de passe (min. 12 caractères)", text: $model.staffCreatePassword)
+                    TextField("Nom affiché (optionnel)", text: $model.staffCreateName)
+                } header: {
+                    Text("L’employé ouvre l’app → Connexion → saisit cet identifiant et ce mot de passe. Aucun e-mail requis.")
+                }
+            }
+            .navigationTitle("Nouvel employé")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Fermer") { model.showStaffCreateSheet = false }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    if model.staffCreateInFlight {
+                        ProgressView()
+                    } else {
+                        Button("Créer") {
+                            Task { await model.createStaffAccount() }
                         }
                     }
                 }

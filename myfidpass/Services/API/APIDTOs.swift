@@ -75,6 +75,8 @@ struct AuthLoginResponse: Decodable {
 struct AuthUser: Decodable {
     let id: String?
     let email: String?
+    /// Compte employé sans e-mail : identifiant défini par le commerçant.
+    let staffLogin: String?
     let name: String?
     /// Présent si le compte est lié à un numéro (connexion par SMS).
     let phone: String?
@@ -85,6 +87,7 @@ struct AuthUser: Decodable {
 
     enum CodingKeys: String, CodingKey {
         case id, email, name, phone
+        case staffLogin = "staff_login"
         case isAdmin = "is_admin"
         case workspaceRole = "workspace_role"
     }
@@ -93,6 +96,7 @@ struct AuthUser: Decodable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decodeIfPresent(String.self, forKey: .id)
         email = try c.decodeIfPresent(String.self, forKey: .email)
+        staffLogin = try c.decodeIfPresent(String.self, forKey: .staffLogin)
         name = try c.decodeIfPresent(String.self, forKey: .name)
         phone = try c.decodeIfPresent(String.self, forKey: .phone)
         isAdmin = try c.decodeIfPresent(Bool.self, forKey: .isAdmin)
@@ -1485,6 +1489,7 @@ struct WorkspaceTeamMemberDTO: Decodable, Identifiable {
     let membershipId: String?
     let userId: String?
     let email: String?
+    let staffLogin: String?
     let name: String?
     let role: String?
     let status: String?
@@ -1493,6 +1498,7 @@ struct WorkspaceTeamMemberDTO: Decodable, Identifiable {
     var id: String {
         if let m = membershipId?.trimmingCharacters(in: .whitespacesAndNewlines), !m.isEmpty { return "m:\(m)" }
         if let u = userId?.trimmingCharacters(in: .whitespacesAndNewlines), !u.isEmpty { return "u:\(u)" }
+        if let s = staffLogin?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty { return "s:\(s)" }
         if let e = email?.trimmingCharacters(in: .whitespacesAndNewlines), !e.isEmpty { return "e:\(e)" }
         return "row:\(name ?? ""):\(status ?? ""):\(role ?? "")"
     }
@@ -1501,6 +1507,7 @@ struct WorkspaceTeamMemberDTO: Decodable, Identifiable {
         case membershipId = "membership_id"
         case userId = "user_id"
         case email, name, role, status
+        case staffLogin = "staff_login"
         case createdAt = "created_at"
     }
 }
@@ -1521,4 +1528,30 @@ struct WorkspaceTeamInviteBody: Encodable {
     let email: String
     let name: String?
     let role: String?
+}
+
+/// POST …/dashboard/team/staff-accounts — création d’un employé sans e-mail.
+struct WorkspaceTeamStaffAccountBody: Encodable {
+    let staffLogin: String
+    let password: String
+    let name: String?
+    let role: String?
+
+    enum CodingKeys: String, CodingKey {
+        case staffLogin = "staff_login"
+        case password, name, role
+    }
+}
+
+struct WorkspaceTeamStaffAccountResponse: Decodable {
+    let ok: Bool?
+    let message: String?
+    let userId: String?
+    let staffLogin: String?
+
+    enum CodingKeys: String, CodingKey {
+        case ok, message
+        case userId = "user_id"
+        case staffLogin = "staff_login"
+    }
 }

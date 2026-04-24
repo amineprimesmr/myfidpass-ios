@@ -53,16 +53,29 @@ struct LoginView: View {
         self.onSheetNeedsTallLayout = onSheetNeedsTallLayout
     }
 
-    private var normalizedEmail: String {
+    /// E-mail (inscription / connexion classique) ou identifiant employé MyFidpass (sans @, défini par le commerçant).
+    private var normalizedIdentifier: String {
         email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 
     private var isEmailValid: Bool {
-        let e = normalizedEmail
+        let e = normalizedIdentifier
         guard e.count >= 5, e.contains("@") else { return false }
         let parts = e.split(separator: "@")
         guard parts.count == 2, let domain = parts.last, domain.contains(".") else { return false }
         return true
+    }
+
+    /// Identifiant employé : 3–32 caractères, a-z, 0-9, _ et - (même règles que l’API).
+    private var isStaffIdentifierValid: Bool {
+        let s = normalizedIdentifier
+        guard !s.contains("@"), s.count >= 3, s.count <= 32 else { return false }
+        return s.range(of: "^[a-z0-9][a-z0-9_-]{1,30}[a-z0-9]$", options: .regularExpression) != nil
+    }
+
+    private var isFirstStepValid: Bool {
+        if normalizedIdentifier.contains("@") { return isEmailValid }
+        return isStaffIdentifierValid
     }
 
     private var hasOnboardingEstablishmentForRegister: Bool {
@@ -156,7 +169,7 @@ struct LoginView: View {
             case .email:
                 primaryButton(
                     title: isCheckingEmail ? "Vérification…" : "Continuer",
-                    enabled: isEmailValid && !isCheckingEmail && !isLoading,
+                    enabled: isFirstStepValid && !isCheckingEmail && !isLoading,
                     loading: isCheckingEmail
                 ) {
                     Task { await continueAfterEmail() }
@@ -194,13 +207,13 @@ struct LoginView: View {
                 .font(.system(size: 32, weight: .bold))
                 .foregroundStyle(AppTheme.Colors.textPrimary)
 
-            Text("Saisissez votre adresse e-mail pour continuer. Nous détecterons si vous avez déjà un compte.")
+            Text("Saisissez votre e-mail (compte commerçant) ou l’identifiant employé fourni par votre commerçant. Nous détecterons si le compte existe déjà.")
                 .font(.system(size: 16))
                 .foregroundStyle(AppTheme.Colors.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
 
             VStack(alignment: .leading, spacing: 8) {
-                Text("Votre adresse e-mail")
+                Text("E-mail ou identifiant employé")
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(AppTheme.Colors.textSecondary)
 
@@ -211,9 +224,9 @@ struct LoginView: View {
                         .padding(16)
                         .background(Color(UIColor.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                 } else {
-                    TextField("", text: $email, prompt: Text("votre@email.fr").foregroundStyle(placeholderGray))
-                        .textContentType(.emailAddress)
-                        .keyboardType(.emailAddress)
+                    TextField("", text: $email, prompt: Text("ex. vous@email.fr ou cafe_marie").foregroundStyle(placeholderGray))
+                        .textContentType(.username)
+                        .keyboardType(.asciiCapable)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .foregroundStyle(AppTheme.Colors.textPrimary)
@@ -241,7 +254,7 @@ struct LoginView: View {
             if !presentationAsSheet {
                 primaryButton(
                     title: isCheckingEmail ? "Vérification…" : "Continuer",
-                    enabled: isEmailValid && !isCheckingEmail && !isLoading,
+                    enabled: isFirstStepValid && !isCheckingEmail && !isLoading,
                     loading: isCheckingEmail
                 ) {
                     Task { await continueAfterEmail() }
@@ -267,7 +280,7 @@ struct LoginView: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
-                    Text(normalizedEmail)
+                    Text(normalizedIdentifier)
                         .font(.system(size: 15, weight: .medium))
                         .foregroundStyle(AppTheme.Colors.textPrimary)
                         .lineLimit(1)
@@ -363,6 +376,7 @@ struct LoginView: View {
 
     private var canSubmitPassword: Bool {
         guard !isLoading, !password.isEmpty else { return false }
+        if !normalizedIdentifier.contains("@") { return true }
         if accountExists == true { return true }
         if password.count < 12 { return false }
         if !hasOnboardingEstablishmentForRegister { return false }
@@ -402,8 +416,13 @@ struct LoginView: View {
         errorMessage = nil
         isCheckingEmail = true
         do {
-            let exists = try await authService.checkAccountExists(email: normalizedEmail)
+            let exists = try await authService.checkAccountExists(identifier: normalizedIdentifier)
             await MainActor.run {
+                if !normalizedIdentifier.contains("@"), !exists {
+                    errorMessage = "Aucun compte avec cet identifiant. Demandez à votre commerçant de créer un accès employé (MyFidpass → Équipe)."
+                    isCheckingEmail = false
+                    return
+                }
                 accountExists = exists
                 step = .password
                 password = ""
@@ -434,11 +453,13 @@ struct LoginView: View {
         isLoading = true
         defer { isLoading = false }
         do {
-            if exists {
-                try await authService.login(email: normalizedEmail, password: password)
+            if !normalizedIdentifier.contains("@") {
+                try await authService.login(email: normalizedIdentifier, password: password)
+            } else if exists {
+                try await authService.login(email: normalizedIdentifier, password: password)
             } else {
                 try await authService.register(
-                    email: normalizedEmail,
+                    email: normalizedIdentifier,
                     password: password,
                     name: nil,
                     googlePlaceId: nil,
