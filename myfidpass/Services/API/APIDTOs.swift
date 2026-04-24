@@ -80,6 +80,24 @@ struct AuthUser: Decodable {
     let phone: String?
     /// Compte administrateur plateforme (`is_admin` côté API).
     let isAdmin: Bool?
+    /// Rôle dans l’espace commerçant : `owner` | `manager` | `staff` (`workspace_role` API).
+    let workspaceRole: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, email, name, phone
+        case isAdmin = "is_admin"
+        case workspaceRole = "workspace_role"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(String.self, forKey: .id)
+        email = try c.decodeIfPresent(String.self, forKey: .email)
+        name = try c.decodeIfPresent(String.self, forKey: .name)
+        phone = try c.decodeIfPresent(String.self, forKey: .phone)
+        isAdmin = try c.decodeIfPresent(Bool.self, forKey: .isAdmin)
+        workspaceRole = try c.decodeIfPresent(String.self, forKey: .workspaceRole)
+    }
 }
 
 struct BusinessDTO: Decodable {
@@ -89,6 +107,30 @@ struct BusinessDTO: Decodable {
     let organizationName: String?
     let createdAt: String?
     let dashboardToken: String?
+
+    /// Tolère champs manquants / vides côté API (sinon toute la synchro échoue sur `GET /me`).
+    private enum CodingKeys: String, CodingKey {
+        case id, name, slug, organizationName, createdAt, dashboardToken
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        var rawId = (try c.decodeIfPresent(String.self, forKey: .id) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if rawId.isEmpty { rawId = "legacy-\(UUID().uuidString)" }
+        id = rawId
+        var n = (try c.decodeIfPresent(String.self, forKey: .name) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if n.isEmpty { n = "Commerce" }
+        name = n
+        var s = (try c.decodeIfPresent(String.self, forKey: .slug) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if s.isEmpty { s = id }
+        slug = s
+        organizationName = try c.decodeIfPresent(String.self, forKey: .organizationName)
+        createdAt = try c.decodeIfPresent(String.self, forKey: .createdAt)
+        dashboardToken = try c.decodeIfPresent(String.self, forKey: .dashboardToken)
+    }
 }
 
 // MARK: - GET /api/auth/config
@@ -306,17 +348,298 @@ struct PointsRewardTierDTO: Decodable {
 
 // MARK: - GET .../dashboard/stats
 
-struct NotificationCampaignInsightDTO: Decodable, Sendable, Identifiable {
+struct NotificationCampaignInsightDTO: Codable, Sendable, Identifiable {
     var id: String { batchId }
     let batchId: String
     let triggerName: String?
     let createdAt: String?
     let sentTotal: Int?
     let recipientsDistinct: Int?
-    let returnedWithin7d: Int?
+    /// Passages en caisse distincts (`points_add`) dans les 48 h après l’envoi de la campagne.
+    let returnedWithin48h: Int?
+    let notificationTitle: String?
+    let message: String?
+    let sentPasskit: Int?
+    let sentWebPush: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case batchId = "batch_id"
+        case triggerName = "trigger_name"
+        case createdAt = "created_at"
+        case sentTotal = "sent_total"
+        case recipientsDistinct = "recipients_distinct"
+        case returnedWithin48h = "returned_within_48h"
+        case returnedWithin7dLegacy = "returned_within_7d"
+        case title
+        case notificationTitle = "notification_title"
+        case pushTitle = "push_title"
+        case message
+        case body
+        case pushBody = "push_body"
+        case content
+        case messagePreview = "message_preview"
+        case sentPasskit = "sent_passkit"
+        case passkitSent = "passkit_sent"
+        case sentWebPush = "sent_web_push"
+        case sentWeb = "sent_web"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let rawBatch = (try c.decodeIfPresent(String.self, forKey: .batchId) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if !rawBatch.isEmpty {
+            batchId = rawBatch
+        } else {
+            // L’API peut renvoyer des entrées d’historique sans `batch_id` — ne pas bloquer
+            // toute la synchro (`GET .../dashboard/stats`).
+            let created = (try? c.decodeIfPresent(String.self, forKey: .createdAt)) ?? ""
+            let trig = (try? c.decodeIfPresent(String.self, forKey: .triggerName)) ?? ""
+            let st = (try? c.decodeIfPresent(Int.self, forKey: .sentTotal))
+            var synthetic = "legacy"
+            if !created.isEmpty { synthetic += ":\(created)" }
+            if !trig.isEmpty { synthetic += ":\(trig)" }
+            if let st { synthetic += ":\(st)" }
+            if synthetic == "legacy" { synthetic = "legacy:\(UUID().uuidString)" }
+            batchId = synthetic
+        }
+        triggerName = try c.decodeIfPresent(String.self, forKey: .triggerName)
+        createdAt = try c.decodeIfPresent(String.self, forKey: .createdAt)
+        sentTotal = try c.decodeIfPresent(Int.self, forKey: .sentTotal)
+        recipientsDistinct = try c.decodeIfPresent(Int.self, forKey: .recipientsDistinct)
+        if let v = try c.decodeIfPresent(Int.self, forKey: .returnedWithin48h) {
+            returnedWithin48h = v
+        } else {
+            returnedWithin48h = try c.decodeIfPresent(Int.self, forKey: .returnedWithin7dLegacy)
+        }
+        notificationTitle = Self.firstNonEmptyString(
+            c,
+            keys: [.title, .notificationTitle, .pushTitle]
+        )
+        message = Self.firstNonEmptyString(
+            c,
+            keys: [.message, .body, .pushBody, .content, .messagePreview]
+        )
+        sentPasskit = Self.firstInt(
+            c,
+            keys: [.sentPasskit, .passkitSent]
+        )
+        sentWebPush = Self.firstInt(
+            c,
+            keys: [.sentWebPush, .sentWeb]
+        )
+    }
+
+    init(
+        batchId: String,
+        triggerName: String?,
+        createdAt: String?,
+        sentTotal: Int?,
+        recipientsDistinct: Int?,
+        returnedWithin48h: Int?,
+        notificationTitle: String? = nil,
+        message: String? = nil,
+        sentPasskit: Int? = nil,
+        sentWebPush: Int? = nil
+    ) {
+        self.batchId = batchId
+        self.triggerName = triggerName
+        self.createdAt = createdAt
+        self.sentTotal = sentTotal
+        self.recipientsDistinct = recipientsDistinct
+        self.returnedWithin48h = returnedWithin48h
+        self.notificationTitle = notificationTitle
+        self.message = message
+        self.sentPasskit = sentPasskit
+        self.sentWebPush = sentWebPush
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(batchId, forKey: .batchId)
+        try c.encodeIfPresent(triggerName, forKey: .triggerName)
+        try c.encodeIfPresent(createdAt, forKey: .createdAt)
+        try c.encodeIfPresent(sentTotal, forKey: .sentTotal)
+        try c.encodeIfPresent(recipientsDistinct, forKey: .recipientsDistinct)
+        try c.encodeIfPresent(returnedWithin48h, forKey: .returnedWithin48h)
+        try c.encodeIfPresent(notificationTitle, forKey: .title)
+        try c.encodeIfPresent(message, forKey: .message)
+        try c.encodeIfPresent(sentPasskit, forKey: .sentPasskit)
+        try c.encodeIfPresent(sentWebPush, forKey: .sentWebPush)
+    }
+
+    private static func firstNonEmptyString(
+        _ c: KeyedDecodingContainer<CodingKeys>,
+        keys: [CodingKeys]
+    ) -> String? {
+        for k in keys {
+            guard let s = try? c.decodeIfPresent(String.self, forKey: k) else { continue }
+            let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !t.isEmpty { return t }
+        }
+        return nil
+    }
+
+    private static func firstInt(
+        _ c: KeyedDecodingContainer<CodingKeys>,
+        keys: [CodingKeys]
+    ) -> Int? {
+        for k in keys {
+            if let i = try? c.decodeIfPresent(Int.self, forKey: k) { return i }
+        }
+        return nil
+    }
 }
 
-struct BusinessStatsResponse: Decodable, Sendable {
+extension NotificationCampaignInsightDTO {
+    /// Combine deux entrées même `batch_id` (ex. `dashboard/stats` + `.../notifications/stats`) en complétant les champs manquants.
+    func mergedWith(_ other: NotificationCampaignInsightDTO) -> NotificationCampaignInsightDTO {
+        NotificationCampaignInsightDTO(
+            batchId: batchId,
+            triggerName: triggerName ?? other.triggerName,
+            createdAt: createdAt ?? other.createdAt,
+            sentTotal: sentTotal ?? other.sentTotal,
+            recipientsDistinct: recipientsDistinct ?? other.recipientsDistinct,
+            returnedWithin48h: returnedWithin48h ?? other.returnedWithin48h,
+            notificationTitle: notificationTitle ?? other.notificationTitle,
+            message: message ?? other.message,
+            sentPasskit: sentPasskit ?? other.sentPasskit,
+            sentWebPush: sentWebPush ?? other.sentWebPush
+        )
+    }
+}
+
+// MARK: - GET .../notifications/stats (enrichit l’historique des campagnes côté stats)
+
+/// Clé d’objet `last_batch` (compteurs variables selon version API).
+private struct LastBatchStatsDecodable: Decodable {
+    private let batchId: String?
+    private let triggerName: String?
+    private let createdAt: String?
+    private let sentTotal: Int?
+    private let recipientsDistinct: Int?
+    private let returnedWithin48h: Int?
+    private let title: String?
+    private let message: String?
+    private let body: String?
+    private let sentPasskit: Int?
+    private let sentWeb: Int?
+    private let sentWebPush: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case batchId = "batch_id"
+        case triggerName = "trigger_name"
+        case createdAt = "created_at"
+        case sentTotal = "sent_total"
+        case recipientsDistinct = "recipients_distinct"
+        case returnedWithin48h = "returned_within_48h"
+        case returnedWithin7dLegacy = "returned_within_7d"
+        case title
+        case message
+        case body
+        case sentPasskit = "sent_passkit"
+        case sentWeb = "sent_web"
+        case sentWebPush = "sent_web_push"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        batchId = try c.decodeIfPresent(String.self, forKey: .batchId)
+        triggerName = try c.decodeIfPresent(String.self, forKey: .triggerName)
+        createdAt = try c.decodeIfPresent(String.self, forKey: .createdAt)
+        sentTotal = try c.decodeIfPresent(Int.self, forKey: .sentTotal)
+        recipientsDistinct = try c.decodeIfPresent(Int.self, forKey: .recipientsDistinct)
+        if let v = try c.decodeIfPresent(Int.self, forKey: .returnedWithin48h) {
+            returnedWithin48h = v
+        } else {
+            returnedWithin48h = try c.decodeIfPresent(Int.self, forKey: .returnedWithin7dLegacy)
+        }
+        title = try c.decodeIfPresent(String.self, forKey: .title)
+        message = try c.decodeIfPresent(String.self, forKey: .message)
+        body = try c.decodeIfPresent(String.self, forKey: .body)
+        sentPasskit = try c.decodeIfPresent(Int.self, forKey: .sentPasskit)
+        sentWeb = try c.decodeIfPresent(Int.self, forKey: .sentWeb)
+        sentWebPush = try c.decodeIfPresent(Int.self, forKey: .sentWebPush)
+    }
+
+    func asCampaignInsight() -> NotificationCampaignInsightDTO? {
+        let mergedMessage = [message, body]
+            .compactMap { $0 }
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty }
+        let mergedTitle = title
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .flatMap { $0.isEmpty ? nil : $0 }
+        // N’invente pas une « campagne » si le JSON n’a qu’une date (compteurs & texte vides) — sinon une ligne 0/0/0 inutile.
+        let hasSignal = (batchId?.isEmpty == false)
+            || (triggerName?.isEmpty == false)
+            || (sentTotal ?? 0) > 0
+            || (recipientsDistinct ?? 0) > 0
+            || mergedTitle != nil
+            || mergedMessage != nil
+        guard hasSignal else { return nil }
+        let web = sentWebPush ?? sentWeb
+        return NotificationCampaignInsightDTO(
+            batchId: (batchId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+                ? (batchId ?? "batch")
+                : "last-batch-\(createdAt ?? "unknown")",
+            triggerName: triggerName,
+            createdAt: createdAt,
+            sentTotal: sentTotal,
+            recipientsDistinct: recipientsDistinct,
+            returnedWithin48h: returnedWithin48h,
+            notificationTitle: mergedTitle,
+            message: mergedMessage,
+            sentPasskit: sentPasskit,
+            sentWebPush: web
+        )
+    }
+}
+
+/// Agrège les listes d’envois retournées par le dashboard notif. (certaines clés sont optionnelles côté SaaS).
+struct NotificationStatsEndpointPayload: Decodable {
+    let campaigns: [NotificationCampaignInsightDTO]
+
+    private enum K: String, CodingKey {
+        case notificationCampaigns = "notification_campaigns"
+        case campaigns
+        case batches
+        case recentBatches = "recent_batches"
+        case history
+        case notificationHistory = "notification_history"
+        case sendHistory = "send_history"
+        case lastBatch = "last_batch"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: K.self)
+        var buf: [NotificationCampaignInsightDTO] = []
+        let arrayKeys: [K] = [
+            .notificationCampaigns, .campaigns, .batches, .recentBatches, .history, .notificationHistory, .sendHistory,
+        ]
+        for k in arrayKeys {
+            if let more = try c.decodeIfPresent([NotificationCampaignInsightDTO].self, forKey: k) {
+                buf.append(contentsOf: more)
+            }
+        }
+        if let many = try? c.decodeIfPresent([LastBatchStatsDecodable].self, forKey: .lastBatch) {
+            for one in many {
+                if let insight = one.asCampaignInsight() { buf.append(insight) }
+            }
+        } else if let one = try c.decodeIfPresent(LastBatchStatsDecodable.self, forKey: .lastBatch),
+                  let insight = one.asCampaignInsight() {
+            buf.append(insight)
+        }
+        var seen = Set<String>()
+        var out: [NotificationCampaignInsightDTO] = []
+        for row in buf where seen.insert(row.batchId).inserted {
+            out.append(row)
+        }
+        campaigns = out
+    }
+}
+
+struct BusinessStatsResponse: Codable, Sendable {
     let period: String?
     let periodKey: String?
     let membersCount: Int?
@@ -342,11 +665,91 @@ struct BusinessStatsResponse: Decodable, Sendable {
     let businessName: String?
 }
 
+// MARK: - GET .../dashboard/stats/traffic
+
+struct DashboardTrafficHourBucketDTO: Codable, Sendable {
+    let hour: Int
+    let count: Int
+}
+
+struct DashboardTrafficWeekdayBucketDTO: Codable, Sendable {
+    let weekday: Int
+    let label: String?
+    let count: Int
+}
+
+struct DashboardTrafficPeakHourDTO: Codable, Sendable {
+    let hour: Int
+    let count: Int
+    let pctOfTotal: Double?
+}
+
+struct DashboardTrafficPeakWeekdayDTO: Codable, Sendable {
+    let weekday: Int
+    let label: String?
+    let count: Int
+    let pctOfTotal: Double?
+}
+
+struct DashboardTrafficPatternsResponse: Codable, Sendable {
+    let period: String?
+    let periodKey: String?
+    let timezoneNote: String?
+    /// Ex. `points_add_and_reward_redeem` — crédits caisse + utilisations récompense.
+    let basis: String?
+    let totalEvents: Int?
+    let byHour: [DashboardTrafficHourBucketDTO]?
+    let byWeekday: [DashboardTrafficWeekdayBucketDTO]?
+    let peakHour: DashboardTrafficPeakHourDTO?
+    let peakWeekday: DashboardTrafficPeakWeekdayDTO?
+}
+
 // MARK: - GET .../dashboard/members
 
 struct BusinessMembersResponse: Decodable {
     let members: [MemberDTO]
     let total: Int?
+
+    private enum CodingKeys: String, CodingKey { case members, total }
+
+    /// 1ʳᵉ phase sync / tests : conteneur vide (pas fourni par le membre `init(from:)` seul).
+    init(members: [MemberDTO], total: Int?) {
+        self.members = members
+        self.total = total
+    }
+
+    /// Décodage large : ignore les entrées sans `id` (au lieu de faire échouer toute la page).
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let rows = try c.decodeIfPresent([MemberAPIRow].self, forKey: .members) ?? []
+        members = rows.compactMap { $0.toMemberDTO() }
+        total = try c.decodeIfPresent(Int.self, forKey: .total)
+    }
+}
+
+/// Décodage intermédiaire : id optionnel côté fil, transformé en `MemberDTO?`.
+private struct MemberAPIRow: Decodable {
+    let id: String?
+    let name: String?
+    let email: String?
+    let points: Int?
+    let createdAt: String?
+    let lastVisitAt: String?
+    let categoryIds: [String]?
+
+    func toMemberDTO() -> MemberDTO? {
+        let trimmed = (id ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return MemberDTO(
+            id: trimmed,
+            name: name,
+            email: email,
+            points: points,
+            createdAt: createdAt,
+            lastVisitAt: lastVisitAt,
+            categoryIds: categoryIds
+        )
+    }
 }
 
 struct MemberDTO: Decodable {
@@ -358,6 +761,25 @@ struct MemberDTO: Decodable {
     let lastVisitAt: String?
     /// Identifiants des catégories auxquelles le membre appartient (sync backend).
     let categoryIds: [String]?
+
+    /// Utilisé par le décodage large des listes ; le décodage JSON direct d’un seul `MemberDTO` reste le synthétiseur.
+    fileprivate init(
+        id: String,
+        name: String?,
+        email: String?,
+        points: Int?,
+        createdAt: String?,
+        lastVisitAt: String?,
+        categoryIds: [String]?
+    ) {
+        self.id = id
+        self.name = name
+        self.email = email
+        self.points = points
+        self.createdAt = createdAt
+        self.lastVisitAt = lastVisitAt
+        self.categoryIds = categoryIds
+    }
 }
 
 // MARK: - GET .../dashboard/transactions
@@ -365,6 +787,12 @@ struct MemberDTO: Decodable {
 struct BusinessTransactionsResponse: Decodable {
     let transactions: [TransactionDTO]
     let total: Int?
+
+    /// 1ʳᵉ phase sync : liste vide (le synthétiseur `init(from:)` seul n’expose pas d’init membre public).
+    init(transactions: [TransactionDTO], total: Int?) {
+        self.transactions = transactions
+        self.total = total
+    }
 }
 
 struct TransactionDTO: Decodable {
@@ -509,6 +937,8 @@ struct FlyerStateDTO: Codable, Equatable {
     var flyerLogoMaxWFrac: Double
     /// Hauteur max du logo / hauteur canvas (~0.06–0.36).
     var flyerLogoMaxHFrac: Double
+    /// Détourage auto désactivé : envoi du logo avec fond d’origine (lisibilité sur dégradé clair).
+    var flyerLogoKeepSourceBackground: Bool
 
     static let templateIdFixed = "noir-or-roue"
 
@@ -533,6 +963,7 @@ struct FlyerStateDTO: Codable, Equatable {
             colorAccent: "#ffffff",
             colorBgTop: "#0f172a",
             colorBgBottom: "#020617",
+            /// `png` = texture web `spinflyer` ; `segments` = secteurs aplats (sans image).
             wheelRenderMode: "png",
             wheelColorOdd: "#fbbf24",
             wheelColorEven: "#f97316",
@@ -551,7 +982,8 @@ struct FlyerStateDTO: Codable, Equatable {
             flyerQrOutlineWidth: 5,
             flyerLogoCenterYFrac: 0.092,
             flyerLogoMaxWFrac: 0.62,
-            flyerLogoMaxHFrac: 0.15
+            flyerLogoMaxHFrac: 0.15,
+            flyerLogoKeepSourceBackground: false
         )
     }
 
@@ -593,7 +1025,8 @@ struct FlyerStateDTO: Codable, Equatable {
         flyerQrOutlineWidth: Double,
         flyerLogoCenterYFrac: Double,
         flyerLogoMaxWFrac: Double,
-        flyerLogoMaxHFrac: Double
+        flyerLogoMaxHFrac: Double,
+        flyerLogoKeepSourceBackground: Bool
     ) {
         self.templateId = templateId
         self.headline = headline
@@ -633,6 +1066,7 @@ struct FlyerStateDTO: Codable, Equatable {
         self.flyerLogoCenterYFrac = flyerLogoCenterYFrac
         self.flyerLogoMaxWFrac = flyerLogoMaxWFrac
         self.flyerLogoMaxHFrac = flyerLogoMaxHFrac
+        self.flyerLogoKeepSourceBackground = flyerLogoKeepSourceBackground
     }
 
     init(from decoder: Decoder) throws {
@@ -659,7 +1093,8 @@ struct FlyerStateDTO: Codable, Equatable {
         colorAccent = Self.safeHex(try c.decodeIfPresent(String.self, forKey: .colorAccent), base.colorAccent)
         colorBgTop = Self.safeHex(try c.decodeIfPresent(String.self, forKey: .colorBgTop), base.colorBgTop)
         colorBgBottom = Self.safeHex(try c.decodeIfPresent(String.self, forKey: .colorBgBottom), base.colorBgBottom)
-        wheelRenderMode = "png"
+        let wr = try c.decodeIfPresent(String.self, forKey: .wheelRenderMode) ?? base.wheelRenderMode
+        wheelRenderMode = Self.normalizeWheelRenderMode(wr)
         wheelColorOdd = Self.safeHex(oddRaw, base.wheelColorOdd)
         wheelColorEven = Self.safeHex(evenRaw, base.wheelColorEven)
         wheelSegmentOffsetDeg = Self.clampWheelOffset(try c.decodeIfPresent(Double.self, forKey: .wheelSegmentOffsetDeg) ?? base.wheelSegmentOffsetDeg)
@@ -687,6 +1122,8 @@ struct FlyerStateDTO: Codable, Equatable {
         flyerLogoMaxHFrac = Self.clampLogoMaxHFrac(
             try c.decodeIfPresent(Double.self, forKey: .flyerLogoMaxHFrac) ?? base.flyerLogoMaxHFrac
         )
+        flyerLogoKeepSourceBackground = try c.decodeIfPresent(Bool.self, forKey: .flyerLogoKeepSourceBackground)
+            ?? base.flyerLogoKeepSourceBackground
     }
 
     mutating func normalizeClamps() {
@@ -694,7 +1131,7 @@ struct FlyerStateDTO: Codable, Equatable {
         /// et l’aperçu retombe sur le PNG IA seul (pas de roue / QR canvas).
         Self.coerceFiniteNumericFields(&self)
         templateId = Self.templateIdFixed
-        wheelRenderMode = "png"
+        wheelRenderMode = Self.normalizeWheelRenderMode(wheelRenderMode)
         wheelSegmentOffsetDeg = Self.clampWheelOffset(wheelSegmentOffsetDeg)
         colorPrimary = Self.safeHex(colorPrimary, Self.default.colorPrimary)
         colorSecondary = Self.safeHex(colorSecondary, Self.default.colorSecondary)
@@ -746,13 +1183,19 @@ struct FlyerStateDTO: Codable, Equatable {
         case headlineFontId, headlineTextColor, headlineStrokeColor, headlineGiftStrokeColor, headlineStrokeWidth
         case headlineLogoGapPct, headlineLetterSpacing, headlineSizePct
         case flyerFooterTextScalePct, flyerWheelLabelScalePct, flyerBgOverlayPct, flyerQrOutlineWidth
-        case flyerLogoCenterYFrac, flyerLogoMaxWFrac, flyerLogoMaxHFrac
+        case flyerLogoCenterYFrac, flyerLogoMaxWFrac, flyerLogoMaxHFrac, flyerLogoKeepSourceBackground
     }
 
     private static func safeHex(_ v: String?, _ fallback: String) -> String {
         let t = (v ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if t.range(of: #"^#[0-9A-Fa-f]{6}$"#, options: .regularExpression) != nil { return t }
         return fallback
+    }
+
+    private static func normalizeWheelRenderMode(_ raw: String) -> String {
+        let t = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if t == "segments" { return "segments" }
+        return "png"
     }
 
     private static func clampWheelOffset(_ v: Double) -> Double {
@@ -956,6 +1399,8 @@ struct FlyerPutPayload: Encodable {
 
     func encodedJSON() throws -> Data {
         let enc = JSONEncoder()
+        /// **camelCase** pour le corps `state` (aligné aperçu `/assets/app-flyer-qr-draw*.js` : `r.wheelRenderMode`).
+        /// Le `JSONEncoder` de `APIClient` utilise le snake, mais ici l’API flyer attend les mêmes clés que l’éditeur.
         enc.keyEncodingStrategy = .useDefaultKeys
         return try enc.encode(self)
     }
@@ -1011,4 +1456,69 @@ struct AdminEventRow: Decodable, Identifiable {
     let payloadJson: String?
     let stripeEventId: String?
     let createdAt: String?
+}
+
+// MARK: - GET/POST/DELETE …/dashboard/team (espace commerçant, rôles)
+
+/// Liste des accès « équipe » pour un commerce (owner, manager, staff).
+struct WorkspaceTeamListResponse: Decodable {
+    let members: [WorkspaceTeamMemberDTO]
+
+    enum CodingKeys: String, CodingKey {
+        case members
+        case items
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        if let m = try c.decodeIfPresent([WorkspaceTeamMemberDTO].self, forKey: .members) {
+            members = m
+        } else if let i = try c.decodeIfPresent([WorkspaceTeamMemberDTO].self, forKey: .items) {
+            members = i
+        } else {
+            members = []
+        }
+    }
+}
+
+struct WorkspaceTeamMemberDTO: Decodable, Identifiable {
+    let membershipId: String?
+    let userId: String?
+    let email: String?
+    let name: String?
+    let role: String?
+    let status: String?
+    let createdAt: String?
+
+    var id: String {
+        if let m = membershipId?.trimmingCharacters(in: .whitespacesAndNewlines), !m.isEmpty { return "m:\(m)" }
+        if let u = userId?.trimmingCharacters(in: .whitespacesAndNewlines), !u.isEmpty { return "u:\(u)" }
+        if let e = email?.trimmingCharacters(in: .whitespacesAndNewlines), !e.isEmpty { return "e:\(e)" }
+        return "row:\(name ?? ""):\(status ?? ""):\(role ?? "")"
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case membershipId = "membership_id"
+        case userId = "user_id"
+        case email, name, role, status
+        case createdAt = "created_at"
+    }
+}
+
+struct WorkspaceTeamInviteResponse: Decodable {
+    let ok: Bool?
+    let message: String?
+    /// Présent si le backend a tenté d’envoyer un e-mail transactionnel (Resend/SMTP).
+    let emailSent: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case ok, message
+        case emailSent = "email_sent"
+    }
+}
+
+struct WorkspaceTeamInviteBody: Encodable {
+    let email: String
+    let name: String?
+    let role: String?
 }
