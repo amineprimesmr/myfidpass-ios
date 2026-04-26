@@ -24,6 +24,7 @@ import fr.myfidpass.data.dto.CreateMemberResponse
 import fr.myfidpass.data.dto.CreditMemberRequest
 import fr.myfidpass.data.dto.CreditPointsResponse
 import fr.myfidpass.data.dto.DashboardEvolutionResponse
+import fr.myfidpass.data.dto.DashboardTrafficPatternsResponse
 import fr.myfidpass.data.dto.ForgotPasswordRequest
 import fr.myfidpass.data.dto.GoogleAuthRequest
 import fr.myfidpass.data.dto.DeviceRegisterRequest
@@ -40,6 +41,9 @@ import fr.myfidpass.data.dto.PatchGameRequest
 import fr.myfidpass.data.dto.PaymentReconcileResponse
 import fr.myfidpass.data.dto.PlacesAutocompleteResponse
 import fr.myfidpass.data.dto.PlacesPlaceDetailsResponse
+import fr.myfidpass.data.dto.WorkspaceTeamInviteRequest
+import fr.myfidpass.data.dto.WorkspaceTeamInviteResponse
+import fr.myfidpass.data.dto.WorkspaceTeamListResponse
 import fr.myfidpass.data.dto.PortalUrlResponse
 import fr.myfidpass.data.dto.RegisterRequest
 import fr.myfidpass.data.dto.ReceiptChallengeRequest
@@ -118,6 +122,12 @@ interface MyfidpassApi {
         @Query("period") period: String? = null,
     ): BusinessStatsResponse
 
+    @GET("/api/businesses/{slug}/dashboard/stats/traffic")
+    suspend fun businessStatsTraffic(
+        @Path("slug") slug: String,
+        @Query("period") period: String? = null,
+    ): DashboardTrafficPatternsResponse
+
     @GET("/api/businesses/{slug}/dashboard/evolution")
     suspend fun businessEvolution(
         @Path("slug") slug: String,
@@ -143,6 +153,7 @@ interface MyfidpassApi {
         @Query("memberId") memberId: String? = null,
         @Query("days") days: Int? = null,
         @Query("type") type: String? = null,
+        @Query("sort") sort: String? = null,
     ): BusinessTransactionsResponse
 
     @GET("/api/businesses/{slug}/dashboard/settings")
@@ -415,4 +426,21 @@ interface MyfidpassApi {
         @Query("limit") limit: Int? = 50,
         @Query("filter") filter: String? = null,
     ): AdminEventsListResponse
+
+    @GET("/api/businesses/{slug}/dashboard/team")
+    suspend fun workspaceTeamList(
+        @Path("slug") slug: String,
+    ): WorkspaceTeamListResponse
+
+    @POST("/api/businesses/{slug}/dashboard/team/invites")
+    suspend fun workspaceTeamInvite(
+        @Path("slug") slug: String,
+        @Body body: WorkspaceTeamInviteRequest,
+    ): WorkspaceTeamInviteResponse
+
+    @DELETE("/api/businesses/{slug}/dashboard/team/members/{memberId}")
+    suspend fun workspaceTeamRevoke(
+        @Path("slug") slug: String,
+        @Path("memberId") memberId: String,
+    )
 }

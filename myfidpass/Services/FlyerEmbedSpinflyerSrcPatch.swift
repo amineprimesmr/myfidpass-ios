@@ -2,27 +2,50 @@
 //  FlyerEmbedSpinflyerSrcPatch.swift
 //  myfidpass
 //
-//  L’aperçu flyer s’exécute dans `WKWebView` (flyer-embed + app-flyer-qr-draw.js) : la texture roue
-//  vient d’une **URL** sur myfidpass.fr (`/assets/spinflyer-*.png`), **pas** de l’`Images.xcassets` Xcode.
-//  Si l’utilisateur teste un mauvais lien, oubli de `www`, hash obsolète, etc., le canvas ne charge qu’
-//  les teintes (secteurs) — d’où l’idée d’échec côté « mode png ». On patche le setter `src` des `Image`
-//  pour forcer l’**URL actuelle** connue (cache + refresh en tâche de fond).
+//  Aperçu `WKWebView` : le bundle web peut résoudre la texture roue en URL `/assets/spinflyer…` ou chemin
+//  `flyer-wheels`. **Ne jamais** traiter les longues `data:image/…` génériques comme la roue : ce sont en pratique
+//  toujours des **logos commerce** (`custom_logo_data_url`) — l’ancien seuil `length > 8000` les remplaçait par
+//  la texture spinflyer (bug « la roue en logo »).
 //
 
 import Foundation
+import UIKit
 import WebKit
 
 enum FlyerEmbedSpinflyerSrcPatch {
     private static let defaultsKey = "myfidpass.flyerEmbed.spinflyerAssetAbsoluteURL"
     /// Dernier chemin connu côté build Vite (vérifié 200) — le refresh tâche de fond met à jour quand le hash change.
     private static let fallbackTextureURL = "https://www.myfidpass.fr/assets/spinflyer-BHvVeFjE.png?inline"
+    private static var cachedXcodeTextureDataURL: String?
 
-    /// URL utilisée par le user script d’injection (petite, pas de gros base64).
+    /// Texture injectée dans le patch `src` (Xcode d’abord, puis cache réseau, puis URL fixe myfidpass.fr).
     static var preferredTextureAbsoluteURL: String {
+        if cachedXcodeTextureDataURL == nil, let fromAsset = Self.jpegDataURLFromXcodeSpinflyerAsset() {
+            cachedXcodeTextureDataURL = fromAsset
+        }
+        if let c = cachedXcodeTextureDataURL, !c.isEmpty { return c }
         if let c = UserDefaults.standard.string(forKey: defaultsKey)?.trimmingCharacters(in: .whitespacesAndNewlines), !c.isEmpty {
             if c.hasPrefix("http://") || c.hasPrefix("https://") { return c }
         }
         return fallbackTextureURL
+    }
+
+    /// Image catalogue `spinflyer` — JPEG raisonnable pour rester dans des limites de user script WebKit.
+    private static func jpegDataURLFromXcodeSpinflyerAsset() -> String? {
+        guard let ui = UIImage(named: "spinflyer") else { return nil }
+        let maxSide: CGFloat = 900
+        let s = max(ui.size.width, ui.size.height)
+        let scale = s > maxSide ? maxSide / s : 1
+        let newSize = CGSize(width: max(1, ui.size.width * scale), height: max(1, ui.size.height * scale))
+        let img: UIImage
+        if scale < 0.999 {
+            let r = UIGraphicsImageRenderer(size: newSize)
+            img = r.image { _ in ui.draw(in: CGRect(origin: .zero, size: newSize)) }
+        } else {
+            img = ui
+        }
+        guard let j = img.jpegData(compressionQuality: 0.86), !j.isEmpty else { return nil }
+        return "data:image/jpeg;base64,\(j.base64EncodedString())"
     }
 
     static func addTo(_ config: WKWebViewConfiguration) {
@@ -32,8 +55,13 @@ enum FlyerEmbedSpinflyerSrcPatch {
           const U_FIX='\(u)';
           if(!U_FIX)return;
           const isSpin = function(s){
-            try { return typeof s==='string' && s.indexOf('spinflyer')>=0 && s.toLowerCase().indexOf('.png')>0; }
-            catch(e){ return false; }
+            try {
+              if (typeof s !== 'string') { return false; }
+              if (s.indexOf('spinflyer') >= 0 && s.toLowerCase().indexOf('.png') > 0) { return true; }
+              if (s.indexOf('/flyer-wheels/') >= 0 || s.indexOf('flyer-wheels') >= 0) { return true; }
+              if (s.indexOf('/assets/spinflyer') >= 0) { return true; }
+            } catch(e) { return false; }
+            return false;
           };
           const p = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'src');
           if (!p || typeof p.set !== 'function') { return; }

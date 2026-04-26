@@ -20,6 +20,8 @@ extension Notification.Name {
     static let myfidpassOpenCampaignsTab = Notification.Name("myfidpass.openCampaignsTab")
     /// Sync API terminée (merge Core Data) : rafraîchir les listes qui dépendent de `DataService.updateTrigger`.
     static let myfidpassRemoteSyncDidMerge = Notification.Name("myfidpass.remoteSyncDidMerge")
+    /// Dernière synchro en erreur (hors annulation) : `userInfo[MyfidpassSyncUserInfoKey.message]` = texte localisé.
+    static let myfidpassRemoteSyncDidFail = Notification.Name("myfidpass.remoteSyncDidFail")
     /// Connexion OAuth réseau (Meta / YouTube / TikTok) réussie : le serveur a mis à jour les liens missions — recharger le profil établissement.
     static let myfidpassEngagementOAuthDidComplete = Notification.Name("myfidpass.engagementOAuthDidComplete")
     /// Universal Link https://myfidpass.fr/oauth/… relayé en myfidpass:// (object : URL).
@@ -32,7 +34,7 @@ extension Notification.Name {
     static let myfidpassOpenProgramMyCard = Notification.Name("myfidpass.openProgramMyCard")
     /// Ouvre la feuille d’abonnement Stripe (pastille essai au-dessus du tab bar).
     static let myfidpassOpenMerchantSubscriptionSheet = Notification.Name("myfidpass.openMerchantSubscriptionSheet")
-    /// Ouvre le lien de paiement Stripe promo 1 € (Safari intégré) — ex. depuis la pastille dans l’onglet Commerce.
+    /// Rétrocompat : ancienne pastille « essai → Safari Stripe » — aujourd’hui ouvre le paywall natif (RevenueCat).
     static let myfidpassOpenMerchantTrialStripePaymentLink = Notification.Name("myfidpass.openMerchantTrialStripePaymentLink")
     /// Ferme les réglages (sheet) et pousse l’écran Statistiques sur la navigation Commerce (pas une feuille).
     static let myfidpassOpenMerchantStatistics = Notification.Name("myfidpass.openMerchantStatistics")
@@ -42,4 +44,20 @@ extension Notification.Name {
     static let myfidpassOpenGoogleBusinessHub = Notification.Name("myfidpass.openGoogleBusinessHub")
     /// Demande d'ouverture de la feuille de configuration Google (depuis le hub « non connecté »).
     static let myfidpassOpenGoogleBusinessSetupSheet = Notification.Name("myfidpass.openGoogleBusinessSetupSheet")
+    /// Adopter le matchedPlaceId renvoyé par l'OAuth comme placeId configuré du commerce (userInfo["placeId"]: String).
+    static let myfidpassAdoptMatchedGooglePlaceId = Notification.Name("myfidpass.adoptMatchedGooglePlaceId")
+    /// Relance le tutoriel depuis zéro (debug / tests uniquement).
+    static let myfidpassResetTutorial = Notification.Name("myfidpass.resetTutorial")
+}
+
+/// Clés `userInfo` pour les notifications sync.
+enum MyfidpassSyncUserInfoKey {
+    static let message = "message"
+}
+
+extension NotificationCenter {
+    /// Poste la demande d'adoption avec le Place ID résolu par Google Business OAuth.
+    func postAdoptMatchedGooglePlaceId(_ placeId: String) {
+        post(name: .myfidpassAdoptMatchedGooglePlaceId, object: nil, userInfo: ["placeId": placeId])
+    }
 }

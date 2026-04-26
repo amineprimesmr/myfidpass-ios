@@ -134,7 +134,7 @@ struct GoogleReviewsCommerceDashboardView: View {
             if showTitleRow {
                 HStack(alignment: .firstTextBaseline) {
                     Text("Avis Google")
-                        .font(.system(.title3, design: .rounded, weight: .bold))
+                        .font(.system(.title3, design: .default, weight: .bold))
                         .foregroundStyle(AppTheme.Colors.textPrimary)
                     Spacer()
                     if let t = lastAutoRefresh {
@@ -164,7 +164,7 @@ struct GoogleReviewsCommerceDashboardView: View {
                     if let r = rating {
                         HStack(alignment: .firstTextBaseline, spacing: 4) {
                             Text(String(format: "%.1f", r))
-                                .font(.system(size: 34, weight: .bold, design: .rounded))
+                                .font(.system(size: 34, weight: .bold, design: .default))
                                 .foregroundStyle(AppTheme.Colors.textPrimary)
                             Text("/ 5")
                                 .font(.subheadline.weight(.semibold))
@@ -175,7 +175,7 @@ struct GoogleReviewsCommerceDashboardView: View {
                             .foregroundStyle(AppTheme.Colors.textSecondary)
                     } else {
                         Text("—")
-                            .font(.system(size: 28, weight: .bold, design: .rounded))
+                            .font(.system(size: 28, weight: .bold, design: .default))
                             .foregroundStyle(AppTheme.Colors.textSecondary)
                     }
                 }
@@ -183,7 +183,7 @@ struct GoogleReviewsCommerceDashboardView: View {
                 VStack(alignment: .trailing, spacing: 4) {
                     if let c = count {
                         Text("\(Int(c))")
-                            .font(.system(size: 28, weight: .bold, design: .rounded))
+                            .font(.system(size: 28, weight: .bold, design: .default))
                             .foregroundStyle(AppTheme.Colors.textPrimary)
                         Text("avis au total")
                             .font(.caption.weight(.medium))

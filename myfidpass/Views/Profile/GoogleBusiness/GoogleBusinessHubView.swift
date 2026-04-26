@@ -15,10 +15,34 @@ final class GoogleBusinessHubViewModel: ObservableObject {
     @Published var isLoading: Bool = false
     @Published var isSyncing: Bool = false
     @Published var isRegisteringPubSub: Bool = false
+    @Published var isRetryingLocation: Bool = false
+    @Published var retryLocationError: String?
+    /// Après un refus Google (quota), on évite de relancer l’API en rafale — aligné avec le message « 1 minute ».
+    @Published var retryLocationCooldownUntil: Date?
     @Published var errorMessage: String?
     @Published var notConnected: Bool = false
+    @Published var configuredPlaceId: String?
+    @Published var isPlaceMismatch: Bool = false
+    @Published var unresolvedPlaceBinding: Bool = false
+
+    /// Noms lisibles (via Places API) pour les deux fiches — nil tant que le chargement n'est pas terminé.
+    @Published var configuredPlaceName: String?
+    @Published var matchedPlaceName: String?
+    @Published var isLoadingPlaceNames: Bool = false
 
     private let slug: String
+
+    /// Désactive « Actualiser » tant qu’on est dans la fenêtre post-quota.
+    var isRetryLocationCooldownActive: Bool {
+        guard let u = retryLocationCooldownUntil else { return false }
+        return u > Date()
+    }
+
+    /// Compte à rebours pour l’affichage (secondes), nil si pas de cooldown.
+    func retryLocationCooldownSecondsRemaining(from reference: Date) -> Int? {
+        guard let u = retryLocationCooldownUntil, u > reference else { return nil }
+        return max(0, Int(ceil(u.timeIntervalSince(reference))))
+    }
 
     init(slug: String) {
         self.slug = slug
@@ -29,9 +53,21 @@ final class GoogleBusinessHubViewModel: ObservableObject {
         defer { isLoading = false }
         do {
             let s = try await GoogleBusinessAPI.shared.status(slug: slug)
+            let settings: BusinessSettingsResponse? = try? await APIClient.shared.request(.businessSettings(slug: slug))
+            let configured = settings?.engagementRewards?.googleReview?.placeId?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let expected = (configured?.isEmpty == false) ? configured : nil
+            let matched = s.matchedPlaceId?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let linked = (matched?.isEmpty == false) ? matched : nil
             self.status = s
             self.notConnected = !s.connected
+            self.configuredPlaceId = expected
+            self.isPlaceMismatch = s.connected && expected != nil && linked != nil && expected != linked
+            self.unresolvedPlaceBinding = s.connected && expected != nil && linked == nil && !s.locationPending
             self.errorMessage = nil
+
+            if isPlaceMismatch || unresolvedPlaceBinding {
+                await loadPlaceNames(configuredId: expected, matchedId: linked)
+            }
         } catch APIError.server(let code, _) where code == 409 {
             self.notConnected = true
             self.errorMessage = nil
@@ -39,6 +75,84 @@ final class GoogleBusinessHubViewModel: ObservableObject {
             self.errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
     }
+
+    // MARK: - Noms lisibles
+
+    private func loadPlaceNames(configuredId: String?, matchedId: String?) async {
+        isLoadingPlaceNames = true
+        defer { isLoadingPlaceNames = false }
+        async let cn = fetchPlaceName(configuredId)
+        async let mn = fetchPlaceName(matchedId)
+        let (configName, matchedName) = await (cn, mn)
+        self.configuredPlaceName = configName
+        self.matchedPlaceName = matchedName
+    }
+
+    private func fetchPlaceName(_ placeId: String?) async -> String? {
+        guard let id = placeId?.trimmingCharacters(in: .whitespacesAndNewlines), !id.isEmpty else { return nil }
+        if let res = try? await APIClient.shared.request(.placesPlaceDetails(placeId: id)) as PlacesPlaceDetailsResponse {
+            let name = (res.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let addr = (res.formattedAddress ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !name.isEmpty {
+                return addr.isEmpty ? name : "\(name), \(addr)"
+            }
+        }
+        return String(id.prefix(24)) + (id.count > 24 ? "…" : "")
+    }
+
+    // MARK: - Actions mismatch
+
+    /// Adopte le matchedPlaceId comme fiche configurée du commerce.
+    /// Poste la notification qui déclenche la mise à jour + autosave dans EstablishmentEditorView.
+    func adoptMatchedPlace() {
+        guard let matchedId = status?.matchedPlaceId?.trimmingCharacters(in: .whitespacesAndNewlines), !matchedId.isEmpty else { return }
+        NotificationCenter.default.postAdoptMatchedGooglePlaceId(matchedId)
+        // Mise à jour optimiste locale pour effacer immédiatement la bannière
+        configuredPlaceId = matchedId
+        configuredPlaceName = matchedPlaceName
+        isPlaceMismatch = false
+        unresolvedPlaceBinding = false
+    }
+
+    // MARK: - Pending location retry
+
+    func retryPendingLocation() async {
+        guard !isRetryingLocation else { return }
+        guard !isRetryLocationCooldownActive else { return }
+        isRetryingLocation = true
+        retryLocationError = nil
+        defer { isRetryingLocation = false }
+        do {
+            let result = try await GoogleBusinessAPI.shared.retryPendingLocation(slug: slug)
+            if result.resolved {
+                retryLocationCooldownUntil = nil
+                await load()
+            } else {
+                let raw = result.lastError ?? ""
+                if raw == "token_expired_reconnect_required" || raw.contains("credentials") || raw.contains("invalid_grant") {
+                    retryLocationError = "Session Google expirée. Tapez « Reconnecter »."
+                } else if raw == "no_locations" || raw.contains("no_locations") {
+                    retryLocationError = "Aucune fiche trouvée sur ce compte. Tapez « Reconnecter » avec le compte qui gère votre établissement Google."
+                } else if raw == "google_api_quota" || raw.contains("quota") || raw.contains("Quota") || raw.contains("RESOURCE_EXHAUSTED") {
+                    // Cooldown côté client pour ne pas enchaîner les appels inutiles (soulage l’utilisateur + le serveur).
+                    retryLocationCooldownUntil = Date().addingTimeInterval(75)
+                    retryLocationError = "Limite temporaire côté Google. Patientez ~1 min avant d’appuyer à nouveau sur « Actualiser », ou réessayez plus tard."
+                } else if raw == "retry_cooldown" {
+                    retryLocationError = "Dernière tentative trop récente — patientez quelques secondes."
+                } else if raw.isEmpty {
+                    retryLocationError = "Fiche introuvable. Tapez « Reconnecter »."
+                } else if raw.count > 120 {
+                    retryLocationError = "Erreur Google. Tapez « Reconnecter » pour refaire la connexion."
+                } else {
+                    retryLocationError = raw
+                }
+            }
+        } catch {
+            retryLocationError = "Échec de la connexion. Vérifiez votre réseau et réessayez."
+        }
+    }
+
+    // MARK: - Sync / actions
 
     func syncNow() async {
         guard !isSyncing else { return }
@@ -61,7 +175,6 @@ final class GoogleBusinessHubViewModel: ObservableObject {
         }
     }
 
-    /// Enregistre le topic Google Pub/Sub pour recevoir les événements avis en quasi temps réel.
     func registerPubSubNow() async {
         guard !isRegisteringPubSub else { return }
         isRegisteringPubSub = true
@@ -80,6 +193,8 @@ struct GoogleBusinessHubView: View {
     @StateObject private var vm: GoogleBusinessHubViewModel
     @State private var deepLinkReviewId: String?
     @State private var pushReviewId: String?
+    /// Pousse le rafraîchissement du libellé du cooldown (1 s) tant que `retryLocationCooldownUntil` est actif.
+    @State private var retryCooldownNow = Date()
 
     init(slug: String) {
         self.slug = slug
@@ -91,6 +206,8 @@ struct GoogleBusinessHubView: View {
             VStack(alignment: .leading, spacing: 18) {
                 if vm.notConnected {
                     notConnectedState
+                } else if vm.status?.locationPending == true {
+                    locationPendingBanner
                 } else {
                     headerCard
                     if let err = vm.errorMessage, vm.status == nil {
@@ -109,6 +226,9 @@ struct GoogleBusinessHubView: View {
         .navigationBarTitleDisplayMode(.inline)
         .task {
             await vm.load()
+        }
+        .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { t in
+            if vm.status?.locationPending == true, vm.retryLocationCooldownUntil != nil { retryCooldownNow = t }
         }
         .refreshable {
             await vm.load()
@@ -137,7 +257,7 @@ struct GoogleBusinessHubView: View {
                     .frame(width: 36, height: 36)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(vm.status?.locationTitle ?? "Fiche Google Business")
-                        .font(.system(.title3, design: .rounded, weight: .bold))
+                        .font(.system(.title3, design: .default, weight: .bold))
                         .foregroundStyle(AppTheme.Colors.textPrimary)
                         .lineLimit(1)
                     if let avg = vm.status?.counts.averageRating {
@@ -166,6 +286,11 @@ struct GoogleBusinessHubView: View {
 
             if vm.status?.connected == true && vm.status?.locationPending != true {
                 pubsubInstantRow
+            }
+
+            // Carte mismatch / unresolved toujours en premier plan si présente
+            if vm.isPlaceMismatch || vm.unresolvedPlaceBinding {
+                placeBindingWarningCard
             }
 
             HStack(spacing: 8) {
@@ -211,6 +336,129 @@ struct GoogleBusinessHubView: View {
         )
     }
 
+    // MARK: - Carte mismatch / unresolved (refaite)
+
+    private var placeBindingWarningCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+
+            // — Titre selon le cas —
+            if vm.isPlaceMismatch {
+                Label("Fiches différentes", systemImage: "exclamationmark.triangle.fill")
+                    .font(.footnote.weight(.bold))
+                    .foregroundStyle(.orange)
+            } else {
+                Label("Aucune fiche associée", systemImage: "exclamationmark.triangle.fill")
+                    .font(.footnote.weight(.bold))
+                    .foregroundStyle(.orange)
+            }
+
+            // — Détail des deux fiches (mismatch uniquement) —
+            if vm.isPlaceMismatch {
+                VStack(alignment: .leading, spacing: 6) {
+                    placeRow(
+                        icon: "building.2",
+                        label: "Votre commerce",
+                        name: vm.configuredPlaceName,
+                        fallbackId: vm.configuredPlaceId,
+                        isLoading: vm.isLoadingPlaceNames
+                    )
+                    placeRow(
+                        icon: "link",
+                        label: "Compte Google connecté",
+                        name: vm.matchedPlaceName ?? vm.status?.locationTitle,
+                        fallbackId: vm.status?.matchedPlaceId,
+                        isLoading: vm.isLoadingPlaceNames
+                    )
+                }
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color.orange.opacity(0.07))
+                )
+
+                Text("Ces deux fiches ne correspondent pas. Choisissez la correction à appliquer :")
+                    .font(.caption)
+                    .foregroundStyle(AppTheme.Colors.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                // unresolvedPlaceBinding
+                let commerceName = vm.configuredPlaceName ?? vm.configuredPlaceId ?? "configurée"
+                Text("Le compte Google connecté ne gère aucune fiche correspondant à votre commerce (\(commerceName)). Reconnectez-vous avec le compte Google propriétaire de cette fiche.")
+                    .font(.caption)
+                    .foregroundStyle(AppTheme.Colors.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            // — Boutons d'action —
+            HStack(spacing: 8) {
+                if vm.isPlaceMismatch {
+                    Button {
+                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                        vm.adoptMatchedPlace()
+                    } label: {
+                        Text("Adopter la fiche connectée")
+                            .font(.caption.weight(.semibold))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 7)
+                            .background(Capsule().fill(AppTheme.Colors.success.opacity(0.14)))
+                            .foregroundStyle(AppTheme.Colors.success)
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                Button {
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    NotificationCenter.default.post(name: .myfidpassOpenGoogleBusinessSetupSheet, object: nil)
+                } label: {
+                    Text(vm.isPlaceMismatch ? "Reconnecter" : "Reconnecter un compte")
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 7)
+                        .background(Capsule().fill(AppTheme.Colors.primary.opacity(0.14)))
+                        .foregroundStyle(AppTheme.Colors.primary)
+                }
+                .buttonStyle(.plain)
+
+                Spacer()
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.orange.opacity(0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(Color.orange.opacity(0.25), lineWidth: 1)
+        )
+    }
+
+    /// Ligne nom de fiche avec état de chargement.
+    private func placeRow(icon: String, label: String, name: String?, fallbackId: String?, isLoading: Bool) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: icon)
+                .font(.caption)
+                .foregroundStyle(AppTheme.Colors.textSecondary)
+                .frame(width: 14)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(label)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(AppTheme.Colors.textSecondary)
+                if isLoading && name == nil {
+                    ProgressView().controlSize(.mini)
+                } else {
+                    Text(name ?? fallbackId ?? "—")
+                        .font(.caption)
+                        .foregroundStyle(AppTheme.Colors.textPrimary)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
     @ViewBuilder
     private func stars(rating: Double) -> some View {
         HStack(spacing: 1) {
@@ -235,7 +483,7 @@ struct GoogleBusinessHubView: View {
                     .foregroundStyle(AppTheme.Colors.textSecondary)
             }
             Text(value)
-                .font(.system(.title3, design: .rounded, weight: .bold))
+                .font(.system(.title3, design: .default, weight: .bold))
                 .foregroundStyle(AppTheme.Colors.textPrimary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -400,7 +648,7 @@ struct GoogleBusinessHubView: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(title)
-                        .font(.system(.body, design: .rounded, weight: .semibold))
+                        .font(.system(.body, design: .default, weight: .semibold))
                         .foregroundStyle(AppTheme.Colors.textPrimary)
                     if let badge {
                         Text(badge)
@@ -485,6 +733,92 @@ struct GoogleBusinessHubView: View {
         return "https://search.google.com/local/writereview?placeid=\(placeId)"
     }
 
+    // MARK: - Location pending state
+
+    private var locationPendingBanner: some View {
+        VStack(spacing: 20) {
+            VStack(spacing: 12) {
+                ZStack {
+                    Circle()
+                        .fill(vm.isRetryingLocation ? AppTheme.Colors.primary.opacity(0.10) : Color.orange.opacity(0.12))
+                        .frame(width: 72, height: 72)
+                    if vm.isRetryingLocation {
+                        ProgressView()
+                            .controlSize(.large)
+                            .tint(AppTheme.Colors.primary)
+                    } else {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 28, weight: .semibold))
+                            .foregroundStyle(.orange)
+                    }
+                }
+                Text(vm.isRetryingLocation ? "Identification en cours…" : "Fiche non identifiée")
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(AppTheme.Colors.textPrimary)
+                if let err = vm.retryLocationError {
+                    Text(err)
+                        .font(.subheadline)
+                        .foregroundStyle(vm.isRetryLocationCooldownActive ? AppTheme.Colors.textSecondary : Color.red.opacity(0.85))
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let s = vm.retryLocationCooldownSecondsRemaining(from: retryCooldownNow), s > 0 {
+                        Text("Bouton « Actualiser » disponible dans ~\(s) s")
+                            .font(.caption)
+                            .foregroundStyle(AppTheme.Colors.textSecondary)
+                    }
+                } else {
+                    Text("Votre compte Google Business est connecté mais la fiche n'a pas encore pu être identifiée. Tapez « Actualiser » pour réessayer, ou reconnectez votre compte Google.")
+                        .font(.subheadline)
+                        .foregroundStyle(AppTheme.Colors.textSecondary)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            HStack(spacing: 12) {
+                Button {
+                    Task { await vm.retryPendingLocation() }
+                } label: {
+                    Group {
+                        if vm.isRetryingLocation {
+                            Label("Identification…", systemImage: "arrow.clockwise")
+                        } else if vm.isRetryLocationCooldownActive {
+                            Label("Patientez…", systemImage: "clock")
+                        } else {
+                            Label("Actualiser", systemImage: "arrow.clockwise")
+                        }
+                    }
+                    .font(.subheadline.weight(.semibold))
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 11)
+                    .background(Capsule().fill(AppTheme.Colors.primary.opacity(0.12)))
+                    .foregroundStyle((vm.isRetryLocationCooldownActive && !vm.isRetryingLocation) ? AppTheme.Colors.textSecondary : AppTheme.Colors.primary)
+                }
+                .buttonStyle(.plain)
+                .disabled(vm.isRetryingLocation || vm.isRetryLocationCooldownActive)
+                Button {
+                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                    NotificationCenter.default.post(name: .myfidpassOpenGoogleBusinessSetupSheet, object: nil)
+                } label: {
+                    Label("Reconnecter", systemImage: "arrow.triangle.2.circlepath")
+                        .font(.subheadline.weight(.semibold))
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 11)
+                        .background(Capsule().fill(Color.orange.opacity(0.12)))
+                        .foregroundStyle(.orange)
+                }
+                .buttonStyle(.plain)
+                .disabled(vm.isRetryingLocation)
+            }
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity)
+        .background(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(AppTheme.Colors.cardBackground)
+                .shadow(color: AppTheme.Colors.shadow, radius: 8, x: 0, y: 3)
+        )
+    }
+
     // MARK: - Not connected state
 
     private var notConnectedState: some View {
@@ -503,7 +837,7 @@ struct GoogleBusinessHubView: View {
                         )
                     )
                 Text("Tableau de bord Google Business")
-                    .font(.system(.title2, design: .rounded, weight: .bold))
+                    .font(.system(.title2, design: .default, weight: .bold))
                     .foregroundStyle(AppTheme.Colors.textPrimary)
                     .multilineTextAlignment(.center)
                 Text("Connectez votre compte Google qui gère la fiche de votre établissement pour débloquer toutes les fonctionnalités ci‑dessous.")

@@ -2,7 +2,7 @@
 //  MerchantStatisticsDashboardScreen.swift
 //  myfidpass
 //
-//  Statistiques commerçant : poussé sur la pile de navigation de l’onglet Commerce (pas dans le sheet Réglages).
+//  Statistiques commerçant : navigation classique ou couche « verre » par-dessus Commerce (Revolut).
 //
 
 import SwiftUI
@@ -12,36 +12,34 @@ struct MerchantStatisticsDashboardScreen: View {
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.dismiss) private var dismiss
 
-    /// Commerce : ouvre l’écran détail Revolut. Paywall : fournir la variante qui pousse sur la même `NavigationStack`.
-    var onRequestStatisticDetail: ((CommerceStatisticDetailTopic, String) -> Void)? = nil
+    /// Fond flou / chrome type Revolut (overlay Commerce).
+    var glassOverlayPresentation: Bool = false
+    /// Si non nil : fermeture explicite (overlay) au lieu de `dismiss()`.
+    var onOverlayDismiss: (() -> Void)? = nil
 
     @StateObject private var vm = MerchantStatsIndicatorsViewModel()
-    @State private var periodTab: CommerceStatsPeriodTab = .oneMonth
-    @State private var organizationName = "Ma boutique"
+    @State private var statsMonthKeys = CommerceStatsMonthNavigator.sixMonthKeysEndingCurrentMonth()
+    @State private var selectedStatsMonthIndex = 0
 
     var body: some View {
         CommerceStatisticsDashboardView(
             vm: vm,
-            periodTab: $periodTab,
-            organizationName: organizationName,
-            onClose: { dismiss() },
+            statsMonthKeys: statsMonthKeys,
+            selectedMonthIndex: $selectedStatsMonthIndex,
+            onClose: {
+                if let onOverlayDismiss {
+                    onOverlayDismiss()
+                } else {
+                    dismiss()
+                }
+            },
             showsInlineCloseButton: true,
-            onOpenStatisticDetail: onRequestStatisticDetail == nil
-                ? nil
-                : { topic in onRequestStatisticDetail!(topic, periodTab.rawValue) }
+            glassOverlayMode: glassOverlayPresentation
         )
+        .environment(\.managedObjectContext, viewContext)
+        .background(Color.clear)
         .toolbar(.hidden, for: .navigationBar)
         .toolbar(.hidden, for: .tabBar)
-        .onAppear { refreshOrganizationLabel() }
-        .task { await vm.load(period: periodTab.rawValue) }
-    }
-
-    private func refreshOrganizationLabel() {
-        let ds = DataService(context: viewContext)
-        let business = ds.createOrGetCurrentBusiness()
-        let template = ds.currentCardTemplate()
-        let name = template?.displayName ?? business.name
-        let trimmed = name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        organizationName = trimmed.isEmpty ? "Ma boutique" : trimmed
+        .toolbarBackground(.hidden, for: .navigationBar)
     }
 }

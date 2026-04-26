@@ -13,10 +13,18 @@ import UIKit
 enum DashboardRoute: Hashable {
     /// Hub unifié membres + activité (filtre initial selon l’entrée tableau de bord).
     case membersActivity(MemberActivityFilter)
-    /// Personnalisation carte fidélité (plein écran, pas une sheet).
-    case myCard
     /// Fiche membre depuis une ligne d’activité (dernières transactions).
     case memberDetail(NSManagedObjectID)
+}
+
+private enum HomeMyCardZoom {
+    /// Source = aperçu carte sur l’accueil (iOS 18+ zoom vers `MyCardView`).
+    static let previewSourceID = "dashboard.home.mycard.preview"
+}
+
+private enum HomeMerchantStatsZoom {
+    /// Source = titre « Dernières transactions » → feuille « Outils d’analyse » (aligné sur l’overlay Commerce).
+    static let sourceID = "dashboard.home.merchantStatistics.tools"
 }
 
 // MARK: - Accueil : chrome partiel
@@ -35,6 +43,7 @@ struct DashboardView: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var tabRouter: MainTabRouter
     @EnvironmentObject private var authService: AuthService
+    @Environment(\.merchantWorkspaceMode) private var merchantWorkspaceMode
     @StateObject private var dataService: DataService
 
     @State private var showScanner: Bool = false
@@ -49,6 +58,10 @@ struct DashboardView: View {
     @State private var selectedCategoryIdsForNotify: [String] = []
     @State private var showCategoriesManagement = false
     @State private var navigationPath = NavigationPath()
+    @Namespace private var homeMyCardZoomNamespace
+    @Namespace private var homeMerchantStatsZoomNamespace
+    @State private var showHomeMerchantStatistics = false
+    @State private var showMyCardFullScreen = false
     @State private var contentAppeared = false
     @State private var scanResultSheet: ScanResultSheetData?
     @State private var scanStampSheet: ScanStampSheetData?
@@ -59,7 +72,8 @@ struct DashboardView: View {
     @State private var cardPreviewDisplayRefresh = 0
     /// Une fois `true` après avoir ouvert « Ma carte » depuis l’aperçu accueil — arrête pulse sur l’aperçu.
     @AppStorage("myfidpass.merchantHomeCardOpenedFromHome.v1") private var merchantHomeCardOpenedFromHome = false
-
+    /// Aligné sur `ContentView` : pas d’indicateur sync en haut pendant le tutoriel (snapshots / overlay).
+    @AppStorage("myfidpass.homeTutorial.v1") private var homeTutorialCompleted = false
     private var palette: DashboardRevolutPalette { DashboardRevolutPalette(colorScheme: colorScheme) }
 
     init(context: NSManagedObjectContext) {
@@ -109,15 +123,13 @@ struct DashboardView: View {
     @ViewBuilder
     private var dashboardHomeRoot: some View {
         ZStack(alignment: .top) {
-            palette.canvas.ignoresSafeArea()
+            palette.canvas
+                .padding(-ZoomTransitionCanvasOverscan.inset)
+                .ignoresSafeArea()
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
-                    VStack(alignment: .leading, spacing: 0) {
-                        fintechHomeTopAndCard
-                        fintechTransactionsSection
-                            .padding(.top, -12)
-                    }
+                    employeeOrOwnerHomeContent
                 }
                 .padding(.horizontal, DashboardHomeLayoutMetrics.scrollHorizontalPadding)
                 .padding(.top, DashboardHomeChrome.showMinimalTopBar ? 4 : 0)
@@ -150,7 +162,9 @@ struct DashboardView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
 
-            syncOverlay
+            if homeTutorialCompleted {
+                syncOverlay
+            }
 
             if DashboardHomeChrome.showLegacyBottomNotificationChrome {
                 VStack(spacing: 0) {
@@ -169,9 +183,6 @@ struct DashboardView: View {
             switch route {
             case .membersActivity(let initialFilter):
                 DashboardActivityFullView(context: viewContext, initialFilter: initialFilter)
-                    .environmentObject(syncService)
-            case .myCard:
-                MyCardView(context: viewContext)
                     .environmentObject(syncService)
             case .memberDetail(let oid):
                 if let card = viewContext.object(with: oid) as? ClientCard {
@@ -194,6 +205,7 @@ struct DashboardView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .myfidpassOpenHomeScanner)) { _ in
             navigationPath = NavigationPath()
+            showMyCardFullScreen = false
             showScanner = true
         }
         .qrScanner(isScanning: $showScanner) { code in
@@ -234,11 +246,25 @@ struct DashboardView: View {
         .onChange(of: navigationPath) { _, path in
             tabRouter.isDashboardAtRoot = path.isEmpty
         }
+        .onChange(of: tabRouter.selectedTab) { _, _ in
+            if showHomeMerchantStatistics { showHomeMerchantStatistics = false }
+        }
         .onAppear {
             tabRouter.isDashboardAtRoot = navigationPath.isEmpty
         }
         .onReceive(NotificationCenter.default.publisher(for: .myfidpassRemoteSyncDidMerge)) { _ in
             dataService.bumpRefreshAfterRemoteMerge()
+        }
+        /// Rafraîchit la liste « Dernières transactions » dès qu’un tampon / carte change (y compris fusion Core Data), sans se limiter au jour calendaire.
+        .onReceive(NotificationCenter.default.publisher(for: .NSManagedObjectContextDidSave, object: viewContext)) { note in
+            guard let userInfo = note.userInfo else { return }
+            let inserted = (userInfo[NSInsertedObjectsKey] as? Set<NSManagedObject>) ?? []
+            let updated = (userInfo[NSUpdatedObjectsKey] as? Set<NSManagedObject>) ?? []
+            let deleted = (userInfo[NSDeletedObjectsKey] as? Set<NSManagedObject>) ?? []
+            let touched = inserted.union(updated).union(deleted)
+            if touched.contains(where: { $0 is Stamp || $0 is ClientCard }) {
+                dataService.bumpRefreshAfterRemoteMerge()
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .myfidpassCardPreviewDisplayDidChange)) { _ in
             cardPreviewDisplayRefresh += 1
@@ -247,7 +273,7 @@ struct DashboardView: View {
             CategoriesManagementView(context: viewContext)
                 .environmentObject(syncService)
                 .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
+                .presentationDragIndicator(.hidden)
                 .modifier(LiquidGlassSheetModifier())
         }
         .fullScreenCover(item: $scanResultSheet) { data in
@@ -263,6 +289,45 @@ struct DashboardView: View {
                 }
             )
         }
+        /// « Ma carte » : zoom iOS 18+ (comme la feuille détail stats) — `NavigationStack` + push ne déclenche pas `navigationTransition(.zoom)`.
+        .fullScreenCover(isPresented: $showMyCardFullScreen) {
+            NavigationStack {
+                MyCardView(context: viewContext)
+                    .environmentObject(syncService)
+            }
+            .environment(\.managedObjectContext, viewContext)
+            .statsDetailZoomTransition(sourceID: HomeMyCardZoom.previewSourceID, namespace: homeMyCardZoomNamespace)
+        }
+        .fullScreenCover(isPresented: $showHomeMerchantStatistics) {
+            homeMerchantStatisticsOverlay
+                .statsDetailZoomTransition(sourceID: HomeMerchantStatsZoom.sourceID, namespace: homeMerchantStatsZoomNamespace)
+                .merchantFluidZoomFullScreenTransparentChrome()
+        }
+    }
+
+    /// Même plein écran que l’onglet Commerce (icône graphique) : « Outils d’analyse » + KPI.
+    private var homeMerchantStatisticsOverlay: some View {
+        NavigationStack {
+            ZStack(alignment: .top) {
+                ZStack {
+                    Rectangle()
+                        .fill(.ultraThinMaterial)
+                    Color.black.opacity(0.22)
+                }
+                .environment(\.colorScheme, .dark)
+                .ignoresSafeArea()
+                .allowsHitTesting(false)
+                MerchantStatisticsDashboardScreen(
+                    glassOverlayPresentation: true,
+                    onOverlayDismiss: { showHomeMerchantStatistics = false }
+                )
+                .scrollContentBackground(.hidden)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color.clear)
+        }
+        .environment(\.managedObjectContext, viewContext)
+        .environment(\.commerceStatsGlassOverlay, true)
     }
 
     /// Évite le ternaire `onRedeemTier` dans `body` (échec d’inférence Swift / « Failed to produce diagnostic »).
@@ -300,16 +365,54 @@ struct DashboardView: View {
     private func merchantHomeCardPreviewButton<Label: View>(@ViewBuilder label: () -> Label) -> some View {
         Button {
             merchantHomeCardOpenedFromHome = true
-            navigationPath.append(DashboardRoute.myCard)
+            DispatchQueue.main.async {
+                showMyCardFullScreen = true
+            }
         } label: {
             label()
+                .zoomTransitionSource(id: HomeMyCardZoom.previewSourceID, in: homeMyCardZoomNamespace)
         }
         .buttonStyle(MerchantPressableButtonStyle())
         .accessibilityLabel("Ma carte")
         .accessibilityHint("Ouvre la personnalisation de la carte fidélité.")
+        // Le `Button` est en pleine largeur : le masque sans inset couvrait toute la ligne + trop de hauteur en bas.
+        .onBoarding(
+            1,
+            cornerRadius: 18,
+            maskInsets: EdgeInsets(top: 6, leading: 26, bottom: 44, trailing: 26)
+        ) {
+            VStack(spacing: 6) {
+                Text("Votre carte fidélité")
+                    .font(.headline)
+                Text("Appuyez sur la carte pour la personnaliser et la partager avec vos clients.")
+                    .font(.caption)
+                    .multilineTextAlignment(.center)
+            }
+        }
     }
 
-    private var fintechHomeTopAndCard: some View {
+    // MARK: - Accueil employé (caisse) vs commerçant
+
+    @ViewBuilder
+    private var employeeOrOwnerHomeContent: some View {
+        if merchantWorkspaceMode == .staff {
+            VStack(alignment: .leading, spacing: 0) {
+                Color.clear
+                    .frame(height: 8)
+                    .accessibilityHidden(true)
+                fintechTransactionsSection
+                    .padding(.top, -12)
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 0) {
+                fintechHomeTopAndCardOwner
+                fintechTransactionsSection
+                    .padding(.top, -12)
+            }
+        }
+    }
+
+    private var fintechHomeTopAndCardOwner: some View {
         VStack(alignment: .leading, spacing: DashboardHomeChrome.showMinimalTopBar ? 18 : 8) {
             Color.clear
                 .frame(height: DashboardHomeChrome.showMinimalTopBar ? 72 : 8)
@@ -413,16 +516,16 @@ struct DashboardView: View {
             }
         }
 
-        /// Même logique que `FlyerPrimaryCTAShakeModifier` : impulsions gauche-droite rapides, puis repos.
+        /// Même logique que `FlyerPrimaryCTAShakeModifier` : impulsions gauche-droite, puis repos.
         private func performShakeBurst() async {
-            let pattern: [CGFloat] = [0, -10, 10, -8, 8, -5, 5, -2, 2, 0]
+            let pattern: [CGFloat] = [0, -20, 20, -18, 18, -16, 16, -12, 12, -8, 8, -4, 4, 0]
             for x in pattern {
                 if Task.isCancelled { return }
                 withAnimation(MerchantMotion.flyerCTAShakeStep) {
                     offsetX = x
                 }
                 do {
-                    try await Task.sleep(nanoseconds: 38_000_000)
+                    try await Task.sleep(nanoseconds: 80_000_000)
                 } catch {
                     return
                 }
@@ -434,8 +537,13 @@ struct DashboardView: View {
         VStack(alignment: .leading, spacing: 12) {
             FintechTransactionsSectionHeader(
                 palette: palette,
-                onSeeAll: { navigationPath.append(DashboardRoute.membersActivity(.all)) },
-                onOpenScanner: { showScanner = true }
+                onSeeAll: {
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    showHomeMerchantStatistics = true
+                },
+                onOpenScanner: { showScanner = true },
+                statsTransitionSourceID: HomeMerchantStatsZoom.sourceID,
+                statsTransitionNamespace: homeMerchantStatsZoomNamespace
             )
 
             if activityPreview.isEmpty {

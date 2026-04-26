@@ -9,11 +9,11 @@ import Foundation
 
 // MARK: - Évolution
 
-struct DashboardEvolutionResponse: Decodable, Sendable {
+struct DashboardEvolutionResponse: Codable, Sendable {
     let evolution: [EvolutionWeekDTO]
 }
 
-struct EvolutionWeekDTO: Decodable, Sendable {
+struct EvolutionWeekDTO: Codable, Sendable {
     let weekIndex: Int?
     let operationsCount: Int?
     let membersCount: Int?

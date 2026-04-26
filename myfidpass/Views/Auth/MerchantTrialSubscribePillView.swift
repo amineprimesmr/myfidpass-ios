@@ -2,7 +2,7 @@
 //  MerchantTrialSubscribePillView.swift
 //  myfidpass
 //
-//  Bandeau flottant au-dessus du tab bar : CTA abonnement + temps restant sur l’essai gratuit (24 h).
+//  Bandeau flottant au-dessus du tab bar : CTA abonnement + temps restant sur l’accès offert (compte, pas l’App Store).
 //
 
 import SwiftUI
@@ -23,8 +23,8 @@ struct MerchantTrialSubscribePillView: View {
             HStack {
                 Spacer(minLength: 0)
                 HStack(alignment: .center, spacing: 9) {
-                    Text("Abonnez-vous pour 1 €")
-                        .font(.system(size: 14, weight: .medium, design: .rounded))
+                    Text("Accès offert en cours")
+                        .font(.system(size: 14, weight: .medium, design: .default))
                         .foregroundStyle(.white)
                         .lineLimit(1)
                         .minimumScaleFactor(0.68)
@@ -36,7 +36,7 @@ struct MerchantTrialSubscribePillView: View {
                             .fill(Self.statusDotColor)
                             .frame(width: 7, height: 7)
                         Text(remaining)
-                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .font(.system(size: 12, weight: .medium, design: .default))
                             .foregroundStyle(.white.opacity(0.95))
                             .lineLimit(1)
                             .minimumScaleFactor(0.72)
@@ -56,7 +56,7 @@ struct MerchantTrialSubscribePillView: View {
             }
         }
         .buttonStyle(PressableSubscribePillStyle())
-        .accessibilityLabel("Abonnez-vous pour 1 euro. \(remaining)")
+        .accessibilityLabel("Accès offert en cours. \(remaining). Touchez pour choisir l’abonnement.")
     }
 
     /// Pastille intérieure type capture (gris anthracite, distinct du fond noir).
@@ -72,7 +72,7 @@ struct MerchantTrialSubscribePillView: View {
     /// Libellé court type « 12 h restantes » / « 2 jours restants » (réutilisé par le bandeau Commerce).
     static func remainingLabel(until end: Date, now: Date) -> String {
         let secs = end.timeIntervalSince(now)
-        if secs <= 0 { return "Essai terminé" }
+        if secs <= 0 { return "Accès terminé" }
         if secs < 60 { return "Moins d’1 min" }
         if secs < 3600 {
             let m = Int(floor(secs / 60))

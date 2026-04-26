@@ -4,6 +4,12 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 @Serializable
+data class RewardsRedeemedBreakdownRow(
+    val label: String,
+    val count: Int = 0,
+)
+
+@Serializable
 data class BusinessStatsResponse(
     val period: String? = null,
     @SerialName("period_key") val periodKey: String? = null,
@@ -12,7 +18,52 @@ data class BusinessStatsResponse(
     @SerialName("transactions_this_month") val transactionsThisMonth: Int? = null,
     @SerialName("new_members_last_7_days") val newMembersLast7Days: Int? = null,
     @SerialName("new_members_last_30_days") val newMembersLast30Days: Int? = null,
+    @SerialName("avg_basket_eur") val avgBasketEur: Double? = null,
+    @SerialName("baseline_avg_basket_eur") val baselineAvgBasketEur: Double? = null,
+    @SerialName("rewards_redeemed_breakdown")
+    val rewardsRedeemedBreakdown: List<RewardsRedeemedBreakdownRow>? = null,
     @SerialName("business_name") val businessName: String? = null,
+)
+
+@Serializable
+data class DashboardTrafficHourBucket(
+    val hour: Int = 0,
+    val count: Int = 0,
+)
+
+@Serializable
+data class DashboardTrafficWeekdayBucket(
+    val weekday: Int = 0,
+    val label: String? = null,
+    val count: Int = 0,
+)
+
+@Serializable
+data class DashboardTrafficPeakHour(
+    val hour: Int = 0,
+    val count: Int = 0,
+    @SerialName("pct_of_total") val pctOfTotal: Double? = null,
+)
+
+@Serializable
+data class DashboardTrafficPeakWeekday(
+    val weekday: Int = 0,
+    val label: String? = null,
+    val count: Int = 0,
+    @SerialName("pct_of_total") val pctOfTotal: Double? = null,
+)
+
+@Serializable
+data class DashboardTrafficPatternsResponse(
+    val period: String? = null,
+    @SerialName("period_key") val periodKey: String? = null,
+    @SerialName("timezone_note") val timezoneNote: String? = null,
+    val basis: String? = null,
+    @SerialName("total_events") val totalEvents: Int? = null,
+    @SerialName("by_hour") val byHour: List<DashboardTrafficHourBucket> = emptyList(),
+    @SerialName("by_weekday") val byWeekday: List<DashboardTrafficWeekdayBucket> = emptyList(),
+    @SerialName("peak_hour") val peakHour: DashboardTrafficPeakHour? = null,
+    @SerialName("peak_weekday") val peakWeekday: DashboardTrafficPeakWeekday? = null,
 )
 
 @Serializable

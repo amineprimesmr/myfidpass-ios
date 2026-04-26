@@ -53,7 +53,7 @@ fun StatsTransactionsScreen(
         error = null
         runCatching {
             evolution = repository.businessEvolution(slug, weeks = 12)
-            transactions = repository.businessTransactions(slug, limit = 40).transactions
+            transactions = repository.businessTransactions(slug, limit = 40, sort = "desc").transactions
         }.onFailure { error = it.message }
         loading = false
     }

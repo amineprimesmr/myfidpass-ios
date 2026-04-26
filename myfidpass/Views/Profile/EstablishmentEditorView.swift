@@ -229,7 +229,6 @@ private enum SocialLinkMode: Hashable {
         return URL(string: t)
     }
 }
-
 // MARK: - État missions engagement (GET → formulaire → PATCH)
 
 private struct UrlChannelForm: Equatable {
@@ -300,16 +299,12 @@ private struct EngagementFormState: Equatable {
 
 // MARK: - Feuille modale unique
 
-/// SwiftUI n’applique de façon fiable qu’**une** feuille `.sheet(isPresented:)` par vue : avec deux feuilles (Google vs autres réseaux),
-/// c’était toujours l’ancien formulaire « Google » (champ seul) qui s’affichait à la place du parcours recherche Maps.
+/// Feuille unique pour les réseaux qui nécessitent une saisie manuelle.
 private enum MerchantEstablishmentActiveSheet: Identifiable {
-    case googleReviews
     case socialEdit(SocialLinkMode, String)
 
     var id: String {
         switch self {
-        case .googleReviews:
-            return "google-reviews"
         case .socialEdit(let mode, let label):
             return "social-\(label)-\(String(describing: mode))"
         }
@@ -385,7 +380,7 @@ struct MerchantEstablishmentForm: View {
     private let sections: Sections
 
     private enum EngagementOAuthBusyKind: Hashable {
-        case meta, youtube, tiktok
+        case meta, youtube, tiktok, googleBusiness
     }
 
     init(context: NSManagedObjectContext, sections: Sections = .full) {
@@ -408,15 +403,17 @@ struct MerchantEstablishmentForm: View {
 
     @ViewBuilder
     private func engagementMergedInnerContent() -> some View {
-        if sections.useGoogleCommerceDashboard {
-            GoogleReviewsCommerceDashboardView(
-                placeIdTrimmed: engagement.googlePlaceId.trimmingCharacters(in: .whitespacesAndNewlines),
-                showTitleRow: !sections.suppressGoogleDashboardTitleRow,
-                emptyStateHighlightsConfigureButton: true
-            )
-            googleCommerceConfigureButton
-        } else {
-            socialGoogleRow()
+        if !EngagementTemporaryVisibility.hideGoogleReviewsUI {
+            if sections.useGoogleCommerceDashboard {
+                GoogleReviewsCommerceDashboardView(
+                    placeIdTrimmed: engagement.googlePlaceId.trimmingCharacters(in: .whitespacesAndNewlines),
+                    showTitleRow: !sections.suppressGoogleDashboardTitleRow,
+                    emptyStateHighlightsConfigureButton: true
+                )
+                googleCommerceConfigureButton
+            } else {
+                socialGoogleRow()
+            }
         }
         if sections.showSocialNetworksEngagement {
             socialEngagementRow(mode: .instagram, shortName: "Instagram", channel: $engagement.instagram)
@@ -475,22 +472,22 @@ struct MerchantEstablishmentForm: View {
             }
 
             if sections.showContact {
-            sectionCard(title: "Coordonnées", systemImage: "mappin.and.ellipse") {
-                labeledField("Adresse", caption: nil) {
-                    AddressSearchField(text: $address, placeholder: "Rechercher une adresse…")
+                sectionCard(title: "Coordonnées", systemImage: "mappin.and.ellipse") {
+                    labeledField("Adresse", caption: nil) {
+                        AddressSearchField(text: $address, placeholder: "Rechercher une adresse…")
+                    }
+                    labeledField("Téléphone", caption: nil) {
+                        TextField("06 12 34 56 78", text: $phone)
+                            .textFieldStyle(.roundedBorder)
+                            .keyboardType(.phonePad)
+                    }
+                    labeledField("E-mail de contact", caption: nil) {
+                        TextField("contact@exemple.fr", text: $email)
+                            .textFieldStyle(.roundedBorder)
+                            .keyboardType(.emailAddress)
+                            .textInputAutocapitalization(.never)
+                    }
                 }
-                labeledField("Téléphone", caption: nil) {
-                    TextField("06 12 34 56 78", text: $phone)
-                        .textFieldStyle(.roundedBorder)
-                        .keyboardType(.phonePad)
-                }
-                labeledField("E-mail de contact", caption: nil) {
-                    TextField("contact@exemple.fr", text: $email)
-                        .textFieldStyle(.roundedBorder)
-                        .keyboardType(.emailAddress)
-                        .textInputAutocapitalization(.never)
-                }
-            }
             }
 
             if sections.showEngagement && sections.showSocialMetrics && sections.showSocialMetricsOAuthCard {
@@ -506,7 +503,7 @@ struct MerchantEstablishmentForm: View {
                             sectionCard(title: nil, systemImage: nil) {
                                 engagementMergedInnerContent()
                             }
-                        } else if !sections.showSocialNetworksEngagement {
+                        } else if !sections.showSocialNetworksEngagement, !EngagementTemporaryVisibility.hideGoogleReviewsUI {
                             sectionCard(title: mergedEngagementCardTitle ?? "Avis Google", headerAssetName: "SocialGoogle") {
                                 engagementMergedInnerContent()
                             }
@@ -519,49 +516,49 @@ struct MerchantEstablishmentForm: View {
                             }
                         }
                     }
-                } else {
-            sectionCard(title: "Avis Google", headerAssetName: "SocialGoogle") {
-                    if sections.useGoogleCommerceDashboard {
-                        GoogleReviewsCommerceDashboardView(
-                            placeIdTrimmed: engagement.googlePlaceId.trimmingCharacters(in: .whitespacesAndNewlines),
-                            showTitleRow: !sections.suppressGoogleDashboardTitleRow,
-                            emptyStateHighlightsConfigureButton: true
-                        )
-                        googleCommerceConfigureButton
-                    } else {
-                        socialGoogleRow()
+                } else if !EngagementTemporaryVisibility.hideGoogleReviewsUI {
+                    sectionCard(title: "Avis Google", headerAssetName: "SocialGoogle") {
+                        if sections.useGoogleCommerceDashboard {
+                            GoogleReviewsCommerceDashboardView(
+                                placeIdTrimmed: engagement.googlePlaceId.trimmingCharacters(in: .whitespacesAndNewlines),
+                                showTitleRow: !sections.suppressGoogleDashboardTitleRow,
+                                emptyStateHighlightsConfigureButton: true
+                            )
+                            googleCommerceConfigureButton
+                        } else {
+                            socialGoogleRow()
+                        }
                     }
-            }
+                }
 
             if sections.showSocialNetworksEngagement {
-            sectionCard(title: "Réseaux sociaux", systemImage: "bubble.left.and.bubble.right") {
-                socialEngagementRow(mode: .instagram, shortName: "Instagram", channel: $engagement.instagram)
-                socialEngagementRow(mode: .tiktok, shortName: "TikTok", channel: $engagement.tiktok)
-                socialEngagementRow(mode: .facebook, shortName: "Facebook", channel: $engagement.facebook)
-                if !SocialLinkMode.twitter.isTemporarilyHiddenInAvisReseaux {
-                    socialEngagementRow(mode: .twitter, shortName: "X", channel: $engagement.twitter)
+                sectionCard(title: "Réseaux sociaux", systemImage: "bubble.left.and.bubble.right") {
+                    socialEngagementRow(mode: .instagram, shortName: "Instagram", channel: $engagement.instagram)
+                    socialEngagementRow(mode: .tiktok, shortName: "TikTok", channel: $engagement.tiktok)
+                    socialEngagementRow(mode: .facebook, shortName: "Facebook", channel: $engagement.facebook)
+                    if !SocialLinkMode.twitter.isTemporarilyHiddenInAvisReseaux {
+                        socialEngagementRow(mode: .twitter, shortName: "X", channel: $engagement.twitter)
+                    }
+                    if !SocialLinkMode.snapchat.isTemporarilyHiddenInAvisReseaux {
+                        socialEngagementRow(mode: .snapchat, shortName: "Snapchat", channel: $engagement.snapchat)
+                    }
+                    if !SocialLinkMode.linkedin.isTemporarilyHiddenInAvisReseaux {
+                        socialEngagementRow(mode: .linkedin, shortName: "LinkedIn", channel: $engagement.linkedin)
+                    }
+                    socialEngagementRow(mode: .youtube, shortName: "YouTube", channel: $engagement.youtube)
                 }
-                if !SocialLinkMode.snapchat.isTemporarilyHiddenInAvisReseaux {
-                    socialEngagementRow(mode: .snapchat, shortName: "Snapchat", channel: $engagement.snapchat)
-                }
-                if !SocialLinkMode.linkedin.isTemporarilyHiddenInAvisReseaux {
-                    socialEngagementRow(mode: .linkedin, shortName: "LinkedIn", channel: $engagement.linkedin)
-                }
-                socialEngagementRow(mode: .youtube, shortName: "YouTube", channel: $engagement.youtube)
-            }
 
-            if !SocialLinkMode.trustpilot.isTemporarilyHiddenInAvisReseaux || !SocialLinkMode.tripadvisor.isTemporarilyHiddenInAvisReseaux {
-                sectionCard(title: "Autres avis", systemImage: "text.quote") {
-                    if !SocialLinkMode.trustpilot.isTemporarilyHiddenInAvisReseaux {
-                        socialEngagementRow(mode: .trustpilot, shortName: "Trustpilot", channel: $engagement.trustpilot)
-                    }
-                    if !SocialLinkMode.tripadvisor.isTemporarilyHiddenInAvisReseaux {
-                        socialEngagementRow(mode: .tripadvisor, shortName: "Tripadvisor", channel: $engagement.tripadvisor)
+                if !SocialLinkMode.trustpilot.isTemporarilyHiddenInAvisReseaux || !SocialLinkMode.tripadvisor.isTemporarilyHiddenInAvisReseaux {
+                    sectionCard(title: "Autres avis", systemImage: "text.quote") {
+                        if !SocialLinkMode.trustpilot.isTemporarilyHiddenInAvisReseaux {
+                            socialEngagementRow(mode: .trustpilot, shortName: "Trustpilot", channel: $engagement.trustpilot)
+                        }
+                        if !SocialLinkMode.tripadvisor.isTemporarilyHiddenInAvisReseaux {
+                            socialEngagementRow(mode: .tripadvisor, shortName: "Tripadvisor", channel: $engagement.tripadvisor)
+                        }
                     }
                 }
             }
-            }
-                }
             }
 
             if let msg = savedMessage {
@@ -611,18 +608,16 @@ struct MerchantEstablishmentForm: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .myfidpassOpenGoogleBusinessSetupSheet)) { _ in
-            activeSheet = .googleReviews
+            runEngagementOAuth(.googleBusiness)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .myfidpassAdoptMatchedGooglePlaceId)) { note in
+            guard let placeId = note.userInfo?["placeId"] as? String,
+                  !placeId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+            engagement.googlePlaceId = placeId
+            scheduleAutosave()
         }
         .sheet(item: $activeSheet) { sheet in
             switch sheet {
-            case .googleReviews:
-                NavigationStack {
-                    GoogleReviewsSetupSheet(
-                        googlePlaceId: $engagement.googlePlaceId,
-                        googleAutoVerifyEnabled: $engagement.googleAutoVerify,
-                        onValuesCommitted: { scheduleAutosave() }
-                    )
-                }
             case .socialEdit(let mode, let title):
                 NavigationStack {
                     VStack(alignment: .leading, spacing: 18) {
@@ -751,8 +746,7 @@ struct MerchantEstablishmentForm: View {
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         switch mode {
         case .google:
-            if sections.useGoogleCommerceDashboard { return }
-            activeSheet = .googleReviews
+            runEngagementOAuth(.googleBusiness)
         case .instagram, .facebook:
             runEngagementOAuth(.meta)
         case .youtube:
@@ -777,6 +771,8 @@ struct MerchantEstablishmentForm: View {
                 outcome = await EngagementOAuthLauncher.connectYouTube()
             case .tiktok:
                 outcome = await EngagementOAuthLauncher.connectTikTok()
+            case .googleBusiness:
+                outcome = await EngagementOAuthLauncher.connectGoogleBusiness()
             }
             await MainActor.run {
                 oauthBusy = nil
@@ -954,11 +950,9 @@ struct MerchantEstablishmentForm: View {
         } catch {}
     }
 
-    /// Bouton d'accès à la feuille de configuration Google (onglet Commerce, sous le dashboard lecture seule).
-    /// Ouvre `GoogleReviewsSetupSheet` qui gère la recherche de fiche + l'OAuth Google Business.
+    /// CTA en bas de la section Google (onglet Commerce).
     @ViewBuilder
     private var googleCommerceConfigureButton: some View {
-        let placeLinked = !engagement.googlePlaceId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let gbpConnected = (googleMetricsChannel?.oauthConnected == true)
         VStack(spacing: 10) {
             // Carte principale TOUJOURS visible : tableau de bord complet Google Business (gère lui-même
@@ -1019,17 +1013,22 @@ struct MerchantEstablishmentForm: View {
 
             Button {
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                activeSheet = .googleReviews
+                runEngagementOAuth(.googleBusiness)
             } label: {
                 HStack(spacing: 10) {
-                    Image(systemName: placeLinked ? "link.circle.fill" : "plus.circle.fill")
+                    Image(systemName: gbpConnected ? "link.circle.fill" : "plus.circle.fill")
                         .font(.system(size: 17, weight: .semibold))
-                    Text(placeLinked ? "Gérer la fiche Google & connexion" : "Configurer la fiche Google")
+                    Text(gbpConnected ? "Reconnecter Google Business" : "Connecter Google Business")
                         .font(.subheadline.weight(.semibold))
                     Spacer(minLength: 8)
-                    Image(systemName: "chevron.right")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(AppTheme.Colors.textSecondary.opacity(0.9))
+                    if oauthBusy == .googleBusiness {
+                        ProgressView()
+                            .scaleEffect(0.9)
+                    } else {
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(AppTheme.Colors.textSecondary.opacity(0.9))
+                    }
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 12)
@@ -1038,6 +1037,7 @@ struct MerchantEstablishmentForm: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(AppTheme.Colors.textPrimary)
+            .disabled(oauthBusy != nil)
             .background(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .fill(AppTheme.Colors.primary.opacity(0.08))
@@ -1112,7 +1112,7 @@ struct MerchantEstablishmentForm: View {
                                 .font(.system(size: 11, weight: .bold))
                                 .foregroundStyle(AppTheme.Colors.textSecondary.opacity(0.9))
                             Text(String(format: "%.1f", r))
-                                .font(.system(size: 15, weight: .semibold, design: .rounded))
+                                .font(.system(size: 15, weight: .semibold, design: .default))
                                 .foregroundStyle(AppTheme.Colors.textPrimary)
                         }
                     }
@@ -1451,7 +1451,11 @@ struct MerchantEstablishmentForm: View {
                 t.updatedAt = Date()
                 try? viewContext.save()
             }
+        case .stampIcon:
+            break
         case .walletCardBackground:
+            break
+        case .flyerPromoLogo, .flyerCustomBackground:
             break
         }
     }
@@ -1462,3 +1466,6 @@ struct MerchantEstablishmentForm: View {
         return t.hasPrefix("#") ? String(t.dropFirst()) : t
     }
 }
+
+
+

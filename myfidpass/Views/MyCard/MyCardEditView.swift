@@ -32,7 +32,7 @@ struct MyCardEditView: View {
                             Button("Annuler") {
                                 isPresented = false
                             }
-                            .buttonStyle(.glass)
+                            .buttonStyle(.glass(.regular))
                             .buttonBorderShape(.capsule)
                             .controlSize(.regular)
                         } else {
@@ -61,7 +61,7 @@ struct MyCardEditView: View {
                                 }
                             }
                             .disabled(savedFeedback || isSaving)
-                            .buttonStyle(.glass)
+                            .buttonStyle(.glass(.regular))
                             .buttonBorderShape(.capsule)
                             .controlSize(.regular)
                             .tint(savedFeedback ? AppTheme.Colors.success : AppTheme.Colors.primary)

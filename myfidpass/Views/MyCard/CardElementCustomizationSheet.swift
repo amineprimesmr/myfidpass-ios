@@ -159,7 +159,13 @@ struct CardElementCustomizationSheet: View {
             case .walletCardBackground:
                 pack.cardBackgroundPhotoItem.wrappedValue = nil
             case .squareIcon:
+                break
+            case .stampIcon:
                 pack.stampIconPhotoItem.wrappedValue = nil
+            case .flyerPromoLogo:
+                break
+            case .flyerCustomBackground:
+                break
             }
         }
         try? await Task.sleep(nanoseconds: 320_000_000)
@@ -437,7 +443,7 @@ struct CardElementCustomizationSheet: View {
             .padding(.vertical, 4)
         }
         .onChange(of: pack.stampIconPhotoItem.wrappedValue) { _, new in
-            Task { await presentCropFromGallery(item: new, spec: .squareIcon) }
+            Task { await presentCropFromGallery(item: new, spec: .stampIcon) }
         }
     }
 
@@ -460,7 +466,8 @@ struct CardElementCustomizationSheet: View {
     private var pointsRulesContent: some View {
         VStack(alignment: .leading, spacing: 12) {
             startGameRewardRow
-            ForEach(0..<5, id: \.self) { i in
+            /// 3 paliers modifiables (hors « Début du jeu ») — ex. 30 € / 60 € / 100 €.
+            ForEach(0..<Self.pointsTierRowCount, id: \.self) { i in
                 pointsTierRow(index: i)
             }
         }
@@ -505,13 +512,13 @@ struct CardElementCustomizationSheet: View {
         }
     }
 
-    private static let startGameRewardPlaceholder = "Tour de roue offert"
-    private static let tierSeuilExamples = ["10€", "50€", "100€", "200€", "500€"]
+    private static let startGameRewardPlaceholder = "Boisson offerte"
+    private static let pointsTierRowCount = 3
+    /// Seuils (points) — ex. 30 / 60 / 100, librement modifiables.
+    private static let tierSeuilExamples = ["30", "60", "100"]
     private static let tierRewardExamples = [
-        "1 boisson offerte",
-        "-10% sur l’addition",
         "Dessert offert",
-        "-50% sur l’addition",
+        "Sandwich au choix",
         "Menu + dessert offert"
     ]
 

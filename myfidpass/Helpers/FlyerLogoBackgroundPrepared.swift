@@ -26,10 +26,12 @@ enum FlyerLogoBackgroundPrepared {
     ///  2. Si déjà transparent → retourné tel quel.
     ///  3. Si fond uniforme détecté → BFS retire le fond.
     ///  4. Sinon (photo, fond complexe) → retourné tel quel.
-    static func imageForFlyerLogoExport(_ image: UIImage) -> UIImage {
+    /// - Parameter keepSourceBackground: si `true`, pas de détourage (logo avec fond d’origine) — utile visibilité sur planche claire.
+    static func imageForFlyerLogoExport(_ image: UIImage, keepSourceBackground: Bool = false) -> UIImage {
         guard let resized = image.flyerResizedMaxSide(FlyerLogoExportConfig.maxSideBeforeMask) else {
             return image
         }
+        if keepSourceBackground { return resized }
         if imageHasSignificantAlpha(resized) {
             return resized
         }
@@ -211,8 +213,51 @@ enum FlyerLogoBackgroundPrepared {
             }
 
             guard let outCg = ctx.makeImage() else { return nil }
-            return UIImage(cgImage: outCg, scale: image.scale, orientation: image.imageOrientation)
+            let outUi = UIImage(cgImage: outCg, scale: image.scale, orientation: image.imageOrientation)
+            /// Si, après détourage, le motif restant est surtout très clair, le collage sur fond flyer clair
+            /// le rend illisible — on garde l’image d’origine (fond uniforme) ; le canvas web ajoute un voile.
+            /// Copie explicite : ne pas passer `data` à la luminance dans ce closure (accès exclusif `withUnsafeMutableBytes`).
+            let rgbaSnapshot = Data(bytes: base, count: h * bpr)
+            if let l = meanRelativeLuminanceOfOpaquePixels(premultipliedRGBA: rgbaSnapshot, w: w, h: h, bpp: bpp), l > 0.78 {
+                return nil
+            }
+            return outUi
         }
+    }
+
+    /// Luminance relative sRGB moyenne (0–1) des pixels visibles, RGB dé-premultipliés.
+    private static func meanRelativeLuminanceOfOpaquePixels(
+        premultipliedRGBA: Data,
+        w: Int,
+        h: Int,
+        bpp: Int
+    ) -> Double? {
+        return premultipliedRGBA.withUnsafeBytes { raw -> Double? in
+            guard let base = raw.bindMemory(to: UInt8.self).baseAddress else { return nil }
+            var sum = 0.0
+            var n = 0
+            let count = w * h
+            for i in 0..<count {
+                let o = i * bpp
+                let ap = Double(base[o + 3]) / 255.0
+                if ap < 0.08 { continue }
+                let rp = Double(base[o]) / 255.0
+                let gp = Double(base[o + 1]) / 255.0
+                let bp = Double(base[o + 2]) / 255.0
+                let r = min(1, rp / ap)
+                let g = min(1, gp / ap)
+                let b = min(1, bp / ap)
+                let l = 0.2126 * srgbToLinearish(r) + 0.7152 * srgbToLinearish(g) + 0.0722 * srgbToLinearish(b)
+                sum += l
+                n += 1
+            }
+            guard n > 8 else { return nil }
+            return sum / Double(n)
+        }
+    }
+
+    private static func srgbToLinearish(_ c: Double) -> Double {
+        c <= 0.03928 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4)
     }
 }
 
@@ -228,11 +273,14 @@ private enum FlyerLogoExportConfig {
 extension UIImage {
     /// Exporte le logo préparé (fond retiré si uniforme) en PNG data URL.
     /// Réduit progressivement jusqu'à tenir dans maxEncodedLength octets UTF-8.
-    func flyerLogoPNGDataURLForAI(maxEncodedLength: Int = 2_400_000) -> String? {
-        let prepared = FlyerLogoBackgroundPrepared.imageForFlyerLogoExport(self)
-        let sides: [CGFloat] = [1536, 1280, 1024, 896, 768, 640, 512]
+    func flyerLogoPNGDataURLForAI(
+        maxEncodedLength: Int = 2_400_000,
+        keepSourceBackground: Bool = false
+    ) -> String? {
+        let prepared = FlyerLogoBackgroundPrepared.imageForFlyerLogoExport(self, keepSourceBackground: keepSourceBackground)
+        let pngSides: [CGFloat] = [1536, 1280, 1024, 896, 768, 640, 512, 384, 320, 256, 220, 180, 160, 128]
         let maxIn = max(prepared.size.width, prepared.size.height)
-        for maxSide in sides {
+        for maxSide in pngSides {
             let scale = min(1.0, maxSide / max(1, maxIn))
             let w = prepared.size.width * scale
             let h = prepared.size.height * scale
@@ -247,7 +295,83 @@ extension UIImage {
                 if url.utf8.count <= maxEncodedLength { return url }
             }
         }
+        // Détourage actif : la transparence ne doit jamais passer en JPEG (le JPEG réintroduit un fond plein opaqué).
+        guard keepSourceBackground else { return nil }
+
+        // Avec le fond d’origine : JPEG progressif (plafond **UTF-8** chaîne data URL).
+        let jpegSides: [CGFloat] = [512, 420, 360, 300, 256, 220, 180, 160, 128, 112, 96]
+        let qualities: [CGFloat] = [0.82, 0.72, 0.62, 0.52, 0.44, 0.36, 0.30, 0.24]
+        for maxSide in jpegSides {
+            let scale = min(1.0, maxSide / max(1, maxIn))
+            let w = prepared.size.width * scale
+            let h = prepared.size.height * scale
+            let fmt = UIGraphicsImageRendererFormat.default()
+            fmt.opaque = false
+            fmt.scale = prepared.scale
+            let img = UIGraphicsImageRenderer(size: CGSize(width: max(1, w), height: max(1, h)), format: fmt)
+                .image { _ in prepared.draw(in: CGRect(origin: .zero, size: CGSize(width: w, height: h))) }
+            for q in qualities {
+                if let data = img.jpegData(compressionQuality: q) {
+                    let url = "data:image/jpeg;base64,\(data.base64EncodedString())"
+                    if url.utf8.count <= maxEncodedLength { return url }
+                }
+            }
+        }
         return nil
+    }
+
+    /// Tente d’abord toutes les réductions PNG possibles (logo détouré) avant tout repli JPEG côté appelant.
+    /// Utilisé quand `flyerLogoPNGDataURLForAI` a échoué faute de place, mais l’image porte de la transparence.
+    func flyerFittingPngDataURLForTransparencyTight(maxEncodedLength: Int) -> String? {
+        let maxIn = max(self.size.width, self.size.height)
+        let extraSides: [CGFloat] = [
+            400, 352, 304, 272, 240, 208, 192, 176, 128, 112, 100, 88, 80, 72, 64, 56, 48, 40, 32, 28, 24, 20, 16
+        ]
+        for maxSide in extraSides {
+            let scale = min(1.0, maxSide / max(1, maxIn))
+            let w = self.size.width * scale
+            let h = self.size.height * scale
+            let fmt = UIGraphicsImageRendererFormat.default()
+            fmt.opaque = false
+            fmt.scale = self.scale
+            let img = UIGraphicsImageRenderer(size: CGSize(width: max(1, w), height: max(1, h)), format: fmt)
+                .image { _ in self.draw(in: CGRect(origin: .zero, size: CGSize(width: w, height: h))) }
+            if let data = img.pngData() {
+                let b64 = data.base64EncodedString()
+                let url = "data:image/png;base64,\(b64)"
+                if url.utf8.count <= maxEncodedLength { return url }
+            }
+        }
+        return nil
+    }
+
+    /// Vrai si le bitmap peut comporter de la transparence (détourage, etc.) : évite de repasser en JPEG
+    /// si un pixel est semi-transparent, auquel cas le JPEG tuerait l’incrustation.
+    var flyerImageLikelyHasTransparency: Bool {
+        guard let ci = self.cgImage else { return false }
+        let ai = ci.alphaInfo
+        if ai == .first || ai == .last || ai == .alphaOnly { return true }
+        if ai == .none || ai == .noneSkipLast || ai == .noneSkipFirst { return false }
+        return flyerExtensionSampleHasAnyNonOpaque()
+    }
+
+    private func flyerExtensionSampleHasAnyNonOpaque() -> Bool {
+        let side = 64
+        var buf = Data(count: side * side * 4)
+        return buf.withUnsafeMutableBytes { raw -> Bool in
+            guard let ptr = raw.bindMemory(to: UInt8.self).baseAddress,
+                  let cgi = self.cgImage,
+                  let ctx = CGContext(
+                      data: ptr, width: side, height: side, bitsPerComponent: 8,
+                      bytesPerRow: side * 4, space: CGColorSpaceCreateDeviceRGB(),
+                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                  ) else { return true }
+            ctx.draw(cgi, in: CGRect(x: 0, y: 0, width: side, height: side))
+            for i in 0..<(side * side) where ptr[i * 4 + 3] < 255 {
+                return true
+            }
+            return false
+        }
     }
 
     fileprivate func flyerResizedMaxSide(_ maxSide: CGFloat) -> UIImage? {

@@ -66,7 +66,7 @@ Si le backend n’existe pas, ne répond pas ou renvoie des erreurs (401, 404, 5
 | 3 | `GET /api/businesses/:slug/dashboard/settings` | GET | Nom, couleurs, adresse du commerce. |
 | 4 | `GET /api/businesses/:slug/dashboard/stats` | GET | Stats (membres, points, transactions). |
 | 5 | `GET /api/businesses/:slug/dashboard/members` | GET | Liste des membres (id, name, email, points, dates). |
-| 6 | `GET /api/businesses/:slug/dashboard/transactions` | GET | Liste des transactions (scans). |
+| 6 | `GET /api/businesses/:slug/dashboard/transactions?sort=desc` | GET | Liste des transactions (scans) **triées par date décroissante** ; requis pour l’import Core Data des opérations récentes. |
 | 7 | `POST /api/businesses/:slug/integration/scan` | POST | Enregistre un scan (body : `barcode`, `visit`, etc.). Réponse : `member`, `points_added`, `new_balance`. 404 si code inconnu. |
 
 Sans ces 7 endpoints avec les **formats exacts** (snake_case, structure JSON) décrits dans **`CONTRAT_API_LOGICIEL.md`**, au moins une des fonctions de base (connexion, tableau de bord, scan) ne fonctionnera pas.

@@ -1,0 +1,11 @@
+---
+description: Ne pas créer de fichiers guide / how-to / checklists — expliquer dans le chat
+alwaysApply: true
+---
+
+# Pas de « mini-docs » inutiles
+
+- **Ne jamais** créer de nouveaux fichiers `.md` (guides, checklists, pas-à-pas, identifiants à remplir, `GUIDE-*`, `HOWTO-*`, etc.) pour répondre à une question ou expliquer une procédure.
+- **Expliquer** procédures, listes d’étapes, tableaux de référence **directement dans le message** (ou un bloc court copiable).
+- **Exception** : si l’utilisateur **demande explicitement** d’écrire ou de mettre à jour un fichier de doc existant (README, doc d’architecture approuvée, etc.) — dans ce cas seulement, éditer le fichier ciblé.
+- **Ne pas** allonger le dépôt avec des duplicatas de contenu déjà couvert ailleurs ; mettre à jour un doc **existant** seulement sur demande explicite.

@@ -13,7 +13,7 @@ struct ImageCropEditorView: View {
     var onComplete: (UIImage) -> Void
 
     @State private var exportHandle = ImageCropExportHandle()
-    /// Dernière confirmation avant enregistrement (icône notification uniquement).
+    /// Dernière confirmation avant enregistrement (icône **notification Wallet** / `squareIcon` — pas les tampons).
     @State private var showNotificationIconConfirm = false
 
     var body: some View {
@@ -46,10 +46,9 @@ struct ImageCropEditorView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Définir") {
-                        switch spec {
-                        case .squareIcon:
+                        if spec == .squareIcon {
                             showNotificationIconConfirm = true
-                        default:
+                        } else {
                             validateCrop()
                         }
                     }

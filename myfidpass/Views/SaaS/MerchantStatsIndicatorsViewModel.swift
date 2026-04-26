@@ -42,31 +42,221 @@ final class MerchantStatsIndicatorsViewModel: ObservableObject {
     @Published private(set) var evolution: [EvolutionWeekDTO] = []
     @Published private(set) var isLoading: Bool = false
     @Published private(set) var errorMessage: String?
+    /// Icône de notification (URL `…/notification-icon`) — même source que l’onglet Campagnes.
+    @Published private(set) var statsNotificationIconURL: String?
+    /// Dernier mois (`YYYY-MM`) pour lequel `stats` / sections détail sont à jour (hors chargement).
+    @Published private(set) var lastSuccessfullyLoadedPeriod: String?
+    /// Panier moyen « repère » commerçant (€) — aligné sur `GET …/dashboard/stats` puis saisie locale / PATCH.
+    @Published private(set) var baselinePanierRepereEUR: Double?
+
+    /// Prévisualisation locale : glissement mois par mois sans rappeler l’API.
+    @Published private(set) var isDemoSixMonthPreviewActive: Bool = false
+
+    private var demoPayloadsByMonth: [String: CommerceStatisticsPreviewMonthPayload] = [:]
+
+    private struct MonthStatsSnapshot {
+        let stats: BusinessStatsResponse
+        let evolution: [EvolutionWeekDTO]
+    }
+
+    /// Données API déjà reçues par mois — alimente le carrousel KPI sans dupliquer l’état affiché.
+    private var monthSnapshots: [String: MonthStatsSnapshot] = [:]
+
+    /// Campagnes issues de `GET .../notifications/stats` (souvent renseigné quand `.../dashboard/stats` n’expose pas encore `notification_campaigns`).
+    @Published private(set) var notificationCampaignsFromStatsEndpoint: [NotificationCampaignInsightDTO] = []
+
+    /// Liste fusionnée (stats + endpoint notif + historique local d’envoi), sans entrées vides.
+    var notificationCampaignsForPresentation: [NotificationCampaignInsightDTO] {
+        if isDemoSixMonthPreviewActive, let s = stats {
+            return Self.filterMeaningfulNotificationCampaigns(s.notificationCampaigns ?? [])
+                .sorted { (a, b) in (a.createdAt ?? "") > (b.createdAt ?? "") }
+        }
+        guard let slug = AuthStorage.currentBusinessSlug, !slug.isEmpty else { return [] }
+        var byId: [String: NotificationCampaignInsightDTO] = [:]
+        for c in stats?.notificationCampaigns ?? [] { byId[c.batchId] = c }
+        for c in notificationCampaignsFromStatsEndpoint {
+            if let existing = byId[c.batchId] {
+                byId[c.batchId] = existing.mergedWith(c)
+            } else {
+                byId[c.batchId] = c
+            }
+        }
+        var list = Array(byId.values)
+        let local = NotificationSendLocalHistoryStore.asCampaignInsights(
+            NotificationSendLocalHistoryStore.entries(for: slug)
+        )
+        for l in local {
+            if byId[l.batchId] != nil { continue }
+            if Self.localSendLooksLikeDuplicateOfAPI(l, in: list) { continue }
+            list.append(l)
+        }
+        return Self.filterMeaningfulNotificationCampaigns(list)
+            .sorted { a, b in (a.createdAt ?? "") > (b.createdAt ?? "") }
+    }
+
+    private static func localSendLooksLikeDuplicateOfAPI(
+        _ local: NotificationCampaignInsightDTO,
+        in api: [NotificationCampaignInsightDTO]
+    ) -> Bool {
+        let lm = local.message?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !lm.isEmpty else { return false }
+        for a in api {
+            let am = a.message?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if am == lm, sameCalendarDay(a.createdAt, b: local.createdAt) { return true }
+        }
+        return false
+    }
+
+    private static func sameCalendarDay(_ a: String?, b: String?) -> Bool {
+        guard let da = parseISOToDate(a), let db = parseISOToDate(b) else { return false }
+        return Calendar.current.isDate(da, inSameDayAs: db)
+    }
+
+    private static func parseISOToDate(_ s: String?) -> Date? {
+        guard let s, !s.isEmpty else { return nil }
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = f.date(from: s) { return d }
+        f.formatOptions = [.withInternetDateTime]
+        return f.date(from: s)
+    }
+
+    private static func filterMeaningfulNotificationCampaigns(
+        _ raw: [NotificationCampaignInsightDTO]
+    ) -> [NotificationCampaignInsightDTO] {
+        raw.filter { c in
+            let r = c.recipientsDistinct ?? 0
+            let s = c.sentTotal ?? 0
+            let t = c.notificationTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let m = c.message?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if r > 0 || s > 0 { return true }
+            if !t.isEmpty || !m.isEmpty { return true }
+            return false
+        }
+    }
+
+    private func refreshStatsNotificationIcon(slug: String) async {
+        if let c = ScanFlowSettingsCache.cached(for: slug) {
+            let u = c.notificationIconUrl?.trimmingCharacters(in: .whitespacesAndNewlines)
+            statsNotificationIconURL = (u?.isEmpty == false) ? u : nil
+            return
+        }
+        do {
+            let s: BusinessSettingsResponse = try await APIClient.shared.request(.businessSettings(slug: slug))
+            ScanFlowSettingsCache.store(s, for: slug)
+            let u = s.notificationIconUrl?.trimmingCharacters(in: .whitespacesAndNewlines)
+            statsNotificationIconURL = (u?.isEmpty == false) ? u : nil
+        } catch {
+            statsNotificationIconURL = nil
+        }
+    }
+
+    private func normalizedMonthlyAudience(from s: BusinessStatsResponse) -> (members: Int, active: Int, inactive30: Int)? {
+        let members = max(0, s.membersCount ?? 0)
+        guard members > 0 else { return nil }
+        let inactive = min(members, max(0, s.inactiveMembers30Days ?? 0))
+        let active = max(0, members - inactive)
+        return (members, active, inactive)
+    }
+
+    /// `GET .../notifications/stats` — ne fait pas échouer l’écran stats si l’endpoint est indisponible ou le JSON partiel.
+    private func fetchNotificationStatsPayload(slug: String) async -> NotificationStatsEndpointPayload? {
+        do {
+            return try await APIClient.shared.request(.dashboardNotificationStats(slug: slug))
+        } catch {
+            return nil
+        }
+    }
+
+    /// Hydrate la mémoire depuis le cache disque pour tous les mois du carrousel, puis le mois affiché.
+    func prepareMonthNavigation(slug: String, allMonthKeys: [String], focusPeriod: String) {
+        guard !slug.isEmpty else { return }
+        for key in allMonthKeys where monthSnapshots[key] == nil {
+            if let c = MerchantStatisticsDiskCache.load(slug: slug, period: key) {
+                monthSnapshots[key] = MonthStatsSnapshot(
+                    stats: c.stats,
+                    evolution: c.evolution
+                )
+            }
+        }
+        _ = applyCachedMonthIfAvailable(period: focusPeriod)
+    }
 
     func load(period: String) async {
+        isDemoSixMonthPreviewActive = false
+        demoPayloadsByMonth = [:]
+
         guard let slug = AuthStorage.currentBusinessSlug, !slug.isEmpty else {
             stats = nil
             evolution = []
+            monthSnapshots = [:]
+            notificationCampaignsFromStatsEndpoint = []
+            lastSuccessfullyLoadedPeriod = nil
+            baselinePanierRepereEUR = nil
+            statsNotificationIconURL = nil
             errorMessage = "Aucun commerce sélectionné."
             return
         }
 
+        // Cache disque pour ce mois si le carrousel n’a pas déjà tout hydraté.
+        if monthSnapshots[period] == nil,
+           let c = MerchantStatisticsDiskCache.load(slug: slug, period: period) {
+            monthSnapshots[period] = MonthStatsSnapshot(
+                stats: c.stats,
+                evolution: c.evolution
+            )
+        }
+        _ = applyCachedMonthIfAvailable(period: period)
+
+        let hasWarmUIForPeriod = monthSnapshots[period] != nil
+            || (stats != nil && Self.monthKey(stats!, matches: period))
+
         errorMessage = nil
-        isLoading = true
+        if notificationCampaignsFromStatsEndpoint.isEmpty {
+            let disk = NotificationStatsEndpointCache.load(slug: slug)
+            if !disk.isEmpty { notificationCampaignsFromStatsEndpoint = disk }
+        }
+        // Pas de spinner plein écran tant qu’on peut afficher des agrégés (mémoire ou disque).
+        isLoading = !hasWarmUIForPeriod
         defer { isLoading = false }
 
         do {
             let weeks = Self.weeksToRequest(for: period)
-            let gotStats: BusinessStatsResponse = try await APIClient.shared.request(.businessStats(slug: slug, period: period))
-            let gotEv: DashboardEvolutionResponse = try await APIClient.shared.request(
+            async let gotStats: BusinessStatsResponse = try await APIClient.shared.request(.businessStats(slug: slug, period: period))
+            async let gotEv: DashboardEvolutionResponse = try await APIClient.shared.request(
                 .businessEvolution(slug: slug, weeks: weeks, period: period)
             )
-            stats = gotStats
-            evolution = gotEv.evolution
+            async let notifPayload: NotificationStatsEndpointPayload? = fetchNotificationStatsPayload(slug: slug)
+            if isDemoSixMonthPreviewActive { return }
+            let (a, b, n) = try await (gotStats, gotEv, notifPayload)
+            stats = a
+            baselinePanierRepereEUR = a.baselineAvgBasketEur
+            evolution = b.evolution
+            let notifCamps = n?.campaigns ?? []
+            notificationCampaignsFromStatsEndpoint = notifCamps
+            NotificationStatsEndpointCache.save(slug: slug, campaigns: notifCamps)
+            await refreshStatsNotificationIcon(slug: slug)
+            let snap = MonthStatsSnapshot(stats: a, evolution: b.evolution)
+            monthSnapshots[period] = snap
+            lastSuccessfullyLoadedPeriod = period
+            MerchantStatisticsDiskCache.save(
+                slug: slug,
+                period: period,
+                snapshot: MerchantStatisticsDiskCache.CachedMonth(
+                    stats: a,
+                    evolution: b.evolution,
+                    traffic: nil
+                )
+            )
         } catch {
-            // Ne pas casser l’UI sur un échec : on garde l’état courant si présent.
             errorMessage = (error as? APIError)?.errorDescription ?? error.localizedDescription
-            if stats == nil { evolution = [] }
+            if notificationCampaignsFromStatsEndpoint.isEmpty {
+                let disk = NotificationStatsEndpointCache.load(slug: slug)
+                if !disk.isEmpty { notificationCampaignsFromStatsEndpoint = disk }
+            }
+            if stats == nil {
+                evolution = []
+            }
         }
     }
 
@@ -87,16 +277,16 @@ final class MerchantStatsIndicatorsViewModel: ObservableObject {
                 )
             )
         }
-        if let actives = s.activeMembersInPeriod {
+        if let audience = normalizedMonthlyAudience(from: s) {
             audienceCards.append(
                 .init(
                     id: "actives",
                     title: "Actifs",
-                    value: StatsFR.formatInt(actives),
+                    value: StatsFR.formatInt(audience.active),
                     subtitle: nil,
                     kind: .value,
                     ratioPercent: nil,
-                    accessibilityLabel: "Actifs, \(StatsFR.formatInt(actives))"
+                    accessibilityLabel: "Actifs sur 30 jours, \(StatsFR.formatInt(audience.active))"
                 )
             )
         }
@@ -114,14 +304,14 @@ final class MerchantStatsIndicatorsViewModel: ObservableObject {
             )
         }
 
-        if let members = s.membersCount, let actives = s.activeMembersInPeriod, members > 0 {
-            let pct = (Double(actives) / Double(members)) * 100
+        if let audience = normalizedMonthlyAudience(from: s) {
+            let pct = (Double(audience.active) / Double(audience.members)) * 100
             audienceCards.append(
                 .init(
                     id: "activeRate",
                     title: "Taux d'actifs",
                     value: StatsFR.formatPct(pct),
-                    subtitle: "Actifs / Membres",
+                    subtitle: "Actifs 30 j / Membres",
                     kind: .ratio,
                     ratioPercent: pct,
                     accessibilityLabel: "Taux d'actifs, \(StatsFR.formatPct(pct))"
@@ -171,16 +361,16 @@ final class MerchantStatsIndicatorsViewModel: ObservableObject {
                 )
             )
         }
-        if let inact30 = s.inactiveMembers30Days {
+        if let audience = normalizedMonthlyAudience(from: s) {
             acquisitionCards.append(
                 .init(
                     id: "inactive30",
                     title: "Inactifs (30 j)",
-                    value: StatsFR.formatInt(inact30),
+                    value: StatsFR.formatInt(audience.inactive30),
                     subtitle: nil,
                     kind: .value,
                     ratioPercent: nil,
-                    accessibilityLabel: "Inactifs sur 30 jours, \(StatsFR.formatInt(inact30))"
+                    accessibilityLabel: "Inactifs sur 30 jours, \(StatsFR.formatInt(audience.inactive30))"
                 )
             )
         }
@@ -198,14 +388,14 @@ final class MerchantStatsIndicatorsViewModel: ObservableObject {
             )
         }
 
-        if let members = s.membersCount, let inact30 = s.inactiveMembers30Days, members > 0 {
-            let churnPct = (Double(inact30) / Double(members)) * 100
+        if let audience = normalizedMonthlyAudience(from: s) {
+            let churnPct = (Double(audience.inactive30) / Double(audience.members)) * 100
             acquisitionCards.append(
                 .init(
                     id: "churn30Rate",
                     title: "Churn (30 j)",
                     value: StatsFR.formatPct(churnPct),
-                    subtitle: "Inactifs / Membres",
+                    subtitle: "Inactifs 30 j / Membres",
                     kind: .ratio,
                     ratioPercent: churnPct,
                     accessibilityLabel: "Churn sur 30 jours, \(StatsFR.formatPct(churnPct))"
@@ -321,8 +511,8 @@ final class MerchantStatsIndicatorsViewModel: ObservableObject {
             )
         }
 
-        if let members = s.membersCount, let inact30 = s.inactiveMembers30Days, members > 0 {
-            let churnPct = (Double(inact30) / Double(members)) * 100
+        if let audience = normalizedMonthlyAudience(from: s) {
+            let churnPct = (Double(audience.inactive30) / Double(audience.members)) * 100
             let kind: (String, String, String) = {
                 if churnPct <= 10 { return ("sparkles", "Churn faible", "Conserver la dynamique") }
                 if churnPct <= 20 { return ("wand.and.rays", "Churn modéré", "Cibler les contacts à réactiver") }
@@ -332,7 +522,7 @@ final class MerchantStatsIndicatorsViewModel: ObservableObject {
                 .init(
                     icon: kind.0,
                     title: kind.1,
-                    dataLine: "Inactifs (30 j) : \(StatsFR.formatInt(inact30)) — \(StatsFR.formatPct(churnPct))",
+                    dataLine: "Inactifs (30 j) : \(StatsFR.formatInt(audience.inactive30)) — \(StatsFR.formatPct(churnPct))",
                     nextStep: "Lancez une campagne segmentée pour réveiller les profils inactifs (ex. dernière visite).",
                     accessibilityLabel: "\(kind.1). \(StatsFR.formatPct(churnPct))"
                 )
@@ -374,13 +564,16 @@ final class MerchantStatsIndicatorsViewModel: ObservableObject {
     }
 
     private static func weeksToRequest(for period: String) -> Int {
+        if period.range(of: #"^\d{4}-\d{2}$"#, options: .regularExpression) != nil {
+            return 4
+        }
         switch period {
         case "7d": return 2
         case "30d": return 8
         case "this_month": return 8
         case "6m": return 16
         case "12m", "1y": return 26
-        default: return 8
+        default: return 4
         }
     }
 
@@ -410,3 +603,69 @@ final class MerchantStatsIndicatorsViewModel: ObservableObject {
     }
 }
 
+extension MerchantStatsIndicatorsViewModel {
+    /// 6 mois de démo : une série par mois civil ; utiliser `applyDemoPayload(forMonthKey:)` au glissement.
+    func applySixMonthsPreviewDemo(monthKeys: [String], displayMonthKey: String) {
+        monthSnapshots = [:]
+        demoPayloadsByMonth = CommerceStatisticsPreviewMock.payloadsByMonthKeys(monthKeys)
+        isDemoSixMonthPreviewActive = true
+        applyDemoPayload(forMonthKey: displayMonthKey)
+    }
+
+    /// Met à jour le repère panier (après saisie stats ou en attendant un `load`).
+    func setBaselinePanierRepereEUR(_ value: Double?) {
+        baselinePanierRepereEUR = value
+    }
+
+    func applyDemoPayload(forMonthKey key: String) {
+        guard isDemoSixMonthPreviewActive, let p = demoPayloadsByMonth[key] else { return }
+        stats = p.stats
+        baselinePanierRepereEUR = p.stats.baselineAvgBasketEur
+        evolution = p.evolution
+        errorMessage = nil
+        isLoading = false
+        lastSuccessfullyLoadedPeriod = key
+        if let slug = AuthStorage.currentBusinessSlug, !slug.isEmpty {
+            Task { await self.refreshStatsNotificationIcon(slug: slug) }
+        }
+    }
+
+    /// Réaffiche instantanément un mois déjà chargé (API), en attendant un éventuel rafraîchissement.
+    @discardableResult
+    func applyCachedMonthIfAvailable(period: String) -> Bool {
+        guard let snap = monthSnapshots[period] else { return false }
+        stats = snap.stats
+        baselinePanierRepereEUR = snap.stats.baselineAvgBasketEur
+        evolution = snap.evolution
+        errorMessage = nil
+        lastSuccessfullyLoadedPeriod = period
+        return true
+    }
+
+    func presentationForMonthCarousel(monthKey: String) -> CommerceStatisticsPresentation {
+        let rep = baselinePanierRepereEUR
+        if isDemoSixMonthPreviewActive, let p = demoPayloadsByMonth[monthKey] {
+            return CommerceStatisticsDataBuilder.build(stats: p.stats, evolution: p.evolution, panierRepereEuro: rep)
+        }
+        if let snap = monthSnapshots[monthKey] {
+            return CommerceStatisticsDataBuilder.build(stats: snap.stats, evolution: snap.evolution, panierRepereEuro: rep)
+        }
+        if let s = stats, Self.monthKey(s, matches: monthKey) {
+            return CommerceStatisticsDataBuilder.build(stats: s, evolution: evolution, panierRepereEuro: rep)
+        }
+        return CommerceStatisticsDataBuilder.build(stats: nil, evolution: [], panierRepereEuro: rep)
+    }
+
+    func businessStats(forMonthKey monthKey: String) -> BusinessStatsResponse? {
+        if isDemoSixMonthPreviewActive { return demoPayloadsByMonth[monthKey]?.stats }
+        if let s = monthSnapshots[monthKey]?.stats { return s }
+        if let s = stats, Self.monthKey(s, matches: monthKey) { return s }
+        return nil
+    }
+
+    private static func monthKey(_ stats: BusinessStatsResponse, matches key: String) -> Bool {
+        if let pk = stats.periodKey, pk == key { return true }
+        if let p = stats.period, p == key { return true }
+        return false
+    }
+}

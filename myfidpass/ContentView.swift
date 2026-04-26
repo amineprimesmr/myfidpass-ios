@@ -21,44 +21,46 @@ struct ContentView: View {
     @State private var updateAppInfo: VersionCheckManager.ReturnResult?
     @State private var forcedAppUpdate = false
     @State private var showMerchantSubscriptionSheet = false
-    @State private var showTrialStripePaymentSafari = false
     /// Évite les sync forcées en rafale (retour app, multitâche). Intervalle large = bandeau moins « nerveux ».
     @State private var lastForegroundFullSyncAt: Date = .distantPast
     /// Pastille « Synchronisé » après une sync réussie (masquée si une nouvelle sync démarre).
     @State private var showSyncSuccessChip = false
     @State private var syncSuccessHideTask: Task<Void, Never>?
-    /// Masque la pastille « Abonnez-vous 1 € » quand le clavier recouvre l’écran (saisie de texte).
-    @State private var isSoftwareKeyboardVisible = false
+    /// Anti-spam UX : on n'affiche le bandeau sync qu'après un court délai et on peut le masquer temporairement.
+    @State private var syncBannerShowDelayTask: Task<Void, Never>?
+    @State private var syncBannerVisibleForCurrentRun = false
+    @State private var syncRunStartedAt: Date?
+    @State private var syncBannerDismissedUntil: Date = .distantPast
+    @State private var syncBannerDragOffset: CGFloat = 0
     @State private var didScheduleStartupVersionCheck = false
+    /// Bandeau d’erreur sync : l’utilisateur peut masquer sans effacer `lastError` (détail dans Réglages).
+    @State private var dismissedSyncErrorBanner = false
+    @State private var isSoftwareKeyboardVisible = false
+    /// Masque le bandeau sync pendant le tutoriel (le snapshot du tutoriel ne doit pas capturer ce bandeau).
+    @AppStorage("myfidpass.homeTutorial.v1") private var homeTutorialCompleted = false
 
     var body: some View {
         Group {
-            if shouldShowPostSignupSubscriptionGate {
-                MerchantSubscriptionGateView()
+            if merchantMustCompleteSubscriptionPaywall {
+                MerchantSubscriptionGateView(isMandatory: true)
                     .environmentObject(authService)
                     .environmentObject(revenueCatSubscriptionState)
                     .environment(\.managedObjectContext, viewContext)
-            } else if merchantSubscriptionPaywallBlocking {
-                MerchantSubscriptionPaywallBlockingView(
-                    onContinue: { showMerchantSubscriptionSheet = true }
-                )
-                .environmentObject(authService)
-                .environmentObject(syncService)
-                .environmentObject(revenueCatSubscriptionState)
-                .environment(\.managedObjectContext, viewContext)
             } else {
                 mainMerchantTabStack
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .myfidpassOpenMerchantSubscriptionSheet)) { _ in
+            guard !authService.isMerchantStaffUser else { return }
             showMerchantSubscriptionSheet = true
         }
+        /// Ancienne notif « essai → Safari Stripe » : ouvre le paywall natif.
         .onReceive(NotificationCenter.default.publisher(for: .myfidpassOpenMerchantTrialStripePaymentLink)) { _ in
-            showTrialStripePaymentSafari = true
+            guard !authService.isMerchantStaffUser else { return }
+            showMerchantSubscriptionSheet = true
         }
         .onReceive(NotificationCenter.default.publisher(for: .myfidpassSubscriptionPaymentCompleted)) { _ in
             showMerchantSubscriptionSheet = false
-            showTrialStripePaymentSafari = false
             syncService.invalidateSyncThrottle()
             Task(priority: .userInitiated) {
                 await authService.reconcileStripeSubscriptionFromServer(force: true)
@@ -66,17 +68,13 @@ struct ContentView: View {
                 await syncService.syncAfterServerMutation()
             }
         }
+        /// Paywall depuis la pastille d’essai / Réglages / notif : **feuille** (sheet). Le flux post-création de compte reste une **page pleine** (`merchantMustCompleteSubscriptionPaywall` → `isMandatory: true` ci-dessus).
         .sheet(isPresented: $showMerchantSubscriptionSheet) {
-            MerchantSubscriptionGateView()
+            MerchantSubscriptionGateView(isMandatory: false)
                 .environmentObject(authService)
                 .environmentObject(revenueCatSubscriptionState)
-                .presentationDragIndicator(.visible)
-        }
-        .sheet(isPresented: $showTrialStripePaymentSafari) {
-            InAppSafariView(
-                url: LegalURLs.merchantStripeSubscriptionPaymentLinkWithPromo(prefilledEmail: authService.currentUserEmail)
-            )
-            .ignoresSafeArea()
+                .presentationDetents([.large])
+                .presentationDragIndicator(.hidden)
         }
         .onChange(of: showMerchantSubscriptionSheet) { _, isShowing in
             if !isShowing {
@@ -88,39 +86,25 @@ struct ContentView: View {
                 }
             }
         }
-        .onChange(of: showTrialStripePaymentSafari) { _, isShowing in
-            if !isShowing {
-                syncService.invalidateSyncThrottle()
-                Task(priority: .utility) {
-                    await authService.reconcileStripeSubscriptionFromServer(force: true)
-                    await authService.refreshBusinessesIfNeeded()
-                    await syncService.syncAfterServerMutation()
-                }
+        .onChange(of: merchantMustCompleteSubscriptionPaywall) { wasBlocking, isBlocking in
+            guard wasBlocking && !isBlocking else { return }
+            guard authService.consumePendingHomeTutorialAfterSignup() else { return }
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: .myfidpassResetTutorial, object: nil)
             }
         }
         .sheet(item: $updateAppInfo) { info in
             AppUpdateView(appInfo: info, forcedUpdate: $forcedAppUpdate)
         }
-        .onAppear {
-            consumePostSignupPendingIfNotNeeded()
-        }
         .task {
             await authService.reconcileStripeSubscriptionFromServer(force: true)
             await authService.refreshBusinessesIfNeeded()
-            consumePostSignupPendingIfNotNeeded()
             await scheduleStartupVersionCheckIfNeeded()
-        }
-        .onChange(of: authService.merchantSubscriptionEligibilityResolved) { _, resolved in
-            guard resolved else { return }
-            consumePostSignupPendingIfNotNeeded()
-        }
-        .onChange(of: revenueCatSubscriptionState.hasPremiumEntitlement) { _, _ in
-            consumePostSignupPendingIfNotNeeded()
         }
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
             guard authService.currentScreen == .authenticated else { return }
-            guard merchantSubscriptionPaywallBlocking else { return }
+            guard merchantMustCompleteSubscriptionPaywall else { return }
             Task(priority: .utility) {
                 await authService.reconcileStripeSubscriptionFromServer(force: true)
                 await authService.refreshBusinessesIfNeeded()
@@ -130,26 +114,11 @@ struct ContentView: View {
         }
     }
 
-    /// Paywall **avant** les onglets : inscription récente sans abonnement actif.
-    private var shouldShowPostSignupSubscriptionGate: Bool {
-        AuthStorage.pendingOpenMerchantSubscriptionSheetAfterSignup
-            && AuthStorage.isLoggedIn
-            && authService.currentScreen == .authenticated
+    /// Commerçant : accès aux onglets **uniquement** avec abonnement actif (IAP RevenueCat ou statut aligné API, ex. historique Stripe côté serveur).
+    private var merchantMustCompleteSubscriptionPaywall: Bool {
+        authService.merchantSubscriptionEligibilityResolved
             && !authService.isPlatformAdmin
             && !authService.subscriptionAccessUnlocked(revenueCatPremium: revenueCatSubscriptionState.hasPremiumEntitlement)
-    }
-
-    /// Consomme le flag post-inscription si admin ou déjà abonné (évite un état coincé).
-    @MainActor
-    private func consumePostSignupPendingIfNotNeeded() {
-        guard AuthStorage.pendingOpenMerchantSubscriptionSheetAfterSignup else { return }
-        if authService.isPlatformAdmin {
-            AuthStorage.pendingOpenMerchantSubscriptionSheetAfterSignup = false
-            return
-        }
-        if authService.subscriptionAccessUnlocked(revenueCatPremium: revenueCatSubscriptionState.hasPremiumEntitlement) {
-            AuthStorage.pendingOpenMerchantSubscriptionSheetAfterSignup = false
-        }
     }
 
     @MainActor
@@ -175,7 +144,7 @@ struct ContentView: View {
         }
     }
 
-    /// Onglets + pastille d’essai + sync (masqué quand le paywall post–24 h bloque l’app).
+    /// Onglets + pastille d’essai + sync (masqué quand le paywall d’inscription / essai bloque l’app).
     @ViewBuilder
     private var mainMerchantTabStack: some View {
         MainTabView()
@@ -184,27 +153,55 @@ struct ContentView: View {
                     adminMerchantPilotBanner
                 }
             }
-            .safeAreaInset(edge: .bottom, spacing: 52) {
-                if authService.isMerchantTrialPeriodActive, let trialEnd = authService.merchantTrialEndsAt, shouldShowMerchantTrialSubscribePill, !isSoftwareKeyboardVisible {
-                    MerchantTrialSubscribePillView(trialEndsAt: trialEnd) {
-                        showTrialStripePaymentSafari = true
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 70)
-                }
+            .environment(\.isSoftwareKeyboardVisible, isSoftwareKeyboardVisible)
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+                withAnimation(.easeInOut(duration: 0.2)) { isSoftwareKeyboardVisible = true }
             }
-            .overlay(alignment: .top) { syncIndicatorOverlay }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+                withAnimation(.easeInOut(duration: 0.2)) { isSoftwareKeyboardVisible = false }
+            }
+            .overlay(alignment: .top) { if homeTutorialCompleted { topSyncAndErrorOverlay } }
+            .onChange(of: syncService.lastError) { _, new in
+                if new == nil { dismissedSyncErrorBanner = false }
+            }
+            .onChange(of: syncService.syncErrorRevision) { _, _ in
+                dismissedSyncErrorBanner = false
+            }
             .onChange(of: syncService.isSyncing) { _, syncing in
                 if syncing {
                     showSyncSuccessChip = false
                     syncSuccessHideTask?.cancel()
                     syncSuccessHideTask = nil
+                    syncRunStartedAt = Date()
+                    syncBannerVisibleForCurrentRun = false
+                    syncBannerDragOffset = 0
+                    syncBannerShowDelayTask?.cancel()
+                    if Date() >= syncBannerDismissedUntil {
+                        syncBannerShowDelayTask = Task { @MainActor in
+                            try? await Task.sleep(for: .seconds(1.2))
+                            guard !Task.isCancelled else { return }
+                            guard syncService.isSyncing else { return }
+                            guard Date() >= syncBannerDismissedUntil else { return }
+                            withAnimation(.spring(response: 0.36, dampingFraction: 0.84)) {
+                                syncBannerVisibleForCurrentRun = true
+                            }
+                        }
+                    }
                 } else {
+                    syncBannerShowDelayTask?.cancel()
+                    syncBannerShowDelayTask = nil
+                    let runDuration = Date().timeIntervalSince(syncRunStartedAt ?? Date())
+                    let shouldShowSuccess = syncBannerVisibleForCurrentRun || runDuration >= 2.4
+                    syncBannerVisibleForCurrentRun = false
                     guard syncService.lastError == nil else { return }
+                    guard Date() >= syncBannerDismissedUntil, shouldShowSuccess else {
+                        showSyncSuccessChip = false
+                        return
+                    }
                     showSyncSuccessChip = true
                     syncSuccessHideTask?.cancel()
                     syncSuccessHideTask = Task { @MainActor in
-                        try? await Task.sleep(for: .seconds(2.2))
+                        try? await Task.sleep(for: .seconds(1.8))
                         guard !Task.isCancelled else { return }
                         showSyncSuccessChip = false
                     }
@@ -229,12 +226,6 @@ struct ContentView: View {
                     await syncService.syncIfNeeded()
                 }
             }
-            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
-                isSoftwareKeyboardVisible = true
-            }
-            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
-                isSoftwareKeyboardVisible = false
-            }
             .onChange(of: scenePhase) { _, phase in
                 guard phase == .active else { return }
                 guard authService.currentScreen == .authenticated else { return }
@@ -256,74 +247,177 @@ struct ContentView: View {
                 if relayOAuthUniversalLinkIfNeeded(url: url) { return }
                 handleScanDeepLink(url: url)
             }
+            .overlay(alignment: .bottom) {
+                if shouldShowTrialSubscribePillInCurrentTab, !isSoftwareKeyboardVisible, let trialEnd = authService.merchantTrialEndsAt {
+                    MerchantTrialSubscribePillView(trialEndsAt: trialEnd) {
+                        showMerchantSubscriptionSheet = true
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, trialSubscribePillBottomPadding)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
     }
 
-    /// Après la fin des 24 h : pas d’abonnement actif → écran bloquant (remplace l’ancien bandeau « mode découverte »).
-    private var merchantSubscriptionPaywallBlocking: Bool {
-        authService.merchantSubscriptionEligibilityResolved
-            && !authService.subscriptionAccessUnlocked(revenueCatPremium: revenueCatSubscriptionState.hasPremiumEntitlement)
-            && !authService.isMerchantTrialPeriodActive
+    /// Au-dessus de la tab bar. `gap` négatif = pastille plus basse (plus proche des onglets).
+    private var trialSubscribePillBottomPadding: CGFloat {
+        let tabBarApprox: CGFloat = 52
+        let gap: CGFloat = -10
+        guard
+            let scene = UIApplication.shared.connectedScenes
+                .compactMap({ $0 as? UIWindowScene })
+                .first(where: { $0.activationState == .foregroundActive || $0.activationState == .foregroundInactive }),
+            let window = scene.windows.first(where: { $0.isKeyWindow }) ?? scene.windows.first
+        else {
+            return tabBarApprox + gap + 24
+        }
+        return window.safeAreaInsets.bottom + tabBarApprox + gap
     }
 
-    private var syncBannerTopPadding: CGFloat {
-        authService.merchantSubscriptionEligibilityResolved
-            && !authService.subscriptionAccessUnlocked(revenueCatPremium: revenueCatSubscriptionState.hasPremiumEntitlement)
-            ? 68
-            : 10
+    /// Pastille essai affichée sur Accueil + Notifs (pas sur Commerce où un bandeau dédié existe déjà).
+    private var shouldShowTrialSubscribePillInCurrentTab: Bool {
+        guard !authService.isMerchantStaffUser else { return false }
+        guard authService.isMerchantTrialPeriodActive, authService.merchantTrialEndsAt != nil else { return false }
+        return tabRouter.selectedTab == 0 || tabRouter.selectedTab == 1
     }
 
-    /// Pastille d’essai flottante : pas sur l’onglet Commerce (pastille intégrée dans `ProfileView`). Sinon Accueil racine + Campagnes.
-    private var shouldShowMerchantTrialSubscribePill: Bool {
-        guard (0 ... 2).contains(tabRouter.selectedTab) else { return false }
-        if tabRouter.isMerchantFlyerHubPresented { return false }
-        if tabRouter.isMyCardScreenPresented { return false }
-        if tabRouter.selectedTab == 2 { return false }
-        if tabRouter.selectedTab == 0 { return tabRouter.isDashboardAtRoot }
-        return true
+    private var syncBannerTopPadding: CGFloat { 10 }
+
+    private var syncErrorBannerVisible: Bool {
+        !syncService.isSyncing
+            && !dismissedSyncErrorBanner
+            && !(syncService.lastError?.isEmpty ?? true)
+    }
+
+    private var topSyncAndErrorOverlay: some View {
+        VStack(spacing: 8) {
+            if syncErrorBannerVisible {
+                syncFailureBanner
+                    .transition(
+                        .asymmetric(
+                            insertion: .move(edge: .top).combined(with: .opacity),
+                            removal: .opacity.combined(with: .move(edge: .top))
+                        )
+                    )
+            }
+            syncIndicatorOverlay
+        }
+        .padding(.top, syncBannerTopPadding)
+        .animation(.spring(response: 0.42, dampingFraction: 0.84), value: syncErrorBannerVisible)
+    }
+
+    private var syncFailureBanner: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(Color.orange)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Synchronisation impossible")
+                    .font(.caption.weight(.semibold))
+                Text(syncService.lastError ?? "")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 4)
+            Button {
+                Task { await syncService.syncAfterServerMutation() }
+            } label: {
+                Text("Réessayer")
+                    .font(.caption.weight(.semibold))
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            Button {
+                dismissedSyncErrorBanner = true
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.body)
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel("Fermer le message")
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .frame(maxWidth: 420)
+        .glassEffect(.regular, cornerRadius: 20)
     }
 
     /// Affiche le bandeau (sync en cours ou succès).
     private var syncBannerShown: Bool {
-        syncService.isSyncing || showSyncSuccessChip
+        Date() >= syncBannerDismissedUntil && (syncBannerVisibleForCurrentRun || showSyncSuccessChip)
     }
 
     /// Bandeau sync : **même gabarit** chargement / succès, transitions spring + crossfade (plus de rétrécissement brutal).
     private var syncIndicatorOverlay: some View {
         Group {
             if syncBannerShown {
-                HStack(alignment: .center, spacing: 10) {
+                HStack(alignment: .center, spacing: 12) {
                     ZStack {
                         if syncService.isSyncing {
                             ProgressView()
-                                .scaleEffect(0.92)
+                                .scaleEffect(1.08)
                                 .tint(.primary)
                                 .transition(.opacity.combined(with: .scale(scale: 0.88, anchor: .center)))
                         } else {
                             Image(systemName: "checkmark.circle.fill")
-                                .font(.system(size: 18, weight: .semibold))
+                                .font(.system(size: 22, weight: .semibold))
                                 .foregroundStyle(Color.green)
                                 .symbolEffect(.bounce, options: .nonRepeating, value: showSyncSuccessChip && !syncService.isSyncing)
                                 .transition(.opacity.combined(with: .scale(scale: 0.88, anchor: .center)))
                         }
                     }
-                    .frame(width: 22, height: 22)
+                    .frame(width: 28, height: 28)
                     .accessibilityHidden(true)
 
-                    Text(syncService.isSyncing ? "Synchronisation…" : "Synchronisé")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(syncService.isSyncing ? Color.primary : Color.green)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.85)
-                        .frame(minWidth: 152, alignment: .leading)
-                        .contentTransition(.interpolate)
-                        .accessibilityLabel(syncService.isSyncing ? "Synchronisation en cours" : "Synchronisé")
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(syncService.isSyncing ? "Synchronisation en cours" : "Synchronisé")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(syncService.isSyncing ? Color.primary : Color.green)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.85)
+                            .contentTransition(.interpolate)
+                        if syncService.isSyncing {
+                            Text("Glissez vers le haut pour masquer")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
+                    .frame(minWidth: 220, alignment: .leading)
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-                .frame(minHeight: 44)
-                .glassEffect(.regular, cornerRadius: 22)
-                .padding(.top, syncBannerTopPadding)
-                .allowsHitTesting(false)
+                .padding(.horizontal, 18)
+                .padding(.vertical, 14)
+                .frame(minHeight: 64)
+                .glassEffect(.regular, cornerRadius: 24)
+                .offset(y: syncBannerDragOffset)
+                .gesture(
+                    DragGesture(minimumDistance: 8)
+                        .onChanged { value in
+                            syncBannerDragOffset = min(0, value.translation.height)
+                        }
+                        .onEnded { value in
+                            if value.translation.height < -28 {
+                                withAnimation(.spring(response: 0.32, dampingFraction: 0.84)) {
+                                    showSyncSuccessChip = false
+                                    syncBannerVisibleForCurrentRun = false
+                                    syncBannerDragOffset = -60
+                                }
+                                syncBannerDismissedUntil = Date().addingTimeInterval(35)
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                                    withAnimation(.spring(response: 0.35, dampingFraction: 0.88)) {
+                                        syncBannerDragOffset = 0
+                                    }
+                                }
+                            } else {
+                                withAnimation(.spring(response: 0.30, dampingFraction: 0.86)) {
+                                    syncBannerDragOffset = 0
+                                }
+                            }
+                        }
+                )
                 .transition(
                     .asymmetric(
                         insertion: .move(edge: .top).combined(with: .opacity),

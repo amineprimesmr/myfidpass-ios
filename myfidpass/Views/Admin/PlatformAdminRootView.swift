@@ -386,7 +386,7 @@ private struct PlatformAdminStatisticsPage: View {
             Text(title)
                 .font(.subheadline.weight(.semibold))
             Text(value.map(String.init) ?? "—")
-                .font(.system(size: 34, weight: .bold, design: .rounded))
+                .font(.system(size: 34, weight: .bold, design: .default))
                 .foregroundStyle(AppTheme.Colors.primary)
             Text(hint)
                 .font(.caption)

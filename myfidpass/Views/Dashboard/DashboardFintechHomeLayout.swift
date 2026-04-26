@@ -64,7 +64,7 @@ struct DashboardHomeGlassIconButton: View {
                         .foregroundStyle(palette.onCanvasPrimary)
                         .frame(width: diameter, height: diameter)
                 }
-                .buttonStyle(.glass)
+                .buttonStyle(.glass(.regular))
                 .buttonBorderShape(.circle)
             } else {
                 Button(action: action) {
@@ -355,11 +355,11 @@ struct FintechTransactionRow: View {
     /// `true` quand le programme fidélité est en points (pas tampons) — aligné sur `CardPreviewDisplaySnapshot.programType`.
     var isPointsProgram: Bool = false
 
-    private static let dateFormatter: DateFormatter = {
+    private static let timeOnlyFormatter: DateFormatter = {
         let f = DateFormatter()
         f.locale = Locale(identifier: "fr_FR")
-        f.dateStyle = .medium
-        f.timeStyle = .none
+        f.dateStyle = .none
+        f.timeStyle = .short
         return f
     }()
 
@@ -382,6 +382,22 @@ struct FintechTransactionRow: View {
         }
     }
 
+    /// Dernière activité : pas de coupure « à minuit » — au-delà d’hier, libellé relatif (ex. il y a 3 j).
+    private var activityDateSubtitle: String {
+        let d = entry.date
+        let cal = Calendar.current
+        if cal.isDateInToday(d) {
+            return "Aujourd’hui · \(Self.timeOnlyFormatter.string(from: d))"
+        }
+        if cal.isDateInYesterday(d) {
+            return "Hier · \(Self.timeOnlyFormatter.string(from: d))"
+        }
+        let rel = RelativeDateTimeFormatter()
+        rel.locale = Locale(identifier: "fr_FR")
+        rel.unitsStyle = .abbreviated
+        return rel.localizedString(for: d, relativeTo: Date())
+    }
+
     var body: some View {
         HStack(alignment: .center, spacing: 14) {
             ZStack {
@@ -399,7 +415,7 @@ struct FintechTransactionRow: View {
                     .foregroundStyle(palette.onCanvasPrimary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.82)
-                Text(Self.dateFormatter.string(from: entry.date))
+                Text(activityDateSubtitle)
                     .font(.subheadline)
                     .foregroundStyle(palette.secondaryText)
             }
@@ -428,10 +444,13 @@ struct FintechTransactionRow: View {
 
 struct FintechTransactionsSectionHeader: View {
     let palette: DashboardRevolutPalette
-    /// Tap sur le titre « Dernières / Transactions » → liste complète.
+    /// Tap sur le titre « Dernières / Transactions » → outils d’analyse (ou autre, selon l’appelant).
     var onSeeAll: () -> Void
     /// Bouton scanner à droite.
     var onOpenScanner: () -> Void
+    /// Transitions iOS 18+ : zoom depuis le titre vers la feuille stats (optionnel).
+    var statsTransitionSourceID: String? = nil
+    var statsTransitionNamespace: Namespace.ID? = nil
 
     /// Deux lignes, deux styles (évite `Text` + `Text`, déprécié en iOS 26).
     private var titleText: some View {
@@ -443,26 +462,46 @@ struct FintechTransactionsSectionHeader: View {
         }
     }
 
+    @ViewBuilder
+    private var seeAllTitleButton: some View {
+        let label = titleText
+            .font(.system(.title, design: .default).weight(.semibold))
+            .multilineTextAlignment(.leading)
+            .lineLimit(3)
+            .minimumScaleFactor(0.48)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        if let sid = statsTransitionSourceID, let ns = statsTransitionNamespace {
+            Button(action: onSeeAll) { label }
+                .buttonStyle(.plain)
+                .layoutPriority(1)
+                .zoomTransitionSource(id: sid, in: ns)
+        } else {
+            Button(action: onSeeAll) { label }
+                .buttonStyle(.plain)
+                .layoutPriority(1)
+        }
+    }
+
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
-            Button(action: onSeeAll) {
-                titleText
-                    .font(.system(.title, design: .rounded).weight(.semibold))
-                    .multilineTextAlignment(.leading)
-                    .lineLimit(3)
-                    .minimumScaleFactor(0.48)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .layoutPriority(1)
-            .accessibilityLabel("Dernières transactions")
-            .accessibilityHint("Affiche toute l’activité.")
+            seeAllTitleButton
+                .accessibilityLabel("Dernières transactions")
+                .accessibilityHint("Ouvre les outils d’analyse (statistiques).")
 
             scannerButton
                 .layoutPriority(0)
                 /// Légèrement plus haut et à gauche pour équilibrer le titre deux lignes + grossir le touch target.
                 .offset(x: Self.scannerVisualOffset.width, y: Self.scannerVisualOffset.height)
+                .onBoarding(2, cornerRadius: 50, visualOffset: Self.scannerVisualOffset) {
+                    VStack(spacing: 6) {
+                        Text("Scanner un QR code")
+                            .font(.headline)
+                        Text("Scannez la carte Wallet d'un client pour enregistrer son passage ou créditer ses points.")
+                            .font(.caption)
+                            .multilineTextAlignment(.center)
+                    }
+                }
         }
     }
 

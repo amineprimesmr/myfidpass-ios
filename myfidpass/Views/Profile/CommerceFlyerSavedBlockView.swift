@@ -8,6 +8,18 @@
 import SwiftUI
 import UIKit
 import ImageIO
+import Photos
+
+/// Décodage de l’état flyer (dégradé / voile) à partir du bootstrap embarqué.
+private enum CommerceFlyerBootstrapUnderlayState {
+    static func resolved(from bootstrapBase64: String?) -> FlyerStateDTO {
+        let t = bootstrapBase64?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !t.isEmpty, let s = FlyerBootstrapPreviewPayloadBuilder.flyerStateFromBootstrapBase64(t) { return s }
+        var d = FlyerStateDTO.default
+        d.normalizeClamps()
+        return d
+    }
+}
 
 /// Décode `data:image/…;base64,…` pour miniature (PNG / JPEG / WebP).
 private enum CommerceFlyerDataURLImage {
@@ -25,55 +37,120 @@ private enum CommerceFlyerDataURLImage {
     }
 }
 
-/// Présente `UIActivityViewController` depuis le VC racine — pas comme contenu d’une `.sheet` SwiftUI (écran noir / rendu incorrect sur iOS récents).
-private enum CommerceNativeSharePresenter {
-    @MainActor
-    static func present(activityItems: [Any]) {
-        guard !activityItems.isEmpty else { return }
-        let vc = UIActivityViewController(activityItems: activityItems, applicationActivities: nil)
-        guard let anchor = topViewController() else { return }
-        if let pop = vc.popoverPresentationController {
-            pop.sourceView = anchor.view
-            pop.sourceRect = CGRect(
-                x: anchor.view.bounds.midX - 0.5,
-                y: anchor.view.bounds.midY - 0.5,
-                width: 1,
-                height: 1
-            )
-            pop.permittedArrowDirections = []
-        }
-        anchor.present(vc, animated: true)
+/// Enregistrement direct : photothèque + dossier Documents (exposé dans l’app Fichiers quand le partage iTunes / fichiers est activé).
+private enum CommerceFlyerSaveToDevice {
+    struct Outcome {
+        let message: String
+        let anySuccess: Bool
     }
 
-    @MainActor
-    private static func topViewController(base: UIViewController? = nil) -> UIViewController? {
-        let root: UIViewController? = {
-            if let base { return base }
-            let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-            let scene = scenes.first { $0.activationState == .foregroundActive }
-                ?? scenes.first
-            let window = scene?.windows.first { $0.isKeyWindow } ?? scene?.windows.first
-            return window?.rootViewController
-        }()
-        guard let root else { return nil }
-        if let nav = root as? UINavigationController {
-            return topViewController(base: nav.visibleViewController)
+    static func save(image: UIImage) async -> Outcome {
+        var photosOK = false
+        var fileOK = false
+        var fileName: String?
+        var errors: [String] = []
+
+        let status = await withCheckedContinuation { (c: CheckedContinuation<PHAuthorizationStatus, Never>) in
+            PHPhotoLibrary.requestAuthorization(for: .addOnly) { c.resume(returning: $0) }
         }
-        if let tab = root as? UITabBarController {
-            return topViewController(base: tab.selectedViewController)
+        if status == .authorized {
+            do {
+                try await PHPhotoLibrary.shared().performChanges {
+                    PHAssetChangeRequest.creationRequestForAsset(from: image)
+                }
+                photosOK = true
+            } catch {
+                errors.append("Photos : \(error.localizedDescription)")
+            }
+        } else {
+            // Accès refusé : rappelé plus bas si l’enregistrement disque a réussi.
         }
-        if let presented = root.presentedViewController {
-            return topViewController(base: presented)
+
+        do {
+            let (_, name) = try writeJpegToDocumentsFolder(image: image)
+            fileOK = true
+            fileName = name
+        } catch {
+            errors.append("Fichier : \(error.localizedDescription)")
         }
-        return root
+
+        var parts: [String] = []
+        if photosOK {
+            parts.append("L’image a été enregistrée dans votre photothèque (Photos).")
+        }
+        if fileOK, let name = fileName {
+            parts.append("Un fichier a été enregistré : « \(name) ». Ouvrez l’app Fichiers, onglet « Sur mon iPhone », dossier « MyFidpass », sous-dossier « Flyer ».")
+        }
+        if !photosOK, fileOK, status != .authorized {
+            parts.append("L’enregistrement dans Photos a été refusé. Vous pouvez l’autoriser dans Réglages > MyFidpass > Photos (ajout à la photothèque).")
+        }
+        if !photosOK, !fileOK, status == .authorized {
+            parts.append(contentsOf: errors)
+        }
+        if !photosOK, !fileOK, status != .authorized {
+            if errors.isEmpty {
+                parts.append("L’enregistrement dans Photos a été refusé et le fichier n’a pas pu être créé. Vérifiez l’espace de stockage et les autorisations dans Réglages > MyFidpass > Photos.")
+            } else {
+                parts = errors
+            }
+        } else if !fileOK, photosOK {
+            parts.append(contentsOf: errors)
+        }
+        if parts.isEmpty {
+            parts = ["Enregistrement impossible. Réessayez plus tard."]
+        }
+        return Outcome(
+            message: parts.joined(separator: "\n\n"),
+            anySuccess: photosOK || fileOK
+        )
+    }
+
+    private static func writeJpegToDocumentsFolder(image: UIImage) throws -> (URL, String) {
+        guard let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
+            throw NSError(domain: "CommerceFlyer", code: 1, userInfo: [NSLocalizedDescriptionKey: "Dossier documents indisponible."])
+        }
+        let flyer = dir.appendingPathComponent("Flyer", isDirectory: true)
+        try FileManager.default.createDirectory(at: flyer, withIntermediateDirectories: true)
+        let fmt = DateFormatter()
+        fmt.locale = Locale(identifier: "en_US_POSIX")
+        fmt.timeZone = TimeZone.current
+        fmt.dateFormat = "yyyy-MM-dd-HHmmss"
+        let name = "MyFidpass-flyer-\(fmt.string(from: Date())).jpg"
+        let url = flyer.appendingPathComponent(name)
+        guard let data = image.jpegData(compressionQuality: 0.92) else {
+            throw NSError(domain: "CommerceFlyer", code: 2, userInfo: [NSLocalizedDescriptionKey: "Export JPEG indisponible."])
+        }
+        try data.write(to: url, options: .atomic)
+        return (url, name)
     }
 }
 
 /// Même fichier que `custom_bg_data_url` dans les prefs : `GET …/public/flyer-custom-bg` (robuste si le GET JSON ne renvoie pas le data URL complet côté app).
 private enum CommerceFlyerPublicBgThumbnail {
+    private static func uiImageFromImageData(_ data: Data, screenScale: CGFloat) -> UIImage? {
+        if let u = UIImage(data: data) { return u }
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let cg = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
+        return UIImage(cgImage: cg, scale: screenScale, orientation: .up)
+    }
+
+    /// Mémoire → disque (dernier GET) → réseau ; remplit cache pour la prochaine ouverture Commerce.
     static func loadUIImage(slug: String) async -> UIImage? {
         let trimmed = slug.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
+        if let mem = CommerceFlyerRasterCache.image(forPublicFlyerBgSlug: trimmed) {
+            return mem
+        }
+        let screenScale = await MainActor.run { UIScreen.main.scale }
+        if let disk = CommerceFlyerStateCache.readPublicFlyerBackgroundImageData(slug: trimmed) {
+            let ui = await Task.detached(priority: .userInitiated) {
+                uiImageFromImageData(disk, screenScale: screenScale)
+            }.value
+            if let ui {
+                await MainActor.run { CommerceFlyerRasterCache.setPublicFlyerBgImage(ui, slug: trimmed) }
+                return ui
+            }
+        }
         let enc = trimmed.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? trimmed
         let base = APIConfig.baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         guard let url = URL(string: "\(base)/api/businesses/\(enc)/public/flyer-custom-bg") else { return nil }
@@ -82,11 +159,15 @@ private enum CommerceFlyerPublicBgThumbnail {
             req.timeoutInterval = 25
             let (data, resp) = try await URLSession.shared.data(for: req)
             guard let http = resp as? HTTPURLResponse, (200 ... 299).contains(http.statusCode), !data.isEmpty else { return nil }
-            if let u = UIImage(data: data) { return u }
-            guard let source = CGImageSourceCreateWithData(data as CFData, nil),
-                  let cg = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
-            let scale = await MainActor.run { UIScreen.main.scale }
-            return UIImage(cgImage: cg, scale: scale, orientation: .up)
+            let ui = await Task.detached(priority: .userInitiated) {
+                uiImageFromImageData(data, screenScale: screenScale)
+            }.value
+            guard let ui else { return nil }
+            await MainActor.run {
+                CommerceFlyerRasterCache.setPublicFlyerBgImage(ui, slug: trimmed)
+            }
+            CommerceFlyerStateCache.writePublicFlyerBackgroundImageData(data, slug: trimmed)
+            return ui
         } catch {
             return nil
         }
@@ -122,8 +203,37 @@ struct CommerceFlyerSavedBlockView: View {
     @State private var compositeWebLoading = false
     /// Évite d’afficher le fond d’un autre commerce si le slug change sans recréer la vue.
     @State private var hydratedForSlug: String?
+    @State private var cachedUnderlayState: FlyerStateDTO = CommerceFlyerBootstrapUnderlayState.resolved(from: nil)
 
     private var rasterThumbnail: UIImage? { cachedDataURLThumbnail ?? loadedPublicThumbnail }
+
+    /// Lecture disque + mémoire (sans attente async) : fond IA visible dès le 1ʳᵉ frame si déjà en cache.
+    private func syncHydratePublicBgFromCachesIfNeeded() {
+        let slug = businessSlug?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !slug.isEmpty, loadedPublicThumbnail == nil, cachedDataURLThumbnail == nil else { return }
+        if let mem = CommerceFlyerRasterCache.image(forPublicFlyerBgSlug: slug) {
+            loadedPublicThumbnail = mem
+            isLoadingPublicThumbnail = false
+            return
+        }
+        guard let d = CommerceFlyerStateCache.readPublicFlyerBackgroundImageData(slug: slug) else { return }
+        let scale = UIScreen.main.scale
+        let ui: UIImage? = {
+            if let u = UIImage(data: d) { return u }
+            guard let source = CGImageSourceCreateWithData(d as CFData, nil),
+                  let cg = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
+            return UIImage(cgImage: cg, scale: scale, orientation: .up)
+        }()
+        if let ui {
+            loadedPublicThumbnail = ui
+            CommerceFlyerRasterCache.setPublicFlyerBgImage(ui, slug: slug)
+            isLoadingPublicThumbnail = false
+        }
+        let rawT = bootstrapPreviewBase64?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !rawT.isEmpty {
+            cachedUnderlayState = CommerceFlyerBootstrapUnderlayState.resolved(from: rawT)
+        }
+    }
 
     private var hasBootstrapComposite: Bool {
         let b = bootstrapPreviewBase64?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -155,9 +265,7 @@ struct CommerceFlyerSavedBlockView: View {
                 let webB64 = (under != nil ? cachedStrippedBootstrapB64 : nil) ?? rawB64
                 ZStack {
                     if let u = under {
-                        Image(uiImage: u)
-                            .resizable()
-                            .scaledToFit()
+                        FlyerNativeUnderlayStack(state: cachedUnderlayState, image: u)
                     }
                     FlyerPreviewWebView(
                         bootstrapBase64: webB64,
@@ -248,6 +356,7 @@ struct CommerceFlyerSavedBlockView: View {
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                 onOpenFlyerHub()
             }
+            .onAppear { syncHydratePublicBgFromCachesIfNeeded() }
 
             VStack(spacing: 14) {
                 VStack(spacing: 8) {
@@ -262,7 +371,7 @@ struct CommerceFlyerSavedBlockView: View {
                                 )
                             )
                         Text("Votre flyer de jeu est prêt")
-                            .font(.system(.title3, design: .rounded, weight: .bold))
+                            .font(.system(.title3, design: .default, weight: .bold))
                             .foregroundStyle(AppTheme.Colors.textPrimary)
                             .multilineTextAlignment(.center)
                     }
@@ -356,6 +465,8 @@ struct CommerceFlyerSavedBlockView: View {
                 cachedStrippedBootstrapB64 = rawB64
             }
 
+            cachedUnderlayState = CommerceFlyerBootstrapUnderlayState.resolved(from: rawB64)
+
             if !slug.isEmpty {
                 hydratedForSlug = slug
             }
@@ -374,10 +485,15 @@ struct CommerceSavedFlyerLargePreviewView: View {
     let bootstrapPreviewBase64: String?
     let businessSlug: String?
     let onDismiss: () -> Void
+    /// Ferme l’aperçu et ouvre le hub Flyer (textes, couleurs, aperçu — comme « Modifier » dans le studio).
+    let onEditFlyer: () -> Void
     /// Après confirmation dans l’alerte : fermer cet écran et ouvrir l’assistant (parent).
     let onConfirmRecreate: () -> Void
 
     @State private var showRecreateConfirm = false
+    @State private var isSavingFlyerDownload = false
+    @State private var showDownloadResult = false
+    @State private var downloadResultText = ""
 
     // ── Résultats calculés hors du view body (off main thread) ─────────────────
     @State private var cachedDataURLThumbnail: UIImage?
@@ -386,6 +502,7 @@ struct CommerceSavedFlyerLargePreviewView: View {
     @State private var loadedPublicThumbnail: UIImage?
     @State private var isLoadingPublicThumbnail = false
     @State private var hydratedForSlug: String?
+    @State private var cachedUnderlayState: FlyerStateDTO = CommerceFlyerBootstrapUnderlayState.resolved(from: nil)
 
     private var rasterThumbnail: UIImage? { cachedDataURLThumbnail ?? loadedPublicThumbnail }
 
@@ -394,10 +511,49 @@ struct CommerceSavedFlyerLargePreviewView: View {
         return !b.isEmpty
     }
 
-    private var canShare: Bool {
-        if rasterThumbnail != nil { return true }
-        let link = shareURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !link.isEmpty
+    private var canSaveFlyerToDevice: Bool { rasterThumbnail != nil }
+
+    private var commerceRecreateRegenerationAlreadyUsed: Bool {
+        let s = businessSlug?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !s.isEmpty else { return false }
+        return FlyerCommerceRecreateOnceGuard.hasConsumedRegenerateSession(slug: s)
+    }
+
+    private func largePreviewSyncHydratePublicBgFromCachesIfNeeded() {
+        let slug = businessSlug?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !slug.isEmpty, loadedPublicThumbnail == nil, cachedDataURLThumbnail == nil else { return }
+        if let mem = CommerceFlyerRasterCache.image(forPublicFlyerBgSlug: slug) {
+            loadedPublicThumbnail = mem
+            isLoadingPublicThumbnail = false
+        } else if let d = CommerceFlyerStateCache.readPublicFlyerBackgroundImageData(slug: slug) {
+            let scale = UIScreen.main.scale
+            let ui: UIImage? = {
+                if let u = UIImage(data: d) { return u }
+                guard let source = CGImageSourceCreateWithData(d as CFData, nil),
+                      let cg = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
+                return UIImage(cgImage: cg, scale: scale, orientation: .up)
+            }()
+            if let ui {
+                loadedPublicThumbnail = ui
+                CommerceFlyerRasterCache.setPublicFlyerBgImage(ui, slug: slug)
+                isLoadingPublicThumbnail = false
+            }
+        }
+        let rawT = bootstrapPreviewBase64?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !rawT.isEmpty {
+            cachedUnderlayState = CommerceFlyerBootstrapUnderlayState.resolved(from: rawT)
+        }
+    }
+
+    @MainActor
+    private func performFlyerDownload() async {
+        guard let image = rasterThumbnail, !isSavingFlyerDownload else { return }
+        isSavingFlyerDownload = true
+        let outcome = await CommerceFlyerSaveToDevice.save(image: image)
+        isSavingFlyerDownload = false
+        downloadResultText = outcome.message
+        showDownloadResult = true
+        UINotificationFeedbackGenerator().notificationOccurred(outcome.anySuccess ? .success : .error)
     }
 
     var body: some View {
@@ -414,9 +570,7 @@ struct CommerceSavedFlyerLargePreviewView: View {
                                 let webB64 = (under != nil ? cachedStrippedBootstrapB64 : nil) ?? rawB64
                                 ZStack {
                                     if let u = under {
-                                        Image(uiImage: u)
-                                            .resizable()
-                                            .scaledToFit()
+                                        FlyerNativeUnderlayStack(state: cachedUnderlayState, image: u)
                                     }
                                     FlyerPreviewWebView(
                                         bootstrapBase64: webB64,
@@ -456,49 +610,45 @@ struct CommerceSavedFlyerLargePreviewView: View {
                         }
                         .padding(.horizontal, 16)
 
-                        Text("Pincement pour faire défiler")
-                            .font(.caption)
-                            .foregroundStyle(.white.opacity(0.55))
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal, 24)
-
-                        VStack(spacing: 14) {
-                            HStack(spacing: 12) {
-                                Button {
-                                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                                    let items = buildShareItems()
-                                    if !items.isEmpty {
-                                        CommerceNativeSharePresenter.present(activityItems: items)
+                        HStack(spacing: 12) {
+                            Button {
+                                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                                Task { await performFlyerDownload() }
+                            } label: {
+                                Group {
+                                    if isSavingFlyerDownload {
+                                        HStack(spacing: 8) {
+                                            ProgressView()
+                                                .tint(.black)
+                                            Text("Enregistrement…")
+                                        }
+                                    } else {
+                                        Label("Télécharger", systemImage: "square.and.arrow.down")
                                     }
-                                } label: {
-                                    Label("Télécharger", systemImage: "square.and.arrow.down")
-                                        .font(.subheadline.weight(.semibold))
-                                        .frame(maxWidth: .infinity)
-                                        .padding(.vertical, 14)
                                 }
-                                .buttonStyle(.borderedProminent)
-                                .tint(.white)
-                                .foregroundStyle(.black)
-                                .disabled(!canShare)
-
-                                Button {
-                                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                                    showRecreateConfirm = true
-                                } label: {
-                                    Label("Recréer", systemImage: "arrow.triangle.2.circlepath")
-                                        .font(.subheadline.weight(.semibold))
-                                        .frame(maxWidth: .infinity)
-                                        .padding(.vertical, 14)
-                                }
-                                .buttonStyle(.bordered)
-                                .tint(.white)
+                                .font(.subheadline.weight(.semibold))
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 14)
                             }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.white)
+                            .foregroundStyle(.black)
+                            .disabled(!canSaveFlyerToDevice || isSavingFlyerDownload)
 
-                            Text("Télécharger ouvre le partage (image + lien page clients). Recréer : une seule régénération gratuite — réfléchissez à votre brief.")
-                                .font(.caption2)
-                                .foregroundStyle(.white.opacity(0.45))
-                                .multilineTextAlignment(.center)
-                                .padding(.horizontal, 8)
+                            Button {
+                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                guard !commerceRecreateRegenerationAlreadyUsed else { return }
+                                showRecreateConfirm = true
+                            } label: {
+                                Label("Recréer", systemImage: "arrow.triangle.2.circlepath")
+                                    .font(.subheadline.weight(.semibold))
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 14)
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(.white)
+                            .disabled(commerceRecreateRegenerationAlreadyUsed)
+                            .opacity(commerceRecreateRegenerationAlreadyUsed ? 0.4 : 1)
                         }
                         .padding(.horizontal, 16)
                         .padding(.top, 8)
@@ -506,17 +656,54 @@ struct CommerceSavedFlyerLargePreviewView: View {
                     .padding(.vertical, 12)
                 }
             }
-            .navigationTitle("Votre flyer")
+            .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Fermer") {
-                        onDismiss()
+                ToolbarItem(placement: .topBarLeading) {
+                    HStack {
+                        Button {
+                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                            onDismiss()
+                        } label: {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 17, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .frame(width: 40, height: 40)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Retour")
+                        .glassStyleDark(cornerRadius: 20)
+                        Spacer()
                     }
+                    .frame(width: 120, alignment: .leading)
+                }
+                ToolbarItem(placement: .principal) {
+                    Text("Votre flyer")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(.white)
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    HStack {
+                        Spacer()
+                        Button {
+                            onEditFlyer()
+                        } label: {
+                            Text("Modifier")
+                                .fontWeight(.semibold)
+                        }
+                        .tint(AppTheme.Colors.primary)
+                    }
+                    .frame(width: 120, alignment: .trailing)
                 }
             }
+            .onAppear { largePreviewSyncHydratePublicBgFromCachesIfNeeded() }
             .toolbarBackground(.visible, for: .navigationBar)
             .toolbarColorScheme(.dark, for: .navigationBar)
+            .alert("Téléchargement", isPresented: $showDownloadResult) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(downloadResultText)
+            }
             .alert("Recréer votre flyer ?", isPresented: $showRecreateConfirm) {
                 Button("Annuler", role: .cancel) {}
                 Button("Continuer vers l’assistant", role: .destructive) {
@@ -590,21 +777,29 @@ struct CommerceSavedFlyerLargePreviewView: View {
                 cachedStrippedBootstrapB64 = rawB64
             }
 
+            cachedUnderlayState = CommerceFlyerBootstrapUnderlayState.resolved(from: rawB64)
+
             if !slug.isEmpty {
                 hydratedForSlug = slug
             }
         }
     }
 
-    private func buildShareItems() -> [Any] {
-        var items: [Any] = []
-        if let u = rasterThumbnail {
-            items.append(u)
+}
+
+// MARK: - Précache GET public (remplit le fichier disque pour l’ouverture suivante de l’onglet Commerce)
+
+enum CommerceFlyerPublicBackgroundWarmup {
+    /// Quand le dashboard ne fournit pas de `data:` complet, l’app charge `…/public/flyer-custom-bg` : on remplit le cache tôt.
+    static func prefetchFromNetworkIfNoCustomBgInPrefs(slug: String, customBgDataUrl: String?) {
+        let c = (customBgDataUrl ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !c.isEmpty { return }
+        let s = slug.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !s.isEmpty else { return }
+        Task(priority: .utility) {
+            if CommerceFlyerRasterCache.image(forPublicFlyerBgSlug: s) != nil { return }
+            if CommerceFlyerStateCache.readPublicFlyerBackgroundImageData(slug: s) != nil { return }
+            _ = await CommerceFlyerPublicBgThumbnail.loadUIImage(slug: s)
         }
-        let link = shareURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !link.isEmpty, let url = URL(string: link) {
-            items.append(url)
-        }
-        return items
     }
 }

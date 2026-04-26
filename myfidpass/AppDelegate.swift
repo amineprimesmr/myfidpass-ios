@@ -61,6 +61,14 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         // Simulateur ou erreur config : on ignore
     }
 
+    /// Verrouille l’app en mode portrait (rotation désactivée).
+    func application(
+        _ application: UIApplication,
+        supportedInterfaceOrientationsFor window: UIWindow?
+    ) -> UIInterfaceOrientationMask {
+        .portrait
+    }
+
     /// Push silencieux (`content-available`) : sync tableau de bord sans bannière.
     func application(
         _ application: UIApplication,
@@ -106,7 +114,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         if let action = userInfo["myfidpass_action"] as? String {
             switch action {
             case "campaign_receipt":
-                NotificationCenter.default.post(name: .myfidpassOpenCampaignsTab, object: nil)
+                if AuthStorage.isCachedWorkspaceStaff {
+                    NotificationCenter.default.post(name: .myfidpassOpenHomeScanner, object: nil)
+                } else {
+                    NotificationCenter.default.post(name: .myfidpassOpenCampaignsTab, object: nil)
+                }
             case "google_business_review":
                 var info: [AnyHashable: Any] = [:]
                 if let reviewId = userInfo["review_id"] as? String { info["review_id"] = reviewId }

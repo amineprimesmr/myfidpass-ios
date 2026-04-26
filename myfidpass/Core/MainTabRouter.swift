@@ -12,6 +12,8 @@ import UIKit
 @MainActor
 final class MainTabRouter: ObservableObject {
     @Published var selectedTab: Int = 0
+    /// Tutoriel : vrai pendant le pré-chargement des onglets + 1ʳᵉ capture — masque l’app et coupe animations / haptiques.
+    @Published var isTutorialTabPriming: Bool = false
     /// L’utilisateur voit l’écran Flyer (hub) dans Commerce : masquer la pastille d’essai au-dessus de la tab bar.
     @Published var isMerchantFlyerHubPresented: Bool = false
     /// Onglet Accueil : aucune navigation poussée (membres, Ma carte, etc.).
@@ -21,7 +23,7 @@ final class MainTabRouter: ObservableObject {
 
     /// Anciennement : bloquait la sortie de l’onglet Commerce sans flyer enregistré — désactivé (navigation libre).
     @Published var merchantFlyerCreationRequired: Bool = false
-    /// Incrémenté quand l’utilisateur tente de quitter Commerce sans flyer — secousse du CTA « Créer mon flyer de jeu ».
+    /// Incrémenté quand l’utilisateur tente de quitter Commerce sans flyer — secousse localisée sur le CTA « Créer mon flyer de jeu ».
     @Published private(set) var flyerPrimaryCTAShakeToken: Int = 0
 
     /// Slug commerce courant (pour lecture cache).

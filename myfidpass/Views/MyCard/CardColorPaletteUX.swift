@@ -38,13 +38,25 @@ enum CardColorPaletteUX {
 
 enum CardCanvaScrollPresets {
     /// Identifiants stables pour ForEach (évite collisions si deux teintes identiques).
+    /// **Neutres** (Y → clair) puis **cercle chromatique** (HSL ~0° → 360°, tons type Tailwind), puis **terre** / kaki.
+    /// Réf. : échelle tailwind / Material — ordre = arc-en-ciel lisible, pas aléatoire.
     static let swatches: [(id: String, hex: String)] = [
-        ("ink", "1A1A1A"), ("navy", "1E3A8A"), ("slate7", "334155"), ("slate5", "64748B"),
-        ("slate3", "CBD5E1"), ("mist", "E2E8F0"), ("snow", "F8FAFC"), ("white", "FFFFFF"),
-        ("blue6", "2563EB"), ("sky5", "0EA5E9"), ("cyan5", "06B6D4"), ("teal5", "14B8A6"),
-        ("emerald5", "10B981"), ("lime5", "84CC16"), ("yellow4", "FACC15"), ("amber5", "F59E0B"),
-        ("orange5", "F97316"), ("red5", "EF4444"), ("rose5", "F43F5E"), ("pink5", "EC4899"),
-        ("fuchsia5", "D946EF"), ("violet5", "8B5CF6"), ("indigo5", "6366F1"), ("brown6", "92400E"),
+        // Gris (éclairci strict : du noir au blanc, ref. type Tailwind `gray` / sRGB)
+        ("ink", "0A0A0A"), ("n950", "030712"), ("n900", "111827"), ("n800", "1F2937"), ("n700", "374151"),
+        ("n600", "4B5563"), ("n500", "6B7280"), ("n400", "9CA3AF"), ("n200", "E5E7EB"), ("n100", "F3F4F6"), ("n50", "F9FAFB"), ("white", "FFFFFF"),
+        // Gris teintés (froid : ardoise / bleu) puis légèrement chaud, avant le spectre
+        ("navy", "1E3A8A"), ("slate7", "334155"), ("slate5", "64748B"), ("slate3", "CBD5E1"),
+        ("zne7", "3F3F46"), ("zinc5", "71717A"), ("zinc2", "E4E4E7"), ("stn5", "78716C"), ("stn2", "E7E5E4"),
+        // — Spectre (rouge → … → rose) — mêmes familles qu’en UI moderne
+        ("red8", "991B1B"), ("red5", "EF4444"), ("red3", "FCA5A5"),
+        ("rorg6", "EA580C"), ("orange5", "F97316"), ("ambr6", "D97706"), ("ambr5", "F59E0B"), ("ambr2", "FDE68A"),
+        ("yel5", "EAB308"), ("yel3", "FDE047"), ("lme5", "84CC16"), ("lme3", "BEF264"), ("lme1", "ECFCCB"),
+        ("grn6", "16A34A"), ("grn5", "22C55E"), ("emr5", "10B981"), ("emr3", "6EE7B7"), ("teal5", "14B8A6"), ("teal3", "5EEAD4"),
+        ("cya6", "0891B2"), ("cya5", "06B6D4"), ("cya3", "67E8F9"), ("sky5", "0EA5E9"), ("sky3", "7DD3FC"), ("blu6", "2563EB"), ("blu4", "60A5FA"),
+        ("ing6", "4F46E5"), ("ing5", "6366F1"), ("ing3", "A5B4FC"), ("vio6", "7C3AED"), ("vio5", "8B5CF6"), ("vio2", "DDD6FE"),
+        ("pur5", "A855F7"), ("pur2", "E9D5FF"), ("fuc5", "D946EF"), ("fuc2", "F0ABFC"),         ("pik5", "EC4899"), ("pik2", "F9A8D4"), ("rse5", "F43F5E"), ("rse2", "FECDD3"),
+        // Terre / sépia (chaud, après l’arc-en-ciel)
+        ("amb9", "78350F"), ("brn6", "92400E"), ("kki7", "3F6212"),
     ]
 }
 
@@ -208,13 +220,6 @@ struct FlyerAIPriorityPaletteRow: View {
         return out.sorted { CardColorPaletteUX.relativeLuminance01(hex6: $0) < CardColorPaletteUX.relativeLuminance01(hex6: $1) }
     }
 
-    /// Pastilles prédéfinies triées du plus sombre au plus clair (dégradé logique).
-    private var presetSwatchesSorted: [(id: String, hex: String)] {
-        CardCanvaScrollPresets.swatches.sorted {
-            CardColorPaletteUX.relativeLuminance01(hex6: $0.hex) < CardColorPaletteUX.relativeLuminance01(hex6: $1.hex)
-        }
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: maxSlots > 1 ? 12 : 8) {
             if maxSlots > 1 {
@@ -223,7 +228,7 @@ struct FlyerAIPriorityPaletteRow: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: rowSpacing) {
                     precisionEntryButton
-                    ForEach(presetSwatchesSorted, id: \.id) { item in
+                    ForEach(CardCanvaScrollPresets.swatches, id: \.id) { item in
                         swatchButton(fixedHex: item.hex)
                     }
                     ForEach(extraLogoSwatches, id: \.self) { n in
@@ -312,7 +317,7 @@ struct FlyerAIPriorityPaletteRow: View {
         .frame(width: chipSize, height: chipSize)
         .overlay(alignment: .topTrailing) {
             Text("\(rank)")
-                .font(.system(size: 10, weight: .black, design: .rounded))
+                .font(.system(size: 10, weight: .black, design: .default))
                 .foregroundStyle(.white)
                 .frame(width: 20, height: 20)
                 .background(Circle().fill(Color.black.opacity(0.48)))
@@ -449,6 +454,55 @@ struct FlyerAIPriorityPaletteRow: View {
     }
 }
 
+// MARK: - Éditeur flyer : un champ #RRGGBB = même carrousel que la création (+ précision)
+
+/// Pastilles horizontales + bouton **+** (couleur précise) — aligné sur `FlyerAIPriorityPaletteRow` (création flyer).
+struct FlyerAIColorFieldCarousel: View {
+    @Binding var hex: String
+    var selectionRingColor: Color = Color(hex: "7C3AED")
+    var compactEmbedded: Bool = true
+
+    @State private var ordered: [String] = ["#2563EB"]
+
+    var body: some View {
+        FlyerAIPriorityPaletteRow(
+            orderedHexes: $ordered,
+            compactEmbedded: compactEmbedded,
+            selectionRingColor: selectionRingColor,
+            maxSlots: 1
+        )
+        .onAppear(perform: pullFromHex)
+        .onChange(of: hex) { _, _ in pullFromHex() }
+        .onChange(of: ordered) { _, new in
+            guard let f = new.first else { return }
+            let withHash: String = {
+                let t = f.trimmingCharacters(in: .whitespacesAndNewlines)
+                if t.hasPrefix("#"), t.count == 7 { return t.uppercased() }
+                let u = t.replacingOccurrences(of: "#", with: "").uppercased()
+                guard u.count == 6, u.count == u.filter(\.isHexDigit).count else { return "#2563EB" }
+                return "#" + u
+            }()
+            if withHash.uppercased() != hex.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() {
+                hex = withHash
+            }
+        }
+    }
+
+    private func pullFromHex() {
+        let t = hex.trimmingCharacters(in: .whitespacesAndNewlines)
+        let withHash: String
+        if t.hasPrefix("#"), t.count == 7, t.dropFirst().allSatisfy(\.isHexDigit) {
+            withHash = t.uppercased()
+        } else {
+            let u = t.replacingOccurrences(of: "#", with: "").uppercased()
+            withHash = (u.count == 6 && u.allSatisfy(\.isHexDigit)) ? "#\(u)" : "#2563EB"
+        }
+        if ordered != [withHash] {
+            ordered = [withHash]
+        }
+    }
+}
+
 // MARK: - Chrome optionnel (carte vs embarqué)
 
 private struct CanvaPaletteRowChrome: ViewModifier {
@@ -520,7 +574,7 @@ struct CardColorPrecisionSheet: View {
                             Image(systemName: "xmark.circle.fill")
                                 .symbolRenderingMode(.hierarchical)
                         }
-                        .buttonStyle(.glass)
+                        .buttonStyle(.glass(.regular))
                         .buttonBorderShape(.capsule)
                         .controlSize(.regular)
                         .accessibilityLabel(Text("Fermer"))
@@ -541,7 +595,7 @@ struct CardColorPrecisionSheet: View {
                             onCommit?()
                             dismiss()
                         }
-                        .buttonStyle(.glass)
+                        .buttonStyle(.glass(.regular))
                         .buttonBorderShape(.capsule)
                         .controlSize(.regular)
                         .tint(AppTheme.Colors.primary)
@@ -583,7 +637,7 @@ struct CardColorPrecisionSheet: View {
             .sheetHideNavigationBar()
         }
         .presentationDetents([.height(380), .medium])
-        .presentationDragIndicator(.visible)
+        .presentationDragIndicator(.hidden)
         .onAppear {
             guard !didLoad else { return }
             didLoad = true
@@ -732,6 +786,7 @@ struct CardColorPrecisionSheet: View {
     private func syncHexFromHSB() {
         let out = composedColor.toHexRGBString()
         hexInput = out
+        hex = out
     }
 
     private func applyHexInput(_ raw: String) {
@@ -750,6 +805,7 @@ struct CardColorPrecisionSheet: View {
             saturation = 0
             brightness = Double(w)
         }
+        hex = "#" + cleaned
     }
 
     private func commitToBinding() {

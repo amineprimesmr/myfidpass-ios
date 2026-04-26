@@ -223,6 +223,23 @@ struct SettingsView: View {
                 statisticsNavigationRow
             }
 
+            if authService.canManageMerchantTeam {
+                GroupedSettingsCard {
+                    NavigationLink {
+                        MerchantTeamManagementView()
+                    } label: {
+                        GroupedSettingsNavigationRow(
+                            icon: "person.3.fill",
+                            title: "Équipe & accès employés",
+                            subtitle: "Invitations, retrait d’accès",
+                            value: nil,
+                            showsChevron: true
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
             GroupedSettingsCard {
                 NavigationLink {
                     MerchantEstablishmentForm(context: viewContext, sections: .engagementOnly)
@@ -245,6 +262,8 @@ struct SettingsView: View {
                 lastSyncDetailBlock
                 GroupedSettingsRowDivider()
                 syncNowButtonRow
+                GroupedSettingsRowDivider()
+                restartTutorialButtonRow
                 GroupedSettingsRowDivider()
                 NavigationLink {
                     SettingsScanSecurityView()
@@ -269,6 +288,19 @@ struct SettingsView: View {
                         subtitle: nil,
                         value: nil,
                         showsChevron: false
+                    )
+                }
+                .buttonStyle(.plain)
+                GroupedSettingsRowDivider()
+                NavigationLink {
+                    MerchantAccountingPackView()
+                } label: {
+                    GroupedSettingsNavigationRow(
+                        icon: "doc.text.magnifyingglass",
+                        title: "Pack comptable (bilan)",
+                        subtitle: "CSV multi-fichiers, passif, jeu, engagement",
+                        value: nil,
+                        showsChevron: true
                     )
                 }
                 .buttonStyle(.plain)
@@ -382,8 +414,12 @@ struct SettingsView: View {
                 isSyncingManual = true
                 await syncService.syncAfterServerMutation()
                 isSyncingManual = false
-                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                flashNotice("Synchronisation terminée.")
+                if let err = syncService.lastError, !err.isEmpty {
+                    UINotificationFeedbackGenerator().notificationOccurred(.error)
+                } else {
+                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                    flashNotice("Synchronisation terminée.")
+                }
             }
         } label: {
             HStack(spacing: 12) {
@@ -407,6 +443,30 @@ struct SettingsView: View {
         }
         .buttonStyle(.plain)
         .disabled(syncService.isSyncing || isSyncingManual)
+    }
+
+    private var restartTutorialButtonRow: some View {
+        Button {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            dismiss()
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: .myfidpassResetTutorial, object: nil)
+            }
+            flashNotice("Tutoriel relancé.")
+        } label: {
+            HStack(spacing: 12) {
+                GroupedSettingsIconBox(systemName: "arrow.counterclockwise")
+                    .frame(width: GroupedSettingsMetrics.iconBoxSize, height: GroupedSettingsMetrics.iconBoxSize)
+                Text("Relancer le tutoriel")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(Color(UIColor.label))
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, GroupedSettingsMetrics.horizontalPadding)
+            .padding(.vertical, GroupedSettingsMetrics.rowVerticalPadding)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     private func flashNotice(_ text: String) {

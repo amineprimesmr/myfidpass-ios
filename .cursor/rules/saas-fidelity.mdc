@@ -1,19 +1,28 @@
 ---
-description: Emplacement du SaaS / backend MyFidpass (fidelity)
+description: Dépôt Fidelity (Bureau) — backend/SaaS MyFidpass, travail API obligatoire
 alwaysApply: true
 ---
 
-# SaaS et backend MyFidpass
+# Backend et SaaS : dossier **fidelity** sur le Bureau
 
-Le **logiciel SaaS** et le **backend API** du projet MyFidpass se trouvent dans le dossier **fidelity** sur le Bureau :
+## Chemins (Mac)
+- **Backend + SaaS** : `/Users/amine/Desktop/fidelity` (dossier `fidelity` sur le Bureau).
+- **App mobile** (workspace courant) : `/Users/amine/Desktop/myfidpass` — **ne contient pas** l’API ; l’API est **uniquement** dans *fidelity*.
 
-- **Chemin** : `~/Desktop/fidelity` (ou `/Users/amine/Desktop/fidelity`)
-- **Structure** : `fidelity/backend/` (Node.js, Express, SQLite), `fidelity/frontend/` (dashboard web)
+*(Sur macOS, “Fidelity” et “fidelity” peuvent s’afficher de façon équivalente ; le nom réel du dossier est en général `fidelity`.)*
 
-Lors de toute évolution concernant l’API (auth, sync, membres, catégories, notifications, etc.) :
+## Règle de travail (obligatoire)
+- Dès qu’une tâche touche l’**API** (endpoints, auth, champs `GET /me`, `workspace_role`, sync, Stripe, webhooks, etc.) : **implémenter ou compléter le backend dans *fidelity* dans la même session**, pas seulement l’app iOS / Android.
+- Ouvrir et éditer par chemin absolu : `fidelity/backend/`, `fidelity/frontend/` si l’écran web ou le dashboard est impacté.
+- S’aligner sur le contrat : `myfidpass/Docs/CONTRAT_API_LOGICIEL.md` — réponses en **snake_case** côté JSON, cohérent avec le client.
+- **Ne pas** conclure une fonctionnalité “app-only” si le serveur n’existe pas ou ne correspond pas : au minimum routes + validation + erreurs documentées (403, 404).
 
-1. **Penser aux deux côtés** : l’app iOS (ce dépôt myfidpass) et le SaaS (fidelity sur le Bureau).
-2. **Synchroniser les contrats** : endpoints, body/query, réponses (snake_case pour l’app iOS).
-3. Si tu modifies ou ajoutes des endpoints, mettre à jour **fidelity** (backend + éventuellement frontend) en plus de l’app.
+## Exceptions
+- Changements **purement UI** mobile sans diff API → pas d’ouverture de *fidelity* requise.
+- L’utilisateur demande **explicitement** de ne pas toucher le backend (rare).
 
-Règle à retenir : **SaaS = dossier fidelity sur le Bureau**.
+## Déploiement
+- Après modification de *fidelity* : appliquer `.cursor/rules/deploy-apres-modif.mdc` (déploiement automatique, sauf si l’utilisateur refuse).
+
+## Rappel
+**SaaS = Bureau → `fidelity`**. Toute évolution “contrat + app” = **fidelity d’abord ou en parallèle**, jamais oubli côté API.

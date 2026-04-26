@@ -200,10 +200,10 @@ struct ScannerView: View {
                         } label: {
                             HStack(alignment: .firstTextBaseline, spacing: 4) {
                                 Text(amountText.isEmpty ? "0" : amountText)
-                                    .font(.system(size: 48, weight: .bold, design: .rounded))
+                                    .font(.system(size: 48, weight: .bold, design: .default))
                                     .foregroundStyle(amountText.isEmpty ? AppTheme.Colors.textSecondary.opacity(0.5) : AppTheme.Colors.primary)
                                 Text("€")
-                                    .font(.system(size: 28, weight: .semibold, design: .rounded))
+                                    .font(.system(size: 28, weight: .semibold, design: .default))
                                     .foregroundStyle(AppTheme.Colors.textSecondary)
                             }
                             .frame(maxWidth: .infinity)

@@ -4,7 +4,7 @@
 //
 //  Bandeau promo essai — uniquement onglet Commerce : même lecture que la pastille flottante (1 € / temps restant),
 //  format compact mais lisible, fond sombre quasi-noir avec halo bleu nuit au centre, compteur en rouge urgence,
-//  CTA pilule blanche assumée. Police Inter (fallback SF Pro si non bundlée).
+//  CTA pilule blanche assumée. Typographie SF Pro (design système).
 //
 
 import SwiftUI
@@ -39,9 +39,8 @@ struct CommerceTrialPromoBannerView: View {
     /// Rouge urgence pour le compteur de temps restant.
     private static let urgencyRed = Color(red: 255 / 255, green: 72 / 255, blue: 79 / 255)
 
-    /// Police Inter si la famille est enregistrée dans le bundle, sinon fallback SF Pro (visuellement très proche).
-    private static func inter(_ size: CGFloat, weight: Font.Weight) -> Font {
-        Font.custom("Inter", size: size).weight(weight)
+    private static func bannerFont(_ size: CGFloat, weight: Font.Weight) -> Font {
+        Font.system(size: size, weight: weight, design: .default)
     }
 
     var body: some View {
@@ -53,24 +52,24 @@ struct CommerceTrialPromoBannerView: View {
     private func banner(now: Date) -> some View {
         let remaining = MerchantTrialSubscribePillView.remainingLabel(until: trialEndsAt, now: now)
         return VStack(alignment: .leading, spacing: 8) {
-            Text("Profitez du 1er mois à 1 €")
-                .font(Self.inter(17, weight: .semibold))
+            Text("3 j d’accès Pro sans abonnement — à la souscription : 1,00 € le 1er mois ou 399,00 €/an")
+                .font(Self.bannerFont(17, weight: .semibold))
                 .foregroundStyle(.white)
                 .fixedSize(horizontal: false, vertical: true)
 
             (
                 Text("Plus que ")
-                    .font(Self.inter(13, weight: .medium))
+                    .font(Self.bannerFont(13, weight: .medium))
                     .foregroundColor(.white.opacity(0.78))
                     + Text(remaining)
-                    .font(Self.inter(13, weight: .semibold))
+                    .font(Self.bannerFont(13, weight: .semibold))
                     .foregroundColor(Self.urgencyRed)
             )
             .fixedSize(horizontal: false, vertical: true)
 
             Button(action: onSubscribe) {
                 Text("Sélectionner un forfait")
-                    .font(Self.inter(15, weight: .bold))
+                    .font(Self.bannerFont(15, weight: .bold))
                     .foregroundStyle(Color(red: 0.08, green: 0.08, blue: 0.10))
                     .tracking(0.2)
                     .frame(maxWidth: .infinity)
@@ -118,7 +117,7 @@ struct CommerceTrialPromoBannerView: View {
         )
         .shadow(color: .black.opacity(0.28), radius: 10, y: 4)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Profitez du premier mois à 1 euro. Plus que \(remaining). Sélectionner un forfait.")
+        .accessibilityLabel("Trois jours offerts, puis offre mensuelle ou annuelle. Plus que \(remaining). Sélectionner un forfait.")
     }
 }
 

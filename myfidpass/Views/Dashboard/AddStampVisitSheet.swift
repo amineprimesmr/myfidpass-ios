@@ -114,7 +114,7 @@ struct AddStampVisitSheet: View {
                             .padding(.top, headerTopInset + 10)
 
                         Text(stampCaption)
-                            .font(.system(size: 15, weight: .medium, design: .rounded))
+                            .font(.system(size: 15, weight: .medium, design: .default))
                             .foregroundStyle(topChrome.primary)
                             .multilineTextAlignment(.center)
                             .padding(.horizontal, 22)
@@ -213,7 +213,7 @@ struct AddStampVisitSheet: View {
                             .foregroundStyle(topChrome.primary)
                             .frame(width: 44, height: 44)
                     }
-                    .buttonStyle(.glass)
+                    .buttonStyle(.glass(.regular))
                     .buttonBorderShape(.circle)
                     .accessibilityLabel("Annuler")
                 } else {
@@ -236,7 +236,7 @@ struct AddStampVisitSheet: View {
             }
 
             Text(data.memberName)
-                .font(.system(size: 21, weight: .semibold, design: .rounded))
+                .font(.system(size: 21, weight: .semibold, design: .default))
                 .foregroundStyle(topChrome.primary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.68)
@@ -258,7 +258,7 @@ struct AddStampVisitSheet: View {
             }
         } label: {
             Text("Ajouter un tampon")
-                .font(.system(size: 17, weight: .semibold, design: .rounded))
+                .font(.system(size: 17, weight: .semibold, design: .default))
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity)
                 .frame(height: barHeight)

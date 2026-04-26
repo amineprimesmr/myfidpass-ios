@@ -59,7 +59,7 @@ struct CategoriesManagementView: View {
                     showAddCategory = false
                 }, onCancel: { showAddCategory = false })
                 .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
+                .presentationDragIndicator(.hidden)
                 .modifier(LiquidGlassSheetModifier())
             }
             .sheet(item: Binding(
@@ -71,7 +71,7 @@ struct CategoriesManagementView: View {
                     categoryToEdit = nil
                 }, onCancel: { categoryToEdit = nil })
                 .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
+                .presentationDragIndicator(.hidden)
                 .modifier(LiquidGlassSheetModifier())
             }
             .alert("Supprimer la catégorie ?", isPresented: .constant(categoryToDelete != nil)) {
@@ -240,7 +240,7 @@ struct CategoryEditSheet: View {
                 HStack(spacing: 10) {
                     if #available(iOS 26.0, *) {
                         Button("Annuler", action: onCancel)
-                            .buttonStyle(.glass)
+                            .buttonStyle(.glass(.regular))
                             .buttonBorderShape(.capsule)
                             .controlSize(.regular)
                     } else {
@@ -263,7 +263,7 @@ struct CategoryEditSheet: View {
                             onSave(name.trimmingCharacters(in: .whitespaces), hex)
                         }
                         .disabled(!canSave)
-                        .buttonStyle(.glass)
+                        .buttonStyle(.glass(.regular))
                         .buttonBorderShape(.capsule)
                         .controlSize(.regular)
                         .tint(AppTheme.Colors.primary)

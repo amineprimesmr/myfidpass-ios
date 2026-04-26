@@ -35,13 +35,18 @@ enum LogoColorExtractor {
         )
         if !relaxed.isEmpty { return relaxed }
 
-        return extractDominantHex(
+        let last = extractDominantHex(
             from: cgImage,
             maxColors: maxColors,
             minAlpha: 8,
             minLuminance: 0,
             maxLuminance: 1
         )
+        if !last.isEmpty { return last }
+
+        /// Dernière chance (logos très clairs, très sombres, quasi-uniformes) : moyenne RGB des pixels opaques.
+        if let flat = unfilteredAverageHex6(from: cgImage) { return [flat] }
+        return []
     }
 
     /// Rend une bitmap « up » avec orientation appliquée (sinon `cgImage` brut peut être faux) et taille bornée pour l’analyse.
@@ -111,5 +116,46 @@ enum LogoColorExtractor {
             let r = min(255, parts[0]), g = min(255, parts[1]), b = min(255, parts[2])
             return String(format: "%02X%02X%02X", r, g, b)
         }
+    }
+
+    /// Moyenne des canaux (pixels avec alpha ≥ 8) — repli quand le quantification ne sort aucun seau.
+    private static func unfilteredAverageHex6(from cgImage: CGImage) -> String? {
+        let dim = min(sampleSize, cgImage.width, cgImage.height)
+        guard dim > 0 else { return nil }
+
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let bitmapInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue)
+        var pixelData = [UInt8](repeating: 0, count: dim * dim * 4)
+        guard let context = CGContext(
+            data: &pixelData,
+            width: dim,
+            height: dim,
+            bitsPerComponent: 8,
+            bytesPerRow: dim * 4,
+            space: colorSpace,
+            bitmapInfo: bitmapInfo.rawValue
+        ) else { return nil }
+
+        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: dim, height: dim))
+
+        var rSum = 0, gSum = 0, bSum = 0, n = 0
+        for i in stride(from: 0, to: pixelData.count, by: 4) {
+            let a = Int(pixelData[i + 3])
+            if a < 8 { continue }
+            let r = Int(pixelData[i])
+            let g = Int(pixelData[i + 1])
+            let b = Int(pixelData[i + 2])
+            rSum += r
+            gSum += g
+            bSum += b
+            n += 1
+        }
+        guard n > 0 else { return nil }
+        return String(
+            format: "%02X%02X%02X",
+            min(255, rSum / n),
+            min(255, gSum / n),
+            min(255, bSum / n)
+        )
     }
 }

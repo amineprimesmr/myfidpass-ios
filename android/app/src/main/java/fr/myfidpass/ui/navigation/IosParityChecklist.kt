@@ -32,7 +32,7 @@ object IosParityChecklist {
     )
     val settings = listOf(
         "SettingsView", "SettingsNotificationsHubView", "SettingsScanSecurityView",
-        "SettingsLocationDetailView", "MerchantTraceabilityExportView",
+        "SettingsLocationDetailView", "MerchantAccountingPackView", "MerchantTraceabilityExportView",
     )
     val admin = listOf("PlatformAdminRootView")
     val misc = listOf(

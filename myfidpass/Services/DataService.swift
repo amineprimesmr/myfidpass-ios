@@ -416,6 +416,7 @@ final class DataService: ObservableObject {
     }
 
     /// Événements récents : nouvelles cartes et scans, **dédupliqués** (une transaction serveur = une ligne ; tampon local = clé par `Stamp`).
+    /// **Aucun filtre « depuis minuit »** : on garde les N événements les plus récents, même s’ils datent d’il y a plusieurs jours.
     /// - Parameter includeNewCardEvents: sur l’accueil « Dernières transactions », mettre `false` pour n’afficher que les **scans** (évite les doublons visuels membre + inscription).
     func dashboardActivityFeed(limit: Int = 20, includeNewCardEvents: Bool = true) -> [DashboardActivityEntry] {
         guard let template = currentCardTemplate() else { return [] }

@@ -26,6 +26,7 @@ enum CommerceFlyerHydrationFingerprint {
 
 enum CommerceFlyerRasterCache {
     private static let decodedBg = NSCache<NSString, UIImage>()
+    private static let publicBgBySlug = NSCache<NSString, UIImage>()
 
     static func image(forCustomBgDataURL key: String) -> UIImage? {
         decodedBg.object(forKey: key as NSString)
@@ -33,5 +34,18 @@ enum CommerceFlyerRasterCache {
 
     static func setImage(_ image: UIImage, forCustomBgDataURL key: String) {
         decodedBg.setObject(image, forKey: key as NSString)
+    }
+
+    /// GET `…/public/flyer-custom-bg` (même slug) — évite un aller-retour réseau à chaque affichage Commerce.
+    static func image(forPublicFlyerBgSlug slug: String) -> UIImage? {
+        let t = slug.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return nil }
+        return publicBgBySlug.object(forKey: t as NSString)
+    }
+
+    static func setPublicFlyerBgImage(_ image: UIImage, slug: String) {
+        let t = slug.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return }
+        publicBgBySlug.setObject(image, forKey: t as NSString)
     }
 }

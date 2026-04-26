@@ -22,7 +22,7 @@ Connexion email / mot de passe.
 ```json
 {
   "token": "string",
-  "user": { "id": "string?", "email": "string?", "name": "string?" },
+  "user": { "id": "string?", "email": "string?", "name": "string?", "workspace_role": "owner | manager | staff?" },
   "businesses": [
     { "id": "string", "name": "string", "slug": "string", "organization_name": "string?", "created_at": "string?", "dashboard_token": "string?" }
   ]
@@ -61,7 +61,12 @@ Récupère l’utilisateur connecté et la liste des commerces. Appelé à chaqu
 **Réponse 200** :
 ```json
 {
-  "user": { "id": "string?", "email": "string?", "name": "string?" },
+  "user": {
+    "id": "string?",
+    "email": "string?",
+    "name": "string?",
+    "workspace_role": "owner | manager | staff"
+  },
   "businesses": [
     { "id": "string", "name": "string", "slug": "string", "organization_name": "string?", "created_at": "string?", "dashboard_token": "string?" }
   ],
@@ -72,6 +77,48 @@ Récupère l’utilisateur connecté et la liste des commerces. Appelé à chaqu
 - L’app prend `businesses[0].slug` pour les appels suivants (dashboard, scan, wallet, notify). **Il faut au moins un commerce.**
 
 **Réponse 401** : token invalide/expiré → l’app efface le token et redemande une connexion.
+
+- `user.workspace_role` (optionnel) : si `staff`, l’app **restreint** l’UI (2 onglets : accueil scan + compte) ; si absent, traiter comme `owner`. Pour un employé, **`has_active_subscription` doit être `true` lorsque l’abonnement du commerce est actif** (l’employé ne paie pas la souscription en propre).
+- Toute route sensible (`PATCH` settings, envoi de notifs, flyer, etc.) doit **vérifier le rôle côté serveur** ; l’app seule n’est pas une barrière de sécurité.
+
+### 1.1. Équipe (owner / manager uniquement, pas `staff`)
+
+Ces routes sont consommées par l’onglet **Réglages → Équipe** (iOS) ; même contrat côté web SaaS recommandé.
+
+| Méthode | Chemin | Rôle app |
+|--------|--------|----------|
+| `GET` | `/api/businesses/{slug}/dashboard/team` | Liste des accès (invitations / membres). |
+| `POST` | `/api/businesses/{slug}/dashboard/team/invites` | Inviter (body ci‑dessous). |
+| `DELETE` | `/api/businesses/{slug}/dashboard/team/members/{id}` | Retirer l’accès (`id` = `membership_id` côté base, à défaut `user_id` si c’est le contrat d’adoption). |
+
+**Headers** : `Authorization: Bearer` +, si requis, `X-Dashboard-Token` (comme les autres `dashboard/*`).
+
+**Body POST invites** (snake_case) :
+```json
+{ "email": "a@b.fr", "name": "Prénom", "role": "staff" }
+```
+
+**Réponse GET 200** (l’app accepte `members` ou `items` comme clé de tableau) :
+```json
+{
+  "members": [
+    {
+      "membership_id": "string?",
+      "user_id": "string?",
+      "email": "string?",
+      "name": "string?",
+      "role": "owner | manager | staff",
+      "status": "active | pending | …",
+      "created_at": "string?"
+    }
+  ]
+}
+```
+
+**Réponse POST 200** (ex.) : `{ "ok": true, "message": "…" }` (champs optionnels).  
+**Réponse DELETE 200/204** : succès, corps vide autorisé.
+
+**Erreurs** : `403` si l’appelant est `staff` ou sans droit sur ce commerce ; `404` si la route n’est pas encore implémentée (l’app affiche un message explicite).
 
 ---
 
@@ -167,7 +214,11 @@ Quand le commerçant enregistre le design de sa carte dans l’app (« Enregistr
 
 ---
 
-### GET /api/businesses/:slug/dashboard/transactions?limit=100&offset=0
+### GET /api/businesses/:slug/dashboard/transactions?limit=100&offset=0&sort=desc
+
+**Paramètres importants**
+- `sort=desc` : **obligatoire** pour l’app iOS : la liste doit être triée par `created_at` **décroissant** afin que la pagination `offset` ramène d’abord les **transactions récentes** (sinon le fuseau des 1000+ premières pages est l’historique ancien et le tableau de bord ne voit jamais les derniers scans).
+- `days` (optionnel) : filtre sur les N derniers jours, si le backend l’implémente.
 
 **Réponse 200** :
 ```json

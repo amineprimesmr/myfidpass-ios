@@ -112,4 +112,26 @@ enum CommerceFlyerStateCache {
             try? FileManager.default.removeItem(at: customURL)
         }
     }
+
+    // MARK: - Image publique (GET …/public/flyer-custom-bg) — cache disque pour aperçu Commerce instantané
+
+    private static let publicBgFilename = "public_flyer_custom_bg.data"
+
+    static func publicFlyerBackgroundCachedImageDataURL(slug: String) -> URL? {
+        guard !slug.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let dir = try? directoryURL(slug: slug)
+        else { return nil }
+        return dir.appendingPathComponent(publicBgFilename)
+    }
+
+    /// Données image brutes (PNG / JPEG) déjà chargées pour ce slug — évitent un GET réseau sur l’onglet Commerce.
+    static func readPublicFlyerBackgroundImageData(slug: String) -> Data? {
+        guard let url = publicFlyerBackgroundCachedImageDataURL(slug: slug) else { return nil }
+        return try? Data(contentsOf: url)
+    }
+
+    static func writePublicFlyerBackgroundImageData(_ data: Data, slug: String) {
+        guard !data.isEmpty, let url = publicFlyerBackgroundCachedImageDataURL(slug: slug) else { return }
+        try? data.write(to: url, options: .atomic)
+    }
 }

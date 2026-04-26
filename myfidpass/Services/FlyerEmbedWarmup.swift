@@ -15,28 +15,29 @@ enum FlyerEmbedWarmup {
 
     private static var poolViews: [WKWebView] = []
     private static var readyViews: [WKWebView] = []
-    /// 1 vue préchargée après délai (hors pic cold start) : ouverture flyer-embed plus fluide.
-    /// Le démarrage est décalé depuis l’onglet Commerce, pas au lancement global de l’app.
+    /// 1 vue préchauffée (revenir à 1 : pool=2 a coïncidé avec des régressions d’affichage embed côté certains parcours).
     private static let maxPool = 1
     private static let warmupDelegate = WarmupNavigationDelegate()
     private static var delayedStartWorkItem: DispatchWorkItem?
 
     // MARK: - Init
 
-    /// Appelé au lancement de l'app. Remplit le pool.
-    /// Délai léger : évite de créer 2× WKWebView + JavaScriptCore en même temps que la 1ʳᵉ sync Core Data
-    /// (concurrence disque / mémoire au cold start — threads JSC visibles dans les crash malloc).
+    /// Appelé tôt (ex. onglet Commerce) pour qu’`FlyerPreviewWebView` ait souvent un chemin `dequeue()`.
+    /// Court délai : laisse le 1ʳᵉ runloop / Core Data terminer sans saturer le cold start.
+    private static let startupDelay: TimeInterval = 0.05
+
     static func startIfNeeded() {
         guard maxPool > 0 else { return }
         guard poolViews.isEmpty else { return }
         guard delayedStartWorkItem == nil else { return }
+        FlyerEmbedSpinflyerSrcPatch.refreshRemoteTexturePathIfNeeded()
         let work = DispatchWorkItem {
             delayedStartWorkItem = nil
             guard poolViews.isEmpty else { return }
             replenish()
         }
         delayedStartWorkItem = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.4, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + startupDelay, execute: work)
     }
 
     // MARK: - Pool management
@@ -74,6 +75,9 @@ enum FlyerEmbedWarmup {
             for _ in 0 ..< toCreate {
                 let config = WKWebViewConfiguration()
                 config.websiteDataStore = .default()
+                /// Même correctif `atob` + UTF-8 que `FlyerPreviewWebView` (le pool ne passait pas par `makeUIView`).
+                FlyerEmbedAtobUTF8Patch.addTo(config)
+                FlyerEmbedSpinflyerSrcPatch.addTo(config)
                 let wv = WKWebView(
                     frame: CGRect(x: -20, y: -20, width: 2, height: 2),
                     configuration: config

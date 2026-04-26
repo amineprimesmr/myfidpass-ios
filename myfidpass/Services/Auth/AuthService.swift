@@ -38,6 +38,10 @@ final class AuthService: NSObject, ObservableObject {
     @Published private(set) var merchantSubscriptionEligibilityResolved = false
     /// Abonnement Stripe : actif, essai ou `past_due` (aligné sur `hasActiveSubscription` API).
     @Published private(set) var hasActiveMerchantSubscription = false
+    /// Verrou local post-inscription pour forcer l’ouverture du paywall.
+    @Published private(set) var pendingMandatoryPaywallAfterSignup = false
+    /// Doit relancer le tutoriel commerçant une fois le paywall post-inscription quitté.
+    @Published private(set) var pendingHomeTutorialAfterSignup = false
     /// Dernière ligne d’abonnement renvoyée par `/me` (pour distinguer paiement Stripe de l’essai gratuit 24 h).
     @Published private(set) var merchantSubscription: SubscriptionDTO?
     /// Fin de la fenêtre d’essai gratuit commerçant (sans abonnement Stripe payant), si applicable.
@@ -52,7 +56,12 @@ final class AuthService: NSObject, ObservableObject {
     private var cancellables = Set<AnyCancellable>()
 
     /// Employé (caisse) : interface réduite (pas d’onglet Commerce / Notifs marketing).
-    var isMerchantStaffUser: Bool { merchantWorkspaceRole == .staff }
+    /// S’appuie sur le rôle **et** sur `userStaffLogin` persistant (l’API omet parfois `workspace_role` / `staff_login`).
+    var isMerchantStaffUser: Bool {
+        if merchantWorkspaceRole == .staff { return true }
+        if let s = AuthStorage.userStaffLogin?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty { return true }
+        return false
+    }
 
     /// Pour l’UI freemium : abonnement Stripe actif **ou** compte admin plateforme (accès pilotage).
     var effectiveMerchantSubscriptionActive: Bool {
@@ -68,7 +77,13 @@ final class AuthService: NSObject, ObservableObject {
         return s == "active" || s == "trialing" || s == "past_due"
     }
 
-    /// Essai gratuit 24 h **en cours** : la source de vérité est `merchant_trial_ends_at` (non nul côté API tant que pas d’abo Stripe payant).
+    /// Verrou post-inscription : tant que ce flag n’est pas consommé par le paywall,
+    /// l’accès doit rester bloqué pour forcer l’étape paiement.
+    var mustOpenMandatoryPaywallAfterSignup: Bool {
+        pendingMandatoryPaywallAfterSignup
+    }
+
+    /// Essai gratuit 3 j **en cours** : la source de vérité est `merchant_trial_ends_at` (non nul côté API tant que pas d’abo Stripe / IAP payant).
     /// On ne combine pas avec `hasPaidStripeSubscription` : une ligne locale parasite pourrait masquer la pastille à tort.
     var isMerchantTrialPeriodActive: Bool {
         guard !isPlatformAdmin else { return false }
@@ -130,16 +145,22 @@ final class AuthService: NSObject, ObservableObject {
 
     private func loadFromStorage() {
         FirstLaunchOnboarding.bootstrapInstallAndMigrateMerchantPhaseIfNeeded()
+        pendingMandatoryPaywallAfterSignup = AuthStorage.pendingOpenMerchantSubscriptionSheetAfterSignup
+        pendingHomeTutorialAfterSignup = AuthStorage.pendingShowMerchantHomeTutorialAfterSignup
         if AuthStorage.isLoggedIn {
-            currentUserEmail = AuthStorage.userEmail ?? AuthStorage.userStaffLogin
             currentUserPhone = AuthStorage.userPhone
             currentScreen = .authenticated
             merchantSubscriptionEligibilityResolved = false
-            if let raw = AuthStorage.merchantWorkspaceRoleRaw, let r = MerchantWorkspaceRole(rawValue: raw) {
+            if
+                let sl = AuthStorage.userStaffLogin?.trimmingCharacters(in: .whitespacesAndNewlines), !sl.isEmpty
+            {
+                merchantWorkspaceRole = .staff
+            } else if let raw = AuthStorage.merchantWorkspaceRoleRaw, let r = MerchantWorkspaceRole(rawValue: raw) {
                 merchantWorkspaceRole = r
             } else {
                 merchantWorkspaceRole = .owner
             }
+            syncAccountDisplayLineForSession()
             if merchantTrialEndsAt == nil,
                let iso = UserDefaults.standard.string(forKey: merchantTrialEndIsoUserDefaultsKey),
                !iso.isEmpty,
@@ -153,8 +174,29 @@ final class AuthService: NSObject, ObservableObject {
             isPlatformAdmin = false
             adminShowsMerchantWorkspace = false
             merchantWorkspaceRole = .owner
+            pendingMandatoryPaywallAfterSignup = false
+            pendingHomeTutorialAfterSignup = false
             UserDefaults.standard.removeObject(forKey: merchantTrialEndIsoUserDefaultsKey)
         }
+    }
+
+    func markMandatoryPaywallAfterSignupPending() {
+        AuthStorage.pendingOpenMerchantSubscriptionSheetAfterSignup = true
+        AuthStorage.pendingShowMerchantHomeTutorialAfterSignup = true
+        pendingMandatoryPaywallAfterSignup = true
+        pendingHomeTutorialAfterSignup = true
+    }
+
+    func clearMandatoryPaywallAfterSignupPending() {
+        AuthStorage.pendingOpenMerchantSubscriptionSheetAfterSignup = false
+        pendingMandatoryPaywallAfterSignup = false
+    }
+
+    func consumePendingHomeTutorialAfterSignup() -> Bool {
+        guard pendingHomeTutorialAfterSignup else { return false }
+        pendingHomeTutorialAfterSignup = false
+        AuthStorage.pendingShowMerchantHomeTutorialAfterSignup = false
+        return true
     }
 
     private static func persistMerchantTrialEndIsoFromServer(_ iso: String?) {
@@ -235,6 +277,19 @@ final class AuthService: NSObject, ObservableObject {
         }
     }
 
+    /// Après achat / restore in-app (RevenueCat) : pousse l’état côté API pour que le JWT / `has_active_subscription` suive l’IAP, sans n’attendre que le webhook.
+    @MainActor
+    func syncRevenueCatSubscriptionWithServerAfterPurchase() async {
+        guard AuthStorage.isLoggedIn else { return }
+        guard APIClient.shared.authToken != nil, !(APIClient.shared.authToken ?? "").isEmpty else { return }
+        do {
+            let _: AuthRevenueCatSyncResponse = try await APIClient.shared.request(.authRevenueCatSync)
+        } catch {
+            // rétro-réseau : on tente quand même `/me`
+        }
+        await refreshBusinessesIfNeeded()
+    }
+
     /// Évite un spinner infini si `GET /api/auth/me` reste suspendu (réseau / proxy).
     private func withLoadingBootstrapTimeout<T>(seconds: TimeInterval, operation: @escaping () async throws -> T) async throws -> T {
         try await withThrowingTaskGroup(of: T.self) { group in
@@ -265,9 +320,14 @@ final class AuthService: NSObject, ObservableObject {
         if let uid = me.user.id?.trimmingCharacters(in: .whitespacesAndNewlines), !uid.isEmpty {
             AuthStorage.userId = uid
         }
-        if let em = me.user.email?.trimmingCharacters(in: .whitespacesAndNewlines), !em.isEmpty {
+        if let sl = me.user.staffLogin?.trimmingCharacters(in: .whitespacesAndNewlines), !sl.isEmpty {
+            AuthStorage.userStaffLogin = sl
+        }
+        let hasStaffId = !(AuthStorage.userStaffLogin?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "").isEmpty
+        if !hasStaffId, let em = me.user.email?.trimmingCharacters(in: .whitespacesAndNewlines), !em.isEmpty {
             AuthStorage.userEmail = em
-            currentUserEmail = em
+        } else if hasStaffId {
+            AuthStorage.userEmail = nil
         }
         if let ph = me.user.phone?.trimmingCharacters(in: .whitespacesAndNewlines), !ph.isEmpty {
             AuthStorage.userPhone = ph
@@ -286,6 +346,8 @@ final class AuthService: NSObject, ObservableObject {
             adminShowsMerchantWorkspace = false
         }
         applyWorkspaceRole(from: me.user)
+        alignMerchantRoleWithPersistedStaffSession()
+        syncAccountDisplayLineForSession()
     }
 
     /// Aligné sur le backend : `has_active_subscription` ou statut Stripe `subscription.status`.
@@ -308,20 +370,59 @@ final class AuthService: NSObject, ObservableObject {
     }
 
     private func applyWorkspaceRole(from user: AuthUser) {
-        let role = MerchantWorkspaceRole.resolve(fromAPIValue: user.workspaceRole)
+        var role = MerchantWorkspaceRole.resolve(fromAPIValue: user.workspaceRole)
+        /// Comptes identifiants employés : `GET /me` ou login peuvent omettre `workspace_role` ; `staff_login` est la source fiable.
+        if let sl = user.staffLogin?.trimmingCharacters(in: .whitespacesAndNewlines), !sl.isEmpty {
+            role = .staff
+        }
+        /// Session employé reconnue localement (identifiant sans « @ ») même si l’API ne renvoie pas les champs ci‑dessus.
+        if let s = AuthStorage.userStaffLogin?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty {
+            role = .staff
+        }
         merchantWorkspaceRole = role
         if AuthStorage.isLoggedIn {
             AuthStorage.merchantWorkspaceRoleRaw = role.rawValue
         }
     }
 
-    private func applyAuthSuccess(_ response: AuthLoginResponse) {
+    /// Après `GET /me` : l’API peut renvoyer `workspace_role` absent / erroné ; l’identifiant employé persistant prime.
+    private func alignMerchantRoleWithPersistedStaffSession() {
+        guard AuthStorage.isLoggedIn else { return }
+        if let s = AuthStorage.userStaffLogin?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty {
+            merchantWorkspaceRole = .staff
+            AuthStorage.merchantWorkspaceRoleRaw = MerchantWorkspaceRole.staff.rawValue
+        }
+    }
+
+    /// Comptes employé : on ne stocke pas d’e-mail local ; le libellé de session reprend l’identifiant caisse.
+    private func syncAccountDisplayLineForSession() {
+        if isMerchantStaffUser {
+            AuthStorage.userEmail = nil
+            currentUserEmail = AuthStorage.userStaffLogin
+        } else {
+            currentUserEmail = AuthStorage.userEmail
+        }
+    }
+
+    /// - Parameter passwordLoginFieldNormalized: valeur normalisée du champ « e-mail ou identifiant » pour `POST /auth/login` (obligatoire pour détecter l’employé quand l’API omet `staff_login`).
+    private func applyAuthSuccess(
+        _ response: AuthLoginResponse,
+        passwordLoginFieldNormalized: String? = nil
+    ) {
         AuthStorage.isLoggedIn = true
         if let uid = response.user.id?.trimmingCharacters(in: .whitespacesAndNewlines), !uid.isEmpty {
             AuthStorage.userId = uid
         }
+        let pl = passwordLoginFieldNormalized.map {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        } ?? ""
+        let loginByIdentifierNotEmail = !pl.isEmpty && !pl.contains("@")
         if let sl = response.user.staffLogin?.trimmingCharacters(in: .whitespacesAndNewlines), !sl.isEmpty {
             AuthStorage.userStaffLogin = sl
+            AuthStorage.userEmail = nil
+        } else if loginByIdentifierNotEmail {
+            /// L’app envoie `login` (sans @) : c’est un employé, même si la réponse JSON n’a ni `staff_login` ni `workspace_role`.
+            AuthStorage.userStaffLogin = pl
             AuthStorage.userEmail = nil
         } else {
             AuthStorage.userStaffLogin = nil
@@ -345,7 +446,6 @@ final class AuthService: NSObject, ObservableObject {
             AuthStorage.currentBusinessSlug = nil
         }
         DataService.seedBusinessesFromAuth(response.businesses, context: PersistenceController.shared.container.viewContext)
-        currentUserEmail = AuthStorage.userEmail ?? AuthStorage.userStaffLogin
         currentUserPhone = AuthStorage.userPhone
         hasActiveMerchantSubscription = Self.isMerchantSubscriptionActive(
             hasExplicit: response.hasActiveSubscription,
@@ -360,6 +460,8 @@ final class AuthService: NSObject, ObservableObject {
             adminShowsMerchantWorkspace = false
         }
         applyWorkspaceRole(from: response.user)
+        alignMerchantRoleWithPersistedStaffSession()
+        syncAccountDisplayLineForSession()
         currentScreen = .authenticated
         NotificationsService.shared.syncPushTokenAfterLogin()
     }
@@ -432,6 +534,7 @@ final class AuthService: NSObject, ObservableObject {
             )
             MerchantLinkedPlaceCache.snapshotFromPendingOnboarding()
             FirstLaunchOnboarding.clearPendingEstablishmentFromOnboarding()
+            markMandatoryPaywallAfterSignupPending()
             applyAuthSuccess(response)
         } catch let e as APIError {
             if case .server(let code, _) = e, code == 409 {
@@ -459,7 +562,7 @@ final class AuthService: NSObject, ObservableObject {
         guard !idNorm.isEmpty else { throw AuthError.invalidCredentials }
         do {
             let response: AuthLoginResponse = try await APIClient.shared.request(.authLogin(login: idNorm, password: password))
-            applyAuthSuccess(response)
+            applyAuthSuccess(response, passwordLoginFieldNormalized: idNorm)
         } catch APIError.noAccountInLogiciel {
             throw AuthError.noAccountInLogiciel
         } catch APIError.unauthorized {
@@ -490,6 +593,7 @@ final class AuthService: NSObject, ObservableObject {
         if isNewPhoneSignup {
             MerchantLinkedPlaceCache.snapshotFromPendingOnboarding()
             FirstLaunchOnboarding.clearPendingEstablishmentFromOnboarding()
+            markMandatoryPaywallAfterSignupPending()
         }
         applyAuthSuccess(response)
     }
@@ -511,6 +615,7 @@ final class AuthService: NSObject, ObservableObject {
             if isNewAppleSignup {
                 MerchantLinkedPlaceCache.snapshotFromPendingOnboarding()
                 FirstLaunchOnboarding.clearPendingEstablishmentFromOnboarding()
+                markMandatoryPaywallAfterSignupPending()
             }
             applyAuthSuccess(response)
             currentUserEmail = response.user.email ?? email ?? "Compte Apple"
@@ -546,6 +651,7 @@ final class AuthService: NSObject, ObservableObject {
         if isNewGoogleSignup {
             MerchantLinkedPlaceCache.snapshotFromPendingOnboarding()
             FirstLaunchOnboarding.clearPendingEstablishmentFromOnboarding()
+            markMandatoryPaywallAfterSignupPending()
         }
         applyAuthSuccess(response)
     }
@@ -571,6 +677,7 @@ final class AuthService: NSObject, ObservableObject {
             hasActiveSubscription: me.hasActiveSubscription,
             merchantTrialEndsAt: me.merchantTrialEndsAt
         )
+        markMandatoryPaywallAfterSignupPending()
         applyAuthSuccess(response)
     }
 
@@ -727,10 +834,8 @@ final class AuthService: NSObject, ObservableObject {
         AuthenticatedMediaLoader.clearAllCaches()
         CardLogoStorage.removeAllLocalCardAssets()
         CardPreviewDisplaySnapshotStore.clearAllSnapshots()
-        NotificationSendLocalHistoryStore.clearForAllSlugs()
-        if let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines), !slug.isEmpty {
-            MerchantStatisticsDiskCache.clear(slug: slug)
-        }
+        // Conserver l’historique local d’envois (UserDefaults) + cache stats disque par slug : mêmes données
+        // qu’avant reconnexion — la purge est réservée à `deleteAccount()`.
         // Vider le cache CoreData pour éviter qu'un ancien commerce réapparaisse sur un nouveau compte
         DataService.clearAllLocalData(context: PersistenceController.shared.container.viewContext)
         // Effacer l'établissement pour forcer la re-sélection au prochain lancement (WelcomeFlow)
@@ -748,12 +853,19 @@ final class AuthService: NSObject, ObservableObject {
         isPlatformAdmin = false
         adminShowsMerchantWorkspace = false
         merchantWorkspaceRole = .owner
+        pendingMandatoryPaywallAfterSignup = false
+        pendingHomeTutorialAfterSignup = false
         currentScreen = .welcome
     }
 
     /// Supprime définitivement le compte (appel API + déconnexion).
     func deleteAccount() async throws {
         _ = try await APIClient.shared.request(APIEndpoint.authDeleteAccount) as EmptyResponse
+        if let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines), !slug.isEmpty {
+            MerchantStatisticsDiskCache.clear(slug: slug)
+        }
+        NotificationSendLocalHistoryStore.clearForAllSlugs()
+        NotificationStatsEndpointCache.clearAll()
         logout()
         FirstLaunchOnboarding.resetAfterAccountDeletion()
         firstLaunchOnboardingRestartEpoch += 1

@@ -64,7 +64,6 @@ struct AppUpdateView: View {
                 }
             }
         }
-        .fontDesign(.rounded)
         .padding([.horizontal, .top], 20)
         .onDisappear {
             guard !forcedUpdate else { return }

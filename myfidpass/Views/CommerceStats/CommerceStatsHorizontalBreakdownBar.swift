@@ -6,6 +6,8 @@
 import SwiftUI
 
 struct CommerceStatsHorizontalBreakdownBar: View {
+    @Environment(\.commerceStatsGlassOverlay) private var commerceStatsGlassOverlay
+
     let segments: [CommerceDonutSegment]
 
     var body: some View {
@@ -15,7 +17,7 @@ struct CommerceStatsHorizontalBreakdownBar: View {
             HStack(spacing: 0) {
                 if valid.isEmpty {
                     RoundedRectangle(cornerRadius: 4, style: .continuous)
-                        .fill(CommerceStatisticsTheme.secondaryLabel.opacity(0.35))
+                        .fill(CommerceStatisticsTheme.onCardSecondary(forGlassOverlay: commerceStatsGlassOverlay).opacity(0.35))
                 } else {
                     ForEach(valid) { s in
                         RoundedRectangle(cornerRadius: 0, style: .continuous)
@@ -31,6 +33,8 @@ struct CommerceStatsHorizontalBreakdownBar: View {
 }
 
 struct CommerceStatsBreakdownLegend: View {
+    @Environment(\.commerceStatsGlassOverlay) private var commerceStatsGlassOverlay
+
     let segments: [CommerceDonutSegment]
 
     var body: some View {
@@ -42,8 +46,8 @@ struct CommerceStatsBreakdownLegend: View {
                         .fill(s.color)
                         .frame(width: 7, height: 7)
                     Text(s.label)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(CommerceStatisticsTheme.secondaryLabel)
+                        .font(CommerceStatisticsTheme.statsText(size: 11, weight: .medium))
+                        .foregroundStyle(CommerceStatisticsTheme.onCardSecondary(forGlassOverlay: commerceStatsGlassOverlay))
                         .lineLimit(1)
                 }
             }

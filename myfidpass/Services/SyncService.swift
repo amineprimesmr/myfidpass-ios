@@ -10,6 +10,9 @@ import Foundation
 import CoreData
 import Combine
 import UIKit
+import os.log
+
+private let syncServiceLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "myfidpass", category: "Sync")
 
 fileprivate enum SyncMergeUserDefaults {
     static let lastLogoUploadAt = "myfidpass.lastLogoUploadAt"
@@ -48,6 +51,8 @@ final class SyncService: ObservableObject {
     @Published var lastSyncDate: Date?
     @Published private(set) var isSyncing = false
     @Published private(set) var lastError: String?
+    /// Incrémenté à chaque échec de synchro (hors annulation) : l’UI peut réafficher le bandeau d’erreur.
+    @Published private(set) var syncErrorRevision: Int = 0
 
     /// Référence forte vers l’instance active du SyncService.
     ///
@@ -139,8 +144,10 @@ final class SyncService: ObservableObject {
     /// L’API dashboard plafonne à 200 membres par page (`dashboard.js`).
     private static let membersAPIPageSize = 200
     private static let transactionsAPIPageSize = 100
-    private static let maxMemberPages = 40
-    private static let maxTransactionPages = 12
+    /// Augmenté : gros carnets membres (les transactions sans carte importée sont ignorées côté merge).
+    private static let maxMemberPages = 50
+    /// `sort=desc` : pages = des blocs du plus récent au plus ancien (contrat API).
+    private static let maxTransactionPages = 24
 
     private let syncSerialExecutor = SyncSerialExecutor()
 
@@ -148,6 +155,25 @@ final class SyncService: ObservableObject {
     func invalidateSyncThrottle() {
         lastSyncDate = nil
         UserDefaults.standard.removeObject(forKey: Self.lastSyncKey)
+    }
+
+    /// `YYYY-MM` (aligné `CommerceStatsMonthNavigator`) : invalide le cache stats du mois après sync.
+    private static func currentStatsMonthKey(_ date: Date = Date()) -> String {
+        let cal = Calendar(identifier: .gregorian)
+        let d = cal.startOfDay(for: date)
+        let y = cal.component(.year, from: d)
+        let m = cal.component(.month, from: d)
+        return String(format: "%04d-%02d", y, m)
+    }
+
+    private func postSyncFailureBanner() {
+        guard let msg = lastError, !msg.isEmpty else { return }
+        syncErrorRevision += 1
+        NotificationCenter.default.post(
+            name: .myfidpassRemoteSyncDidFail,
+            object: nil,
+            userInfo: ["message": msg as Any]
+        )
     }
 
     /// Recharge serveur → Core Data après une mutation locale enregistrée côté API.
@@ -200,12 +226,17 @@ final class SyncService: ObservableObject {
             }
             lastSyncDate = Date()
             UserDefaults.standard.set(lastSyncDate, forKey: Self.lastSyncKey)
+            if let slug = (resolvedSlug(from: me) ?? cachedSlug)?.trimmingCharacters(in: .whitespacesAndNewlines), !slug.isEmpty {
+                MerchantStatisticsDiskCache.removePeriod(slug: slug, period: Self.currentStatsMonthKey())
+            }
             NotificationCenter.default.post(name: .myfidpassRemoteSyncDidMerge, object: nil)
         } catch APIError.unauthorized {
             lastError = "Session expirée"
             AppState.shared.showError(lastError ?? "Session expirée")
+            postSyncFailureBanner()
         } catch APIError.subscriptionRequired {
             lastError = "Abonnement inactif ou expiré. Réactivez votre offre (Stripe) pour synchroniser le tableau de bord."
+            postSyncFailureBanner()
         } catch APIError.notFound {
             // Souvent slug / URL mal formée ou commerce supprimé : 2ᵉ essai après relecture du profil (slug recalculé).
             do {
@@ -220,6 +251,9 @@ final class SyncService: ObservableObject {
                 try await syncBusiness(slug: slugRetry, skipTemplateOverwrite: skipTemplate)
                 lastSyncDate = Date()
                 UserDefaults.standard.set(lastSyncDate, forKey: Self.lastSyncKey)
+                if let slug = resolvedSlug(from: meRetry)?.trimmingCharacters(in: .whitespacesAndNewlines), !slug.isEmpty {
+                    MerchantStatisticsDiskCache.removePeriod(slug: slug, period: Self.currentStatsMonthKey())
+                }
                 NotificationCenter.default.post(name: .myfidpassRemoteSyncDidMerge, object: nil)
             } catch {
                 presentSyncFailure(error)
@@ -229,8 +263,7 @@ final class SyncService: ObservableObject {
         }
     }
 
-    /// Échec de synchro : pas de bandeau global — l’app continue avec Core Data (données déjà chargées).
-    /// Détail éventuel dans Réglages (`lastError`). Seul `unauthorized` déclenche encore une alerte (reconnexion).
+    /// Échec de synchro : l’app continue avec Core Data ; bandeau + `lastError` (Réglages).
     private func presentSyncFailure(_ error: Error) {
         if isCancelledNetworkError(error) {
             lastError = nil
@@ -241,7 +274,13 @@ final class SyncService: ObservableObject {
                 "Le serveur ne trouve pas ce commerce (ou la connexion est désynchronisée). Ouvrez l’onglet Commerce pour vérifier l’établissement, ou fermez puis rouvrez l’app."
         } else {
             lastError = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let api = error as? APIError, case let .decoding(underlying) = api {
+                syncServiceLog.error("Decoding sync: \(String(reflecting: underlying))")
+            } else {
+                syncServiceLog.error("Synchro: \(String(describing: error))")
+            }
         }
+        postSyncFailureBanner()
     }
 
     /// Ne pas afficher « Réseau: cancelled » : requête annulée (changement d’écran, refresh rapide, etc.).
@@ -368,7 +407,7 @@ final class SyncService: ObservableObject {
         var tierPoints: [String] = []
         var tierLabels: [String] = []
         if let tiers = settings.pointsRewardTiers {
-            for t in tiers.filter({ $0.points > 0 }).prefix(5) {
+            for t in tiers.filter({ $0.points > 0 }).sorted(by: { $0.points < $1.points }).prefix(3) {
                 tierPoints.append(String(t.points))
                 tierLabels.append(t.label.isEmpty ? "Récompense" : t.label)
             }
@@ -431,6 +470,7 @@ final class SyncService: ObservableObject {
 
     private func fetchAllTransactions(slug: String) async throws -> BusinessTransactionsResponse {
         var collected: [TransactionDTO] = []
+        var seenIds = Set<String>()
         var offset = 0
         var serverTotal: Int?
         for _ in 0..<Self.maxTransactionPages {
@@ -441,12 +481,19 @@ final class SyncService: ObservableObject {
                     offset: offset,
                     memberId: nil,
                     days: nil,
-                    type: nil
+                    type: nil,
+                    sort: "desc"
                 )
             ) as BusinessTransactionsResponse
             if serverTotal == nil { serverTotal = page.total }
             if page.transactions.isEmpty { break }
-            collected.append(contentsOf: page.transactions)
+            for t in page.transactions {
+                if let id = t.id, !id.isEmpty {
+                    guard !seenIds.contains(id) else { continue }
+                    seenIds.insert(id)
+                }
+                collected.append(t)
+            }
             if page.transactions.count < Self.transactionsAPIPageSize { break }
             offset += Self.transactionsAPIPageSize
         }

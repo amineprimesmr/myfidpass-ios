@@ -87,11 +87,11 @@ struct FlyerAIGenerationProgressExperience: View {
                     )
                 )
             Text("Création de votre flyer")
-                .font(.system(.subheadline, design: .rounded, weight: .semibold))
+                .font(.system(.subheadline, design: .default, weight: .semibold))
                 .foregroundStyle(FlyerProgressTheme.textPrimary)
             Spacer(minLength: 0)
             Text("\(Int(round(percent * 100)))%")
-                .font(.system(.caption, design: .rounded, weight: .bold).monospacedDigit())
+                .font(.system(.caption, design: .default, weight: .bold).monospacedDigit())
                 .foregroundStyle(FlyerProgressTheme.textSecondary)
                 .contentTransition(.numericText())
         }
@@ -158,10 +158,10 @@ struct FlyerAIGenerationProgressExperience: View {
         let subtitle = Self.stepSubtitles[safe: idx] ?? Self.stepSubtitles[0]
         return VStack(alignment: .leading, spacing: 6) {
             Text(title)
-                .font(.system(.footnote, design: .rounded, weight: .semibold))
+                .font(.system(.footnote, design: .default, weight: .semibold))
                 .foregroundStyle(FlyerProgressTheme.textPrimary)
             Text(subtitle)
-                .font(.system(.caption, design: .rounded))
+                .font(.system(.caption, design: .default))
                 .foregroundStyle(FlyerProgressTheme.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
         }

@@ -5,6 +5,8 @@ alwaysApply: true
 
 # Déploiement après chaque modification
 
+**Dépôt SaaS** : `/Users/amine/Desktop/fidelity` (Bureau). Voir aussi `saas-fidelity.mdc` pour le travail backend obligatoire.
+
 À **chaque fois que l'utilisateur demande une modification** qui touche le projet **fidelity** (SaaS / site myfidpass.fr) :
 
 1. **Après avoir appliqué les changements**, exécuter le déploiement sans attendre que l'utilisateur le demande.

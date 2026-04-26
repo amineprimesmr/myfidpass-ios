@@ -316,6 +316,30 @@ struct GoogleBusinessOkResponse: Decodable {
     let ok: Bool
 }
 
+// MARK: - Locations list (multi-location account)
+
+/// Une fiche Google Business gérée par le compte OAuth connecté.
+struct GoogleBusinessLocationItem: Decodable, Identifiable, Equatable {
+    let locationId: String
+    let locationName: String
+    let placeId: String?
+    let address: String?
+
+    var id: String { locationId }
+}
+
+struct GoogleBusinessLocationsResponse: Decodable {
+    let locations: [GoogleBusinessLocationItem]
+}
+
+/// Réponse de POST /location/select — fiche sélectionnée manuellement par le marchand.
+struct GoogleBusinessSelectLocationResponse: Decodable {
+    let ok: Bool
+    let matchedPlaceId: String?
+    let locationTitle: String?
+    let locationId: String?
+}
+
 // MARK: - Date parsing helper
 
 enum GoogleBusinessDateParser {

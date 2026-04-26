@@ -13,9 +13,11 @@ struct MerchantStatisticRevolutDetailScreen: View {
     let initialPeriodRaw: String
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.managedObjectContext) private var viewContext
+    @Environment(\.commerceStatsGlassOverlay) private var commerceStatsGlassOverlay
 
     @StateObject private var vm = MerchantStatsIndicatorsViewModel()
-    @State private var periodTab: CommerceStatsPeriodTab
+    @State private var periodKey: String
     @State private var chartMode: DetailChartMode = .line
 
     private enum DetailChartMode: Hashable {
@@ -26,20 +28,14 @@ struct MerchantStatisticRevolutDetailScreen: View {
     init(topic: CommerceStatisticDetailTopic, initialPeriodRaw: String) {
         self.topic = topic
         self.initialPeriodRaw = initialPeriodRaw
-        let initial = CommerceStatsPeriodTab(rawValue: initialPeriodRaw) ?? .oneMonth
-        _periodTab = State(initialValue: initial)
+        _periodKey = State(initialValue: CommerceStatsMonthNavigator.normalizeLegacyPeriodToMonthKey(initialPeriodRaw))
     }
 
     private var periodRightLabel: String {
         if let p = vm.stats?.period?.trimmingCharacters(in: .whitespacesAndNewlines), !p.isEmpty {
             return p
         }
-        switch periodTab {
-        case .oneWeek: return "7 jours"
-        case .oneMonth: return "Ce mois-ci"
-        case .sixMonths: return "6 mois"
-        case .oneYear: return "12 mois"
-        }
+        return CommerceStatsMonthNavigator.displayTitle(forMonthKey: periodKey)
     }
 
     private var chartPoints: [RevolutDetailChartPoint] {
@@ -76,41 +72,34 @@ struct MerchantStatisticRevolutDetailScreen: View {
     }
 
     var body: some View {
+        Group {
+            if topic == .newMembers {
+                MerchantStatsAllMembersListScreen(context: viewContext)
+                    .presentationBackground(CommerceStatisticsTheme.newMembersSheetBackground)
+            } else {
+                revolutDetailChartsBody
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var revolutDetailChartsBody: some View {
         ZStack {
-            CommerceStatisticsTheme.background.ignoresSafeArea()
-
-            RadialGradient(
-                colors: [
-                    Color(red: 0.05, green: 0.12, blue: 0.28).opacity(0.55),
-                    Color.clear,
-                ],
-                center: .topLeading,
-                startRadius: 10,
-                endRadius: 320
-            )
-            .ignoresSafeArea()
-
-            RadialGradient(
-                colors: [
-                    Color(red: 0.08, green: 0.22, blue: 0.14).opacity(0.35),
-                    Color.clear,
-                ],
-                center: .topTrailing,
-                startRadius: 10,
-                endRadius: 280
-            )
-            .ignoresSafeArea()
+            // Harmonise la feuille détail avec la carte "Membres" (même teinte/opacité de surface).
+            CommerceStatisticsTheme.cardElevated
+                .opacity(0.92)
+                .ignoresSafeArea()
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     topToolbar
 
                     Text(topic.screenTitle)
-                        .font(.system(size: 22, weight: .semibold, design: .rounded))
+                        .font(CommerceStatisticsTheme.statsText(size: 22, weight: .semibold))
                         .foregroundStyle(.white)
 
                     Text(topic.primaryMetric(from: vm.stats))
-                        .font(.system(size: 40, weight: .bold, design: .rounded))
+                        .font(CommerceStatisticsTheme.statisticNumbers(size: 40, weight: .bold))
                         .foregroundStyle(.white)
                         .minimumScaleFactor(0.75)
                         .lineLimit(1)
@@ -118,12 +107,12 @@ struct MerchantStatisticRevolutDetailScreen: View {
                     if let t = weekOverWeekTrend {
                         HStack(spacing: 6) {
                             Text("\(t.arrow) \(t.text)")
-                                .font(.system(size: 15, weight: .semibold, design: .rounded))
+                                .font(CommerceStatisticsTheme.statisticNumbers(size: 15, weight: .semibold))
                                 .foregroundStyle(t.favorable ? CommerceStatisticsTheme.positive : CommerceStatisticsTheme.negative)
                             Text("·")
                                 .foregroundStyle(CommerceStatisticsTheme.secondaryLabel)
                             Text(periodRightLabel)
-                                .font(.system(size: 15, weight: .medium))
+                                .font(CommerceStatisticsTheme.statsText(size: 15, weight: .medium))
                                 .foregroundStyle(CommerceStatisticsTheme.secondaryLabel)
                         }
                     }
@@ -131,15 +120,12 @@ struct MerchantStatisticRevolutDetailScreen: View {
                     chartBlock
                         .padding(.top, 4)
 
-                    CommerceStatsSegmentedPeriodControl(selection: $periodTab)
-                        .padding(.top, 4)
-
                     Text(topic.chartFootnote)
-                        .font(.system(size: 11, weight: .medium))
+                        .font(CommerceStatisticsTheme.statsText(size: 11, weight: .medium))
                         .foregroundStyle(CommerceStatisticsTheme.secondaryLabel.opacity(0.9))
                         .fixedSize(horizontal: false, vertical: true)
 
-                    CommerceStatsSectionHeader(title: "Par catégorie", onManage: {})
+                    CommerceStatsSectionHeader(title: "Par catégorie")
                         .padding(.top, 8)
 
                     CommerceStatsCategoryListCard(rows: topic.breakdownRows(stats: vm.stats))
@@ -148,7 +134,7 @@ struct MerchantStatisticRevolutDetailScreen: View {
                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
                     } label: {
                         Text("Tout afficher")
-                            .font(.system(size: 15, weight: .semibold))
+                            .font(CommerceStatisticsTheme.statsText(size: 15, weight: .semibold))
                             .foregroundStyle(CommerceStatisticsTheme.accentBlue)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 14)
@@ -161,6 +147,7 @@ struct MerchantStatisticRevolutDetailScreen: View {
                 .padding(.top, 6)
                 .padding(.bottom, 12)
             }
+            .scrollContentBackground(.hidden)
             .scrollIndicators(.hidden)
 
             if vm.isLoading {
@@ -172,10 +159,15 @@ struct MerchantStatisticRevolutDetailScreen: View {
                 }
             }
         }
+        .background(Color.clear)
         .toolbar(.hidden, for: .navigationBar)
         .toolbar(.hidden, for: .tabBar)
-        .task(id: periodTab.rawValue) {
-            await vm.load(period: periodTab.rawValue)
+        .toolbarBackground(.hidden, for: .navigationBar)
+        .task(id: periodKey) {
+            await vm.load(period: periodKey)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .myfidpassRemoteSyncDidMerge)) { _ in
+            Task { await vm.load(period: periodKey) }
         }
     }
 
@@ -190,10 +182,10 @@ struct MerchantStatisticRevolutDetailScreen: View {
                 chartModeChip(.bar, systemImage: "chart.bar.fill")
                 Button {
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                    Task { await vm.load(period: periodTab.rawValue) }
+                    Task { await vm.load(period: periodKey) }
                 } label: {
                     Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(CommerceStatisticsTheme.statsText(size: 14, weight: .semibold))
                         .foregroundStyle(.white)
                         .frame(width: 36, height: 32)
                 }
@@ -216,7 +208,7 @@ struct MerchantStatisticRevolutDetailScreen: View {
             }
         } label: {
             Image(systemName: systemImage)
-                .font(.system(size: 14, weight: .semibold))
+                .font(CommerceStatisticsTheme.statsText(size: 14, weight: .semibold))
                 .foregroundStyle(on ? .white : CommerceStatisticsTheme.secondaryLabel)
                 .frame(width: 36, height: 32)
                 .background {
@@ -238,7 +230,7 @@ struct MerchantStatisticRevolutDetailScreen: View {
                 .frame(height: 220)
                 .overlay {
                     Text("Pas assez de données pour ce graphique.")
-                        .font(.subheadline.weight(.medium))
+                        .font(CommerceStatisticsTheme.statsText(size: 15, weight: .medium))
                         .foregroundStyle(CommerceStatisticsTheme.secondaryLabel)
                 }
         } else {
@@ -312,7 +304,7 @@ struct MerchantStatisticRevolutDetailScreen: View {
                 AxisGridLine(stroke: StrokeStyle(lineWidth: 0.6, dash: [4, 5]))
                     .foregroundStyle(Color.white.opacity(0.12))
                 AxisValueLabel()
-                    .font(.system(size: 10, weight: .medium))
+                    .font(CommerceStatisticsTheme.statsText(size: 10, weight: .medium))
                     .foregroundStyle(CommerceStatisticsTheme.secondaryLabel)
             }
         }
@@ -352,7 +344,7 @@ struct MerchantStatisticRevolutDetailScreen: View {
                 AxisGridLine(stroke: StrokeStyle(lineWidth: 0.6, dash: [4, 5]))
                     .foregroundStyle(Color.white.opacity(0.12))
                 AxisValueLabel()
-                    .font(.system(size: 10, weight: .medium))
+                    .font(CommerceStatisticsTheme.statsText(size: 10, weight: .medium))
                     .foregroundStyle(CommerceStatisticsTheme.secondaryLabel)
             }
         }

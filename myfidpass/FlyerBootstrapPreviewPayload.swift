@@ -7,6 +7,20 @@
 
 import Foundation
 
+// MARK: - Roue : même logique d’aperçu `png` (texture) partout (éditeur, Commerce, cache disque)
+
+/// Ajuste l’état pour l’embed web : la texture **spinflyer** n’est peinte que si `wheelRenderMode === "png"`.
+/// (voir `app-flyer-qr-draw` / `t.wheelRenderMode === "png"` sur myfidpass.fr)
+enum FlyerWheelWebEmbedPreviewMigration {
+    static func normalizedStateForPreview(_ state: FlyerStateDTO, businessSlug: String) -> FlyerStateDTO {
+        _ = businessSlug
+        var s = state
+        s.normalizeClamps()
+        s.wheelRenderMode = "png"
+        return s
+    }
+}
+
 /// Même JSON que l’aperçu studio (`flyer-embed`), clé `flyer_prefs` alignée sur le GET dashboard.
 struct FlyerBootstrapPreviewPayload: Encodable {
     let flyerPrefs: Inner
@@ -35,14 +49,64 @@ struct FlyerBootstrapPreviewPayload: Encodable {
 }
 
 enum FlyerBootstrapPreviewPayloadBuilder {
+    /// Découpe l’`état` flyer depuis un bootstrap base64 (calques natifs : dégradé + photo, même logique que l’embed).
+    static func flyerStateFromBootstrapBase64(_ b64: String) -> FlyerStateDTO? {
+        let trimmed = b64.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let data = Data(base64Encoded: trimmed),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let fp = root["flyer_prefs"] as? [String: Any],
+              let stObj = fp["state"] else { return nil }
+        do {
+            let stateData = try JSONSerialization.data(withJSONObject: stObj)
+            let dec = JSONDecoder()
+            dec.keyDecodingStrategy = .convertFromSnakeCase
+            var st = try dec.decode(FlyerStateDTO.self, from: stateData)
+            st.normalizeClamps()
+            return st
+        } catch {
+            return nil
+        }
+    }
+
+    /// Met à jour uniquement le mode de rendu roue dans un bootstrap existant (cache disque) pour matcher l’éditeur.
+    static func normalizeWheelModeInBootstrapBase64(_ b64: String?, businessSlug: String) -> String? {
+        let slug = businessSlug.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !slug.isEmpty else { return b64 }
+        let t = b64?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !t.isEmpty, let data = Data(base64Encoded: t) else { return b64 }
+        guard var root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              var fp = root["flyer_prefs"] as? [String: Any],
+              let stObj = fp["state"] else { return b64 }
+        var state: FlyerStateDTO
+        do {
+            let stateData = try JSONSerialization.data(withJSONObject: stObj)
+            let dec = JSONDecoder()
+            dec.keyDecodingStrategy = .convertFromSnakeCase
+            state = try dec.decode(FlyerStateDTO.self, from: stateData)
+        } catch {
+            return b64
+        }
+        let before = state.wheelRenderMode
+        state = FlyerWheelWebEmbedPreviewMigration.normalizedStateForPreview(state, businessSlug: slug)
+        guard before != state.wheelRenderMode else { return b64 }
+        let enc = JSONEncoder()
+        enc.keyEncodingStrategy = .useDefaultKeys
+        guard let stData = try? enc.encode(state),
+              let stNew = try? JSONSerialization.jsonObject(with: stData) else { return b64 }
+        fp["state"] = stNew
+        root["flyer_prefs"] = fp
+        guard let out = try? JSONSerialization.data(withJSONObject: root) else { return b64 }
+        return out.base64EncodedString()
+    }
+
     /// Bootstrap base64 pour `FlyerPreviewWebView` (composite : roue, QR, textes — pas seulement le fond IA).
     static func base64(from response: DashboardFlyerGetResponse, businessSlug: String) -> String? {
         guard let fp = response.flyerPrefs else { return nil }
         /// Anciens comptes / JSON partiel : sans `state` explicite on reprend le défaut (sinon checklist Commerce sans aperçu composite).
         var state = fp.state ?? FlyerStateDTO.default
-        state.normalizeClamps()
         let slug = businessSlug.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !slug.isEmpty else { return nil }
+        state = FlyerWheelWebEmbedPreviewMigration.normalizedStateForPreview(state, businessSlug: slug)
         let share = (response.shareUrl ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         /// `updated_at` exclu : sinon chaque sync change le base64 → la checklist Commerce relance WebView + décodage fond (flash / rechargement).
         let payload = FlyerBootstrapPreviewPayload(
@@ -56,6 +120,8 @@ enum FlyerBootstrapPreviewPayloadBuilder {
             shareUrl: share
         )
         let enc = JSONEncoder()
+        /// Même règle que l’injection `WKWebView` : l’objet `state` doit rester en camelCase pour
+        /// `r.wheelRenderMode` côté `app-flyer-qr-draw.js` (myfidpass.fr).
         enc.keyEncodingStrategy = .useDefaultKeys
         guard let data = try? enc.encode(payload) else { return nil }
         return data.base64EncodedString()

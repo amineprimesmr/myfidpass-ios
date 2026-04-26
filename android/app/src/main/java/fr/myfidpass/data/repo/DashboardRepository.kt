@@ -16,6 +16,7 @@ import fr.myfidpass.data.dto.CreateMemberResponse
 import fr.myfidpass.data.dto.CreditMemberRequest
 import fr.myfidpass.data.dto.CreditPointsResponse
 import fr.myfidpass.data.dto.DashboardEvolutionResponse
+import fr.myfidpass.data.dto.DashboardTrafficPatternsResponse
 import fr.myfidpass.data.dto.DashboardGamesResponse
 import fr.myfidpass.data.dto.GoogleWalletUrlResponse
 import fr.myfidpass.data.dto.MemberPublicDetailDto
@@ -71,6 +72,9 @@ class DashboardRepository(
     suspend fun businessEvolution(slug: String, weeks: Int? = 12, period: String? = null): DashboardEvolutionResponse =
         api.businessEvolution(slug, weeks, period)
 
+    suspend fun businessStatsTraffic(slug: String, period: String? = null): DashboardTrafficPatternsResponse =
+        api.businessStatsTraffic(slug, period)
+
     suspend fun businessTransactions(
         slug: String,
         limit: Int? = 50,
@@ -78,7 +82,8 @@ class DashboardRepository(
         memberId: String? = null,
         days: Int? = null,
         type: String? = null,
-    ): BusinessTransactionsResponse = api.businessTransactions(slug, limit, offset, memberId, days, type)
+        sort: String? = null,
+    ): BusinessTransactionsResponse = api.businessTransactions(slug, limit, offset, memberId, days, type, sort)
 
     suspend fun businessMembers(
         slug: String,

@@ -117,7 +117,7 @@ struct GoogleBusinessInsightsView: View {
                 Spacer()
             }
             Text(Self.numberFormatter.string(from: NSNumber(value: value)) ?? String(value))
-                .font(.system(.title2, design: .rounded, weight: .bold))
+                .font(.system(.title2, design: .default, weight: .bold))
                 .foregroundStyle(AppTheme.Colors.textPrimary)
             Text(title)
                 .font(.caption)

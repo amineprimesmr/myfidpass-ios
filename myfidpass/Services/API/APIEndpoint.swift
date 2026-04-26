@@ -36,6 +36,8 @@ enum APIEndpoint {
     case authDeleteAccount
     case authRefresh(refreshToken: String)
     case authLogout(refreshToken: String)
+    /// Synchronise l’abonnement App Store côté API après achat (RevenueCat).
+    case authRevenueCatSync
 
     // MARK: - Commerce (JWT)
     case createBusiness(payload: CreateBusinessPayload)
@@ -66,6 +68,8 @@ enum APIEndpoint {
         memberId: String?,
         limit: Int?
     )
+    /// JSON : pack multi-CSV pour bilan / CAC (voir `MerchantAccountingPackResponse`).
+    case businessAccountingPack(slug: String, days: Int?, dateFrom: String?, dateTo: String?, limit: Int?)
     case businessCategories(slug: String)
     case createCategory(slug: String, name: String, colorHex: String?, sortOrder: Int?)
     case updateCategory(slug: String, categoryId: String, name: String?, colorHex: String?, sortOrder: Int?)
@@ -178,6 +182,7 @@ enum APIEndpoint {
         case .authDeleteAccount: return "/api/auth/account"
         case .authRefresh: return "/api/auth/refresh"
         case .authLogout: return "/api/auth/logout"
+        case .authRevenueCatSync: return "/api/auth/revenuecat-sync"
         case .createBusiness: return "/api/businesses"
         case .paymentCheckout: return "/api/payment/create-checkout-session"
         case .paymentReconcileSubscription: return "/api/payment/reconcile-subscription"
@@ -191,6 +196,8 @@ enum APIEndpoint {
         case .businessTransactions(let slug, _, _, _, _, _, _): return "/api/businesses/\(pathSegment(slug))/dashboard/transactions"
         case .businessTransactionsExport(let slug, _, _, _, _, _, _, _, _):
             return "/api/businesses/\(pathSegment(slug))/dashboard/transactions/export"
+        case .businessAccountingPack(let slug, _, _, _, _):
+            return "/api/businesses/\(pathSegment(slug))/dashboard/accounting-pack"
         case .businessCategories(let slug): return "/api/businesses/\(pathSegment(slug))/dashboard/categories"
         case .createCategory(let slug, _, _, _): return "/api/businesses/\(pathSegment(slug))/dashboard/categories"
         case .updateCategory(let slug, let categoryId, _, _, _): return "/api/businesses/\(pathSegment(slug))/dashboard/categories/\(pathSegment(categoryId))"
@@ -287,7 +294,7 @@ enum APIEndpoint {
         switch self {
         case .authLogin, .authCheckEmail, .authCheckIdentifier, .authRegister, .authForgotPassword, .authResetPassword, .authGoogle, .authApple,
              .authPhoneSendCode, .authPhoneVerify,
-             .authRefresh, .authLogout,
+             .authRefresh, .authLogout, .authRevenueCatSync,
              .scan, .deviceRegister, .notifyClients, .createCategory, .updateMemberCategories, .creditMember,
              .dashboardReceiptChallenge,
              .removeMemberPoints, .redeemReward, .createBusiness, .paymentCheckout, .paymentReconcileSubscription, .paymentPortalSession, .dashboardNotificationSend, .dashboardRemoveTestDevice,
@@ -356,6 +363,13 @@ enum APIEndpoint {
             if let m = memberId, !m.isEmpty { items.append(URLQueryItem(name: "memberId", value: m)) }
             if let l = limit { items.append(URLQueryItem(name: "limit", value: "\(l)")) }
             components.queryItems = items
+        case .businessAccountingPack(_, let days, let dateFrom, let dateTo, let limit):
+            var items: [URLQueryItem] = []
+            if let d = days { items.append(URLQueryItem(name: "days", value: "\(d)")) }
+            if let f = dateFrom, !f.isEmpty { items.append(URLQueryItem(name: "from", value: f)) }
+            if let t = dateTo, !t.isEmpty { items.append(URLQueryItem(name: "to", value: t)) }
+            if let l = limit { items.append(URLQueryItem(name: "limit", value: "\(l)")) }
+            components.queryItems = items.isEmpty ? nil : items
         case .placesAutocomplete(let input):
             components.queryItems = [URLQueryItem(name: "input", value: input)]
         case .placesPlaceDetails(let placeId):
@@ -504,6 +518,8 @@ enum APIEndpoint {
             bodyData = try encoder.encode(RefreshTokenPayload(refreshToken: refreshToken))
         case .authLogout(let refreshToken):
             bodyData = try encoder.encode(RefreshTokenPayload(refreshToken: refreshToken))
+        case .authRevenueCatSync:
+            bodyData = try encoder.encode(PaymentReconcileEmptyBody())
         case .businessTeamInvite(_, let body):
             bodyData = try encoder.encode(body)
         case .businessTeamStaffAccount(_, let body):

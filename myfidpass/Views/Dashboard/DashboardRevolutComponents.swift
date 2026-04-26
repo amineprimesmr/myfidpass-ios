@@ -183,7 +183,7 @@ struct RevolutMemberActivityRow: View {
                     .fill(iconBackground)
                     .frame(width: 44, height: 44)
                 Text(initial)
-                    .font(.system(size: 17, weight: .bold, design: .rounded))
+                    .font(.system(size: 17, weight: .bold, design: .default))
                     .foregroundStyle(iconTint)
             }
             VStack(alignment: .leading, spacing: 4) {

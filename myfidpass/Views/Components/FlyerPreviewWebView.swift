@@ -10,6 +10,13 @@ import SwiftUI
 import WebKit
 
 struct FlyerPreviewWebView: UIViewRepresentable {
+    /// Évite les faux « échecs » quand WebKit annule une navigation (remplacement de requête, reload).
+    private static func shouldReportEmbedNavigationFailure(_ error: Error) -> Bool {
+        let ns = error as NSError
+        if ns.domain == NSURLErrorDomain, ns.code == NSURLErrorCancelled { return false }
+        return true
+    }
+
     /// Réponse JSON brute GET …/dashboard/flyer, encodée en base64 pour injection JS.
     let bootstrapBase64: String
     @Binding var isLoading: Bool
@@ -17,6 +24,8 @@ struct FlyerPreviewWebView: UIViewRepresentable {
     var skipCanvasSolidBackground: Bool = false
     /// Appelé quand la `WKWebView` est prête (aperçu plein écran : impression / capture).
     var onWebViewCreated: ((WKWebView) -> Void)? = nil
+    /// Échec de chargement du document embed (réseau, URL, etc.) — pour afficher un message plutôt qu’un cadre vide.
+    var onNavigationFailure: ((Error) -> Void)? = nil
 
     /// Retire `custom_bg_data_url` du JSON pour alléger l’injection + mode « calque » natif sous la WebView.
     nonisolated static func stripCustomBgFromBootstrapBase64(_ b64: String) -> String? {
@@ -25,12 +34,18 @@ struct FlyerPreviewWebView: UIViewRepresentable {
               var fp = root["flyer_prefs"] as? [String: Any] else { return nil }
         fp.removeValue(forKey: "custom_bg_data_url")
         root["flyer_prefs"] = fp
-        guard let out = try? JSONSerialization.data(withJSONObject: root, options: []) else { return nil }
+        /// Clés triées : sans cela, la ré-écriture du JSON pouvait varier d’un appel à l’autre et produire un base64 différent
+        /// pour le même contenu → le WebView croyait un nouveau bootstrap et réinjectait (flash) à chaque re-render.
+        guard let out = try? JSONSerialization.data(withJSONObject: root, options: [.sortedKeys]) else { return nil }
         return out.base64EncodedString()
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(isLoading: $isLoading, skipCanvasSolidBackground: skipCanvasSolidBackground)
+        Coordinator(
+            isLoading: $isLoading,
+            skipCanvasSolidBackground: skipCanvasSolidBackground,
+            onNavigationFailure: onNavigationFailure
+        )
     }
 
     func makeUIView(context: Context) -> WKWebView {
@@ -57,6 +72,10 @@ struct FlyerPreviewWebView: UIViewRepresentable {
         // ── Chemin normal : nouvelle WKWebView ────────────────────────────────────
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .default()
+        /// Avant le module `flyer-embed` : `atob` + UTF-8 (voir `FlyerEmbedAtobUTF8Patch`).
+        FlyerEmbedAtobUTF8Patch.addTo(config)
+        /// Texture roue : `spinflyer` de l’asset catalogue en priorité, repli URL myfidpass (voir `FlyerEmbedSpinflyerSrcPatch`).
+        FlyerEmbedSpinflyerSrcPatch.addTo(config)
         /// Ne **pas** injecter le JSON flyer (souvent > 1 Mo avec `custom_bg_data_url`) en `WKUserScript` :
         /// WebKit tronque les scripts très longs → JSON incomplet → pas de fond IA.
         let skipFlag = skipCanvasSolidBackground
@@ -83,7 +102,7 @@ struct FlyerPreviewWebView: UIViewRepresentable {
         Task { @MainActor in
             isLoading = true
         }
-        /// Cache local : `reloadRevalidatingCacheData` rallonge chaque ouverture d’aperçu ; le HTML embed change rarement.
+        /// `returnCacheDataElseLoad` : ouverture éditeur flyer beaucoup plus rapide qu’une revalidation réseau systématique (`reloadRevalidatingCacheData`). Le pool `FlyerEmbedWarmup` utilise la même politique.
         let req = URLRequest(
             url: APIConfig.flyerEmbedURL,
             cachePolicy: .returnCacheDataElseLoad,
@@ -95,10 +114,16 @@ struct FlyerPreviewWebView: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: WKWebView, context: Context) {
+        let prev = context.coordinator.latestBootstrap
+        let skipChanged = context.coordinator.skipCanvasSolidBackground != skipCanvasSolidBackground
         context.coordinator.webView = uiView
+        if prev != bootstrapBase64 || skipChanged {
+            context.coordinator.allowPostInjectReapply = true
+        }
         context.coordinator.latestBootstrap = bootstrapBase64
         context.coordinator.skipCanvasSolidBackground = skipCanvasSolidBackground
-        onWebViewCreated?(uiView)
+        /// Ne pas rappeler `onWebViewCreated` ici : c’est un hook « création », le relancer à chaque `updateUIView` cassait
+        /// les hypothèses côté parent et inutile si la closure fait du travail coûteux.
         context.coordinator.flush()
     }
 
@@ -122,11 +147,24 @@ struct FlyerPreviewWebView: UIViewRepresentable {
         weak var webView: WKWebView?
         var latestBootstrap: String = ""
         var lastFlushedBootstrap: String = ""
+        var lastFlushedSkipCanvasBg: Bool = false
         private var isPageReady = false
+        private var expensiveLayoutOnInjectCount = 0
+        /// 2ᵉ passage d’injection : le 1er `evaluateJavaScript` peut s’exécuter avant que `__FIDPASS_FLYER_APPLY__` soit défini (bundle draw).
+        private var deferredFlushWorkItem: DispatchWorkItem?
+        /// Un seul re-flush différé par `bootstrapBase64` : sinon le 2ᵉ `inject` relancerait une 3ᵉ, etc.
+        var allowPostInjectReapply: Bool = true
 
-        init(isLoading: Binding<Bool>, skipCanvasSolidBackground: Bool) {
+        var onNavigationFailure: ((Error) -> Void)?
+
+        init(
+            isLoading: Binding<Bool>,
+            skipCanvasSolidBackground: Bool,
+            onNavigationFailure: ((Error) -> Void)? = nil
+        ) {
             _isLoading = isLoading
             self.skipCanvasSolidBackground = skipCanvasSolidBackground
+            self.onNavigationFailure = onNavigationFailure
         }
 
         /// Appelé quand la page est déjà prête (WKWebView récupérée du pool) — injecte le bootstrap immédiatement.
@@ -141,7 +179,7 @@ struct FlyerPreviewWebView: UIViewRepresentable {
 
         func flush() {
             guard let wv = webView else { return }
-            guard latestBootstrap != lastFlushedBootstrap else { return }
+            if latestBootstrap == lastFlushedBootstrap, lastFlushedSkipCanvasBg == skipCanvasSolidBackground { return }
             guard isPageReady else { return }
 
             let payload = latestBootstrap
@@ -151,6 +189,32 @@ struct FlyerPreviewWebView: UIViewRepresentable {
                 return
             }
             injectChunked(wv: wv, payload: payload)
+        }
+
+        /// Ré-injecte le même JSON une fois le runloop / le layout stabilisés (WKWebView souvent à frame 0 au 1er paint).
+        private func scheduleDeferredReapplyIfNeeded() {
+            guard allowPostInjectReapply else { return }
+            let token = latestBootstrap
+            guard !token.isEmpty else { return }
+            if let wv = webView, wv.bounds.width > 1, wv.bounds.height > 1 {
+                // Frame déjà valide : un 2ᵉ `APPLY` complet n’améliore que rarement le layout mais provoquait un 2ᵉ rendu (flash) côté canvas.
+                allowPostInjectReapply = false
+                return
+            }
+            allowPostInjectReapply = false
+            deferredFlushWorkItem?.cancel()
+            let work = DispatchWorkItem { [weak self] in
+                guard let self, let wv = self.webView else { return }
+                guard self.latestBootstrap == token, !token.isEmpty else { return }
+                wv.setNeedsLayout()
+                wv.layoutIfNeeded()
+                wv.superview?.setNeedsLayout()
+                wv.superview?.layoutIfNeeded()
+                self.lastFlushedBootstrap = ""
+                self.flush()
+            }
+            deferredFlushWorkItem = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.14, execute: work)
         }
 
         private func injectSingleChunk(wv: WKWebView, payload: String) {
@@ -168,6 +232,21 @@ struct FlyerPreviewWebView: UIViewRepresentable {
                 guard let self else { return }
                 if error == nil {
                     self.lastFlushedBootstrap = self.latestBootstrap
+                    self.lastFlushedSkipCanvasBg = self.skipCanvasSolidBackground
+                    Task { @MainActor in
+                        /// Mises en page lourdes surtout au 1er peint (WK à frame 0) — sur les mises à jour, évite le « flash » visuel d’un relayout inutile.
+                        if self.expensiveLayoutOnInjectCount < 2 {
+                            wv.setNeedsLayout()
+                            wv.layoutIfNeeded()
+                            wv.superview?.setNeedsLayout()
+                            wv.superview?.layoutIfNeeded()
+                            self.expensiveLayoutOnInjectCount += 1
+                        } else {
+                            wv.setNeedsLayout()
+                            wv.layoutIfNeeded()
+                        }
+                    }
+                    self.scheduleDeferredReapplyIfNeeded()
                 }
                 Task { @MainActor in
                     self.isLoading = false
@@ -207,6 +286,20 @@ struct FlyerPreviewWebView: UIViewRepresentable {
                     guard let self else { return }
                     if error == nil {
                         self.lastFlushedBootstrap = self.latestBootstrap
+                        self.lastFlushedSkipCanvasBg = self.skipCanvasSolidBackground
+                        Task { @MainActor in
+                            if self.expensiveLayoutOnInjectCount < 2 {
+                                wv.setNeedsLayout()
+                                wv.layoutIfNeeded()
+                                wv.superview?.setNeedsLayout()
+                                wv.superview?.layoutIfNeeded()
+                                self.expensiveLayoutOnInjectCount += 1
+                            } else {
+                                wv.setNeedsLayout()
+                                wv.layoutIfNeeded()
+                            }
+                        }
+                        self.scheduleDeferredReapplyIfNeeded()
                     }
                     Task { @MainActor in
                         self.isLoading = false
@@ -236,6 +329,9 @@ struct FlyerPreviewWebView: UIViewRepresentable {
             flush()
             Task { @MainActor in
                 self.isLoading = false
+                if FlyerPreviewWebView.shouldReportEmbedNavigationFailure(error) {
+                    self.onNavigationFailure?(error)
+                }
             }
         }
 
@@ -244,6 +340,9 @@ struct FlyerPreviewWebView: UIViewRepresentable {
             flush()
             Task { @MainActor in
                 self.isLoading = false
+                if FlyerPreviewWebView.shouldReportEmbedNavigationFailure(error) {
+                    self.onNavigationFailure?(error)
+                }
             }
         }
     }

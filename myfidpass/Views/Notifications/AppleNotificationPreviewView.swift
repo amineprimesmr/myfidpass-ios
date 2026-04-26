@@ -64,7 +64,7 @@ private struct IPhoneNotificationStatusBarChrome: View {
         ZStack {
             HStack(spacing: 0) {
                 Text(statusBarTime)
-                    .font(.system(size: 17, weight: .semibold, design: .rounded))
+                    .font(.system(size: 17, weight: .semibold, design: .default))
                     .foregroundStyle(.white)
                     .monospacedDigit()
                     .frame(maxWidth: .infinity, alignment: .leading)

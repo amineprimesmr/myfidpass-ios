@@ -161,7 +161,7 @@ struct OnboardingChoiceView: View {
                 )
                 .environmentObject(authService)
             }
-            .presentationDragIndicator(.visible)
+            .presentationDragIndicator(.hidden)
             .presentationDetents([.fraction(0.46), .large], selection: $emailAuthSheetDetent)
             .presentationCornerRadius(22)
         }

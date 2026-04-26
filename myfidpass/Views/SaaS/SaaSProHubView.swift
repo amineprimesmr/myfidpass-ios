@@ -125,9 +125,17 @@ struct AdvancedStatsView: View {
                         .padding(.horizontal)
                         .accessibilityAddTraits(.isHeader)
 
-                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+                    LazyVGrid(
+                        columns: [
+                            GridItem(.flexible(), spacing: MerchantStatsKpiGridLayout.interColumnSpacing),
+                            GridItem(.flexible()),
+                        ],
+                        alignment: .center,
+                        spacing: MerchantStatsKpiGridLayout.interRowSpacing
+                    ) {
                         ForEach(section.cards) { card in
                             MerchantStatsKpiCardView(model: card)
+                                .frame(maxWidth: .infinity, alignment: .top)
                         }
                     }
                     .padding(.horizontal)
@@ -147,9 +155,17 @@ struct AdvancedStatsView: View {
                         .padding(.horizontal)
                         .accessibilityAddTraits(.isHeader)
 
-                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+                    LazyVGrid(
+                        columns: [
+                            GridItem(.flexible(), spacing: MerchantStatsKpiGridLayout.interColumnSpacing),
+                            GridItem(.flexible()),
+                        ],
+                        alignment: .center,
+                        spacing: MerchantStatsKpiGridLayout.interRowSpacing
+                    ) {
                         ForEach(viewModel.insightCallouts) { callout in
                             MerchantStatsInsightCalloutView(model: callout)
+                                .frame(maxWidth: .infinity, alignment: .top)
                         }
                     }
                     .padding(.horizontal)
@@ -279,54 +295,37 @@ private struct StatsErrorCard: View {
                 .foregroundStyle(AppTheme.Colors.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Group {
-                if #available(iOS 26.0, *) {
-                    Button {
-                        onRetry()
-                    } label: {
-                        Text("Réessayer")
-                            .font(AppTheme.Fonts.subheadline())
-                            .fontWeight(.semibold)
-                    }
-                    .buttonStyle(.glass)
-                    .buttonBorderShape(.roundedRectangle(radius: 20))
-                    .controlSize(.large)
-                    .accessibilityLabel("Réessayer le chargement des statistiques")
-                } else {
-                    let shape = RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    Button {
-                        onRetry()
-                    } label: {
-                        Text("Réessayer")
-                            .font(AppTheme.Fonts.subheadline())
-                            .fontWeight(.semibold)
-                    }
-                    .background(.ultraThinMaterial, in: shape)
-                    .overlay(shape.strokeBorder(Color.white.opacity(0.28), lineWidth: 1))
-                    .controlSize(.large)
-                    .accessibilityLabel("Réessayer le chargement des statistiques")
-                }
+            Button {
+                onRetry()
+            } label: {
+                Text("Réessayer")
+                    .font(AppTheme.Fonts.subheadline())
+                    .fontWeight(.semibold)
             }
+            .commerceStatsLiquidGlassTileButton(cornerRadius: 20, controlSize: .large)
+            .accessibilityLabel("Réessayer le chargement des statistiques")
         }
         .padding()
-        .background(AppTheme.Colors.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: AppTheme.Radius.md))
+        // Contient déjà un bouton « Réessayer » : pas de `Button` externe (imbrication interdite).
+        .commerceStatsDarkLiquidGlassCard(cornerRadius: AppTheme.Radius.md)
         .padding(.horizontal)
     }
 }
 
 private struct EmptyStatsCard: View {
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Aucune donnée pour cette période")
-                .font(AppTheme.Fonts.headline())
-            Text("Essayez une autre période ou attendez la prochaine synchronisation.")
-                .font(AppTheme.Fonts.caption2())
-                .foregroundStyle(AppTheme.Colors.textSecondary)
+        Button(action: {}) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Aucune donnée pour cette période")
+                    .font(AppTheme.Fonts.headline())
+                Text("Essayez une autre période ou attendez la prochaine synchronisation.")
+                    .font(AppTheme.Fonts.caption2())
+                    .foregroundStyle(AppTheme.Colors.textSecondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding()
         }
-        .padding()
-        .background(AppTheme.Colors.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: AppTheme.Radius.md))
+        .commerceStatsLiquidGlassTileButton(cornerRadius: AppTheme.Radius.md, controlSize: .large)
         .padding(.horizontal)
     }
 }
@@ -338,32 +337,38 @@ private struct MerchantStatsLoadingSkeletonView: View {
         VStack(alignment: .leading, spacing: AppTheme.Spacing.lg) {
             LazyVGrid(columns: columns, spacing: 12) {
                 ForEach(0..<6) { _ in
-                    VStack(alignment: .leading, spacing: 8) {
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(AppTheme.Colors.textSecondary.opacity(0.25))
-                            .frame(height: 16)
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(AppTheme.Colors.textSecondary.opacity(0.25))
-                            .frame(height: 22)
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(AppTheme.Colors.textSecondary.opacity(0.18))
-                            .frame(height: 14)
+                    Button(action: {}) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(AppTheme.Colors.textSecondary.opacity(0.25))
+                                .frame(height: 16)
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(AppTheme.Colors.textSecondary.opacity(0.25))
+                                .frame(height: 22)
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(AppTheme.Colors.textSecondary.opacity(0.18))
+                                .frame(height: 14)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding()
                     }
-                    .padding()
-                    .background(AppTheme.Colors.cardBackground)
-                    .clipShape(RoundedRectangle(cornerRadius: AppTheme.Radius.md))
+                    .commerceStatsLiquidGlassTileButton(cornerRadius: AppTheme.Radius.md, controlSize: .regular)
                 }
             }
             .padding(.horizontal)
 
-            RoundedRectangle(cornerRadius: AppTheme.Radius.md, style: .continuous)
-                .fill(AppTheme.Colors.textSecondary.opacity(0.12))
-                .frame(height: 220)
-                .padding(.horizontal)
-                .overlay(
-                    ProgressView()
-                        .tint(AppTheme.Colors.primary)
-                )
+            Button(action: {}) {
+                RoundedRectangle(cornerRadius: AppTheme.Radius.md, style: .continuous)
+                    .fill(Color.clear)
+                    .frame(height: 220)
+                    .frame(maxWidth: .infinity)
+                    .overlay(
+                        ProgressView()
+                            .tint(AppTheme.Colors.primary)
+                    )
+            }
+            .padding(.horizontal)
+            .commerceStatsLiquidGlassTileButton(cornerRadius: AppTheme.Radius.md, controlSize: .large)
         }
         .padding(.vertical, 8)
     }
@@ -375,29 +380,31 @@ private struct MerchantStatsInsightCalloutView: View {
     let model: MerchantStatsInsightCalloutModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Image(systemName: model.icon)
-                    .font(.body.weight(.semibold))
-                    .foregroundStyle(AppTheme.Colors.primary)
+        Button(action: {}) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Image(systemName: model.icon)
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(AppTheme.Colors.primary)
 
-                Text(model.title)
-                    .font(AppTheme.Fonts.subheadline())
-                    .foregroundStyle(AppTheme.Colors.textPrimary)
+                    Text(model.title)
+                        .font(AppTheme.Fonts.subheadline())
+                        .foregroundStyle(AppTheme.Colors.textPrimary)
+                }
+
+                Text(model.dataLine)
+                    .font(AppTheme.Fonts.caption2())
+                    .foregroundStyle(AppTheme.Colors.textSecondary)
+
+                Text(model.nextStep)
+                    .font(AppTheme.Fonts.caption2())
+                    .foregroundStyle(AppTheme.Colors.textSecondary)
+                    .lineLimit(3)
             }
-
-            Text(model.dataLine)
-                .font(AppTheme.Fonts.caption2())
-                .foregroundStyle(AppTheme.Colors.textSecondary)
-
-            Text(model.nextStep)
-                .font(AppTheme.Fonts.caption2())
-                .foregroundStyle(AppTheme.Colors.textSecondary)
-                .lineLimit(3)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding()
         }
-        .padding()
-        .background(AppTheme.Colors.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: AppTheme.Radius.md))
+        .commerceStatsLiquidGlassTileButton(cornerRadius: AppTheme.Radius.md, controlSize: .regular)
         .accessibilityLabel(model.accessibilityLabel)
     }
 }
@@ -596,27 +603,18 @@ struct AdvancedNotificationsView: View {
 struct SubscriptionBusinessView: View {
     @EnvironmentObject private var authService: AuthService
     @EnvironmentObject private var syncService: SyncService
-    @EnvironmentObject private var revenueCatSubscriptionState: RevenueCatSubscriptionState
-    @State private var checkoutURL: URL?
-    @State private var showSafari = false
     /// CGU / confidentialité en SFSafariViewController (Guideline 4 — pas de Safari externe).
     @State private var legalSafariURL: URL?
     @State private var bizName = ""
     @State private var bizSlug = ""
     @State private var message: String?
 
-    private var primaryStripeAccountButtonTitle: String {
-        authService.subscriptionAccessUnlocked(revenueCatPremium: revenueCatSubscriptionState.hasPremiumEntitlement)
-            ? "Gérer l’abonnement (facturation Stripe)"
-            : "Souscrire (paiement Stripe)"
-    }
-
     var body: some View {
         Form {
             Section("Abonnement") {
                 Text(
-                    "Tu peux t’abonner depuis l’App Store (achat intégré via RevenueCat) ou, si tu préfères, "
-                        + "via notre page Stripe : le détail des offres (intitulé, durée, prix) s’affiche avant validation."
+                    "L’abonnement PRO se fait dans l’app via l’App Store (RevenueCat). "
+                        + "Depuis l’écran principal : paywall ou Réglages → Abonnement PRO."
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -625,8 +623,8 @@ struct SubscriptionBusinessView: View {
                     Button("Politique de confidentialité") { legalSafariURL = LegalURLs.privacyPolicy }
                 }
                 .font(.subheadline)
-                Button(primaryStripeAccountButtonTitle) {
-                    Task { await openStripeAccountFlow() }
+                Button("Ouvrir le paywall abonnement") {
+                    NotificationCenter.default.post(name: .myfidpassOpenMerchantSubscriptionSheet, object: nil)
                 }
             }
             Section("Nouveau commerce") {
@@ -641,11 +639,6 @@ struct SubscriptionBusinessView: View {
             }
         }
         .navigationTitle("Compte pro")
-        .sheet(isPresented: $showSafari) {
-            if let checkoutURL {
-                SafariView(url: checkoutURL)
-            }
-        }
         .sheet(isPresented: Binding(
             get: { legalSafariURL != nil },
             set: { if !$0 { legalSafariURL = nil } }
@@ -663,65 +656,6 @@ struct SubscriptionBusinessView: View {
         .task {
             await authService.reconcileStripeSubscriptionFromServer(force: true)
             await authService.refreshBusinessesIfNeeded()
-        }
-        .onChange(of: showSafari) { _, isOpen in
-            if !isOpen {
-                Task {
-                    await authService.reconcileStripeSubscriptionFromServer(force: true)
-                    await authService.refreshBusinessesIfNeeded()
-                }
-            }
-        }
-    }
-
-    /// N’appelle le refresh **que** si l’access JWT est proche de l’expiration (évite une rotation inutile à chaque clic — source de 401 / session expirée).
-    private func refreshSessionForPayment() async {
-        await APIClient.shared.ensureValidAccessToken()
-    }
-
-    private func openStripeAccountFlow() async {
-        await refreshSessionForPayment()
-        // Si l’abo est payé côté Stripe mais pas encore reflété dans l’app, on réaligne avant de choisir portail vs checkout.
-        if !authService.subscriptionAccessUnlocked(revenueCatPremium: revenueCatSubscriptionState.hasPremiumEntitlement) {
-            await authService.reconcileStripeSubscriptionFromServer(force: true)
-            await authService.refreshBusinessesIfNeeded()
-        }
-        if authService.subscriptionAccessUnlocked(revenueCatPremium: revenueCatSubscriptionState.hasPremiumEntitlement) {
-            await openBillingPortal()
-        } else {
-            await startNewSubscriptionCheckout()
-        }
-    }
-
-    private func openBillingPortal() async {
-        do {
-            let r = try await APIClient.shared.request(.paymentPortalSession) as CheckoutSessionResponse
-            if let u = r.url, let url = URL(string: u) {
-                await MainActor.run {
-                    checkoutURL = url
-                    showSafari = true
-                }
-            } else {
-                await MainActor.run { message = "Espace client indisponible." }
-            }
-        } catch {
-            await MainActor.run { message = (error as? APIError)?.errorDescription ?? error.localizedDescription }
-        }
-    }
-
-    private func startNewSubscriptionCheckout() async {
-        do {
-            let r = try await APIClient.shared.request(.paymentCheckout(planId: "starter")) as CheckoutSessionResponse
-            if let u = r.url, let url = URL(string: u) {
-                await MainActor.run {
-                    checkoutURL = url
-                    showSafari = true
-                }
-            } else {
-                await MainActor.run { message = "Paiement indisponible (Stripe non configuré)." }
-            }
-        } catch {
-            await MainActor.run { message = (error as? APIError)?.errorDescription }
         }
     }
 

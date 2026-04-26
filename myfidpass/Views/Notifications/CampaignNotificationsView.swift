@@ -362,6 +362,15 @@ struct CampaignNotificationsView: View {
             VStack(alignment: .leading, spacing: AppTheme.Spacing.lg) {
                 headerBlock
                 previewSection
+                    .onBoarding(3, cornerRadius: 20) {
+                        VStack(spacing: 6) {
+                            Text("Notifications manuelles")
+                                .font(.headline)
+                            Text("Rédigez un message et appuyez sur « Envoyer » pour notifier vos clients directement sur leur Wallet.")
+                                .font(.caption)
+                                .multilineTextAlignment(.center)
+                        }
+                    }
                 automationsContent
             }
             .padding(.horizontal, AppTheme.Spacing.md)
@@ -780,8 +789,7 @@ struct CampaignNotificationsView: View {
         pageIndex: Int,
         familyIdForPreview: String,
         accent: Color,
-        summaryFamilyId: String,
-        openSettings: @escaping () -> Void
+        summaryFamilyId: String
     ) -> some View {
         let active = isFamilyAutomationActive(carouselFamilyId: summaryFamilyId)
         let ruleId = primaryRuleIdForCarousel(familyIdForPreview: familyIdForPreview)
@@ -798,7 +806,7 @@ struct CampaignNotificationsView: View {
                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
                     }
                 },
-                onOpenSettings: openSettings
+                onOpenDetail: { selectedAutomationDetail = .family(summaryFamilyId) }
             )
             .zIndex(0)
 
@@ -859,8 +867,7 @@ struct CampaignNotificationsView: View {
                         pageIndex: index + 1,
                         familyIdForPreview: family.id,
                         accent: familyThemeColor(family.id),
-                        summaryFamilyId: family.id,
-                        openSettings: { selectedAutomationDetail = .family(family.id) }
+                        summaryFamilyId: family.id
                     )
                     .tag(index + 1)
                 }
@@ -935,7 +942,7 @@ struct CampaignNotificationsView: View {
         isActive: Bool,
         familyId: String,
         onToggleActive: @escaping () -> Void,
-        onOpenSettings: @escaping () -> Void
+        onOpenDetail: (() -> Void)? = nil
     ) -> some View {
         let backgroundAssetName: String? = {
             switch familyId {
@@ -950,7 +957,19 @@ struct CampaignNotificationsView: View {
         let cardHeight: CGFloat = 236
         let corner = AppTheme.Radius.lg
         return VStack(alignment: .leading, spacing: 10) {
-            Spacer(minLength: 52)
+            if let onOpenDetail {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .frame(maxWidth: .infinity, minHeight: 52)
+                    .frame(maxHeight: .infinity)
+                    .onTapGesture {
+                        onOpenDetail()
+                    }
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityLabel("Détails et règles de l’automatisation")
+            } else {
+                Spacer(minLength: 52)
+            }
 
             HStack(alignment: .center, spacing: 8) {
                 Button(action: onToggleActive) {
@@ -965,15 +984,6 @@ struct CampaignNotificationsView: View {
                     .padding(.vertical, 6)
                 }
                 .modifier(LiquidGlassCapsuleButtonModifier(controlSize: .small))
-
-                Button(action: onOpenSettings) {
-                    Image(systemName: "slider.horizontal.3")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(AppTheme.Colors.textPrimary)
-                        .frame(width: 34, height: 34)
-                }
-                .modifier(TopBarLiquidGlassButtonModifier())
-                .accessibilityLabel("Réglages des notifications automatiques")
 
                 Spacer(minLength: 0)
             }
@@ -1079,7 +1089,7 @@ struct CampaignNotificationsView: View {
                     } label: {
                         Label("Nouvelle", systemImage: "plus.circle.fill")
                     }
-                    .buttonStyle(.glass)
+                    .buttonStyle(.glass(.regular))
                     .buttonBorderShape(.capsule)
                     .controlSize(.large)
                 } else {
@@ -1117,7 +1127,7 @@ struct CampaignNotificationsView: View {
                     } label: {
                         Label("Nouvelle", systemImage: "plus.circle.fill")
                     }
-                    .buttonStyle(.glass)
+                    .buttonStyle(.glass(.regular))
                     .buttonBorderShape(.capsule)
                     .controlSize(.large)
                 } else {
@@ -1187,7 +1197,7 @@ struct CampaignNotificationsView: View {
                 } label: {
                     Image(systemName: "pencil")
                 }
-                .buttonStyle(.glass)
+                .buttonStyle(.glass(.regular))
                 .buttonBorderShape(.circle)
                 .controlSize(.small)
                 Button {
@@ -1195,7 +1205,7 @@ struct CampaignNotificationsView: View {
                 } label: {
                     Image(systemName: "trash")
                 }
-                .buttonStyle(.glass)
+                .buttonStyle(.glass(.regular))
                 .buttonBorderShape(.circle)
                 .controlSize(.small)
             } else {
@@ -1354,7 +1364,7 @@ struct CampaignNotificationsView: View {
                         Button("Annuler") {
                             showEventAutomationSheet = false
                         }
-                        .buttonStyle(.glass)
+                        .buttonStyle(.glass(.regular))
                         .buttonBorderShape(.capsule)
                         .controlSize(.large)
                     } else {
@@ -1370,7 +1380,7 @@ struct CampaignNotificationsView: View {
                         }
                         .fontWeight(.semibold)
                         .disabled(!canSaveEventDraft)
-                        .buttonStyle(.glass)
+                        .buttonStyle(.glass(.regular))
                         .buttonBorderShape(.capsule)
                         .controlSize(.large)
                     } else {
@@ -1513,7 +1523,7 @@ struct CampaignNotificationsView: View {
                 } label: {
                     Image(systemName: "pencil")
                 }
-                .buttonStyle(.glass)
+                .buttonStyle(.glass(.regular))
                 .buttonBorderShape(.circle)
                 .controlSize(.small)
 
@@ -1522,7 +1532,7 @@ struct CampaignNotificationsView: View {
                 } label: {
                     Image(systemName: "trash")
                 }
-                .buttonStyle(.glass)
+                .buttonStyle(.glass(.regular))
                 .buttonBorderShape(.circle)
                 .controlSize(.small)
             } else {
@@ -2080,7 +2090,7 @@ struct CampaignNotificationsView: View {
             } label: {
                 Image(systemName: "pencil")
             }
-            .buttonStyle(.glass)
+            .buttonStyle(.glass(.regular))
             .buttonBorderShape(.circle)
             .controlSize(.small)
         } else {
@@ -2460,6 +2470,13 @@ struct CampaignNotificationsView: View {
                 .dashboardNotificationSend(slug: slug, body: payload)
             )
             _ = sendResult.accepted ?? sendResult.ok
+            let touched = sendResult.total ?? sendResult.sent ?? 0
+            NotificationSendLocalHistoryStore.recordSuccess(
+                slug: slug,
+                title: payload.title,
+                message: msg,
+                count: touched
+            )
             invalidateCachedGETNotificationIconResponses()
             notificationIconReloadNonce &+= 1
             await loadCampaignData()
@@ -2581,7 +2598,7 @@ private struct CampaignGlassCapsuleButtonModifier: ViewModifier {
     func body(content: Content) -> some View {
         if #available(iOS 26.0, *) {
             content
-                .buttonStyle(.glass)
+                .buttonStyle(.glass(.regular))
                 .buttonBorderShape(.capsule)
                 .controlSize(.small)
         } else {

@@ -8,10 +8,15 @@ data class WorkspaceTeamMemberDto(
     @SerialName("membership_id") val membershipId: String? = null,
     @SerialName("user_id") val userId: String? = null,
     val email: String? = null,
+    @SerialName("staff_login") val staffLogin: String? = null,
     val name: String? = null,
     val role: String? = null,
     val status: String? = null,
     @SerialName("created_at") val createdAt: String? = null,
+    @SerialName("points_add_count") val pointsAddCount: Int? = null,
+    @SerialName("reward_redeem_count") val rewardRedeemCount: Int? = null,
+    @SerialName("points_issued") val pointsIssued: Int? = null,
+    @SerialName("amount_eur_sum") val amountEurSum: Double? = null,
 )
 
 @Serializable

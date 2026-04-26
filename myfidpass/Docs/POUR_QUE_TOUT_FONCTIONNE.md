@@ -13,7 +13,7 @@ L’app est une **app commerçant** : le commerçant se connecte, voit son table
 | Écran / action | Comportement réel |
 |----------------|-------------------|
 | **Connexion** | Email/mot de passe ou Sign in with Apple → `POST /api/auth/login` ou `POST /api/auth/apple`. Réponse 200 avec `token` + `businesses` (au moins un commerce avec `slug`) → session ouverte. 404 → « Créez votre compte sur myfidpass.fr ». |
-| **Ouverture de l’app / pull-to-refresh** | `GET /api/auth/me` pour récupérer le slug du commerce, puis 4 appels en parallèle : `GET .../dashboard/settings`, `.../stats`, `.../members`, `.../transactions`. Les données sont fusionnées en local (Core Data) et affichées au tableau de bord. |
+| **Ouverture de l’app / pull-to-refresh** | `GET /api/auth/me` pour récupérer le slug du commerce, puis enchaînement (sync séquentielle) : settings, stats, **membres paginés**, **transactions paginées** avec `sort=desc` pour l’import des derniers scans. Les données sont fusionnées en local (Core Data) et affichées au tableau de bord. Un bandeau d’erreur s’affiche en cas d’échec de sync. |
 | **Scanner une carte** | Le commerçant scanne le QR code → l’app envoie le code à `POST /api/businesses/:slug/integration/scan`. Réponse 200 → affichage du nom du client et des points ajoutés, puis sync pour mettre à jour le dashboard. 404 → « Code non reconnu ». |
 | **Ma Carte** | Aperçu en direct de la carte (design, couleurs, logo). Les modifications sont sauvegardées en **local** (Core Data). Le bouton « Tester dans l’Apple Wallet » appelle `GET /api/businesses/:slug/wallet-pass` ; si le backend renvoie un .pkpass, l’app affiche la feuille Apple pour ajouter le pass au Wallet. 404 → message « Configurez le pass depuis votre espace en ligne ». |
 | **Profil** | Affichage et édition du nom, email, tél, adresse (sauvegarde locale). Section « Notifier vos clients » → `POST /api/businesses/:slug/notify` avec le message saisi. Section localisation : l’adresse est celle renvoyée par `.../dashboard/settings` (`location_address`) et sert à expliquer les « relevant locations » PassKit (pass sur l’écran de verrouillage près du commerce). |
@@ -36,7 +36,7 @@ Le backend (api.myfidpass.fr) doit exposer les endpoints suivants avec les **mé
 | `GET /api/businesses/:slug/dashboard/settings` | Nom, couleurs, adresse du commerce. |
 | `GET /api/businesses/:slug/dashboard/stats` | Stats (membres, points, transactions, etc.). |
 | `GET /api/businesses/:slug/dashboard/members` | Liste des membres (id, name, email, points, dates). |
-| `GET /api/businesses/:slug/dashboard/transactions` | Liste des transactions (scans, points, etc.). |
+| `GET /api/businesses/:slug/dashboard/transactions` | Liste des transactions. **Requis** : `sort=desc` sur `created_at` (voir `CONTRAT_API_LOGICIEL.md`) pour que l’app reçoive d’abord les opérations récentes. |
 | `POST /api/businesses/:slug/integration/scan` | Enregistre un scan (barcode). Réponse : member + points_added / new_balance. 404 si code inconnu. |
 
 Sans ces 7 points, au moins une des fonctions de base (connexion, tableau de bord, scan) ne fonctionnera pas.

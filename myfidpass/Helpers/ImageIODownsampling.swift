@@ -19,10 +19,11 @@ enum ImageIODownsampling {
            !isAbsurdDisplayAspect(ui) {
             return displayFlattenIfNeeded(ui)
         }
-        guard let fallback = uiImageFallbackDecodeAndDownsample(data: data, maxPixelDimension: maxPixelDimension),
-              !isAbsurdDisplayAspect(fallback) else {
+        guard let fallback = uiImageFallbackDecodeAndDownsample(data: data, maxPixelDimension: maxPixelDimension) else {
             return nil
         }
+        // Ne pas rejeter le repli UIKit : logos très panoramiques / métadonnées EXIF bizarres peuvent
+        // échouer aux heuristiques ImageIO — l’utilisateur a choisi l’image, on la garde.
         return displayFlattenIfNeeded(fallback)
     }
 
@@ -51,13 +52,15 @@ enum ImageIODownsampling {
                   cg.width > 1, cg.height > 1 else { continue }
             let props = CGImageSourceCopyPropertiesAtIndex(source, idx, nil) as? [String: Any] ?? [:]
             guard aspectRatioMatchesMetadata(cg: cg, properties: props, tolerance: 0.72) else { continue }
-            if let ui = UIImage(cgImage: cg), !isAbsurdDisplayAspect(ui) { return ui }
+            let ui = UIImage(cgImage: cg)
+            if !isAbsurdDisplayAspect(ui) { return ui }
         }
 
         for idx in sorted {
             guard let cg = CGImageSourceCreateThumbnailAtIndex(source, idx, options as CFDictionary),
                   cg.width > 8, cg.height > 8 else { continue }
-            if let ui = UIImage(cgImage: cg), !isAbsurdDisplayAspect(ui) { return ui }
+            let ui = UIImage(cgImage: cg)
+            if !isAbsurdDisplayAspect(ui) { return ui }
         }
         return nil
     }

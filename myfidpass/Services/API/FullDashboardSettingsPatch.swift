@@ -32,6 +32,9 @@ struct FullDashboardSettingsPatch: Encodable {
     var pointsPerEuro: Int?
     var pointsPerVisit: Int?
     var pointsMinAmountEur: Double?
+    /// Panier moyen « repère » (€) pour comparaison statistiques ; `clearBaselineAvgBasketEur` envoie `null`.
+    var baselineAvgBasketEur: Double?
+    var clearBaselineAvgBasketEur: Bool = false
     var pointsRewardTiers: [PointsRewardTierPayload]?
     var sector: String?
     var logoBase64: String?
@@ -59,6 +62,8 @@ struct FullDashboardSettingsPatch: Encodable {
     var scanMaxPointsPerTransaction: Int?
     var requireReceiptQrValidation: Bool?
     var receiptQrToleranceCents: Int?
+    /// Hypothèses bilan (persistées `accounting_prefs_json`). N’envoyer que les champs à enregistrer.
+    var accountingPrefs: MerchantAccountingPrefsDTO?
 
     private enum CK: String, CodingKey {
         case organizationName = "organization_name"
@@ -82,6 +87,7 @@ struct FullDashboardSettingsPatch: Encodable {
         case pointsPerEuro = "points_per_euro"
         case pointsPerVisit = "points_per_visit"
         case pointsMinAmountEur = "points_min_amount_eur"
+        case baselineAvgBasketEur = "baseline_avg_basket_eur"
         case pointsRewardTiers = "points_reward_tiers"
         case sector
         case logoBase64 = "logo_base64"
@@ -104,6 +110,7 @@ struct FullDashboardSettingsPatch: Encodable {
         case scanMaxPointsPerTransaction = "scan_max_points_per_transaction"
         case requireReceiptQrValidation = "require_receipt_qr_validation"
         case receiptQrToleranceCents = "receipt_qr_tolerance_cents"
+        case accountingPrefs = "accounting_prefs"
     }
 
     func encode(to encoder: Encoder) throws {
@@ -133,6 +140,11 @@ struct FullDashboardSettingsPatch: Encodable {
         if let v = pointsPerEuro { try c.encode(v, forKey: .pointsPerEuro) }
         if let v = pointsPerVisit { try c.encode(v, forKey: .pointsPerVisit) }
         if let v = pointsMinAmountEur { try c.encode(v, forKey: .pointsMinAmountEur) }
+        if clearBaselineAvgBasketEur {
+            try c.encodeNil(forKey: .baselineAvgBasketEur)
+        } else if let v = baselineAvgBasketEur {
+            try c.encode(v, forKey: .baselineAvgBasketEur)
+        }
         if let v = pointsRewardTiers { try c.encode(v, forKey: .pointsRewardTiers) }
         if let v = sector { try c.encode(v, forKey: .sector) }
         if let v = logoBase64 { try c.encode(v, forKey: .logoBase64) }
@@ -155,6 +167,7 @@ struct FullDashboardSettingsPatch: Encodable {
         if let v = scanMaxPointsPerTransaction { try c.encode(v, forKey: .scanMaxPointsPerTransaction) }
         if let v = requireReceiptQrValidation { try c.encode(v ? 1 : 0, forKey: .requireReceiptQrValidation) }
         if let v = receiptQrToleranceCents { try c.encode(v, forKey: .receiptQrToleranceCents) }
+        if let v = accountingPrefs { try c.encode(v, forKey: .accountingPrefs) }
     }
 }
 

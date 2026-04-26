@@ -1,0 +1,104 @@
+//
+//  CommerceStatisticsPreviewMock.swift
+//  myfidpass
+//
+//  Données factices par mois civil (bouton « Démo 6 mois » + glissement mois par mois).
+//
+
+import Foundation
+
+struct CommerceStatisticsPreviewMonthPayload {
+    let stats: BusinessStatsResponse
+    let evolution: [EvolutionWeekDTO]
+}
+
+enum CommerceStatisticsPreviewMock {
+    static func payloadsByMonthKeys(_ keys: [String]) -> [String: CommerceStatisticsPreviewMonthPayload] {
+        Dictionary(uniqueKeysWithValues: keys.enumerated().map { idx, key in
+            (key, monthPayload(monthKey: key, indexFromNewest: idx))
+        })
+    }
+
+    private static func monthPayload(monthKey: String, indexFromNewest: Int) -> CommerceStatisticsPreviewMonthPayload {
+        let title = CommerceStatsMonthNavigator.displayTitle(forMonthKey: monthKey)
+        let seed = max(1, 6 - indexFromNewest)
+        let opsBase = 14 + indexFromNewest * 5
+        let evolutionPattern = [
+            opsBase + seed,
+            opsBase + seed * 2 + 4,
+            opsBase + seed + 8,
+            opsBase + seed * 3,
+        ]
+        let evolution: [EvolutionWeekDTO] = evolutionPattern.enumerated().map { i, ops in
+            EvolutionWeekDTO(
+                weekIndex: i,
+                operationsCount: ops,
+                membersCount: 3_650 + (5 - indexFromNewest) * 48 + i * 6
+            )
+        }
+
+        let members = 3_920 - indexFromNewest * 62
+        let newInMonth = 38 + seed * 4 - indexFromNewest * 3
+        let active = 210 + seed * 12 - indexFromNewest * 8
+
+        let stats = BusinessStatsResponse(
+            period: title,
+            periodKey: monthKey,
+            membersCount: members,
+            pointsThisMonth: 2_200 + indexFromNewest * 160,
+            transactionsThisMonth: 480 + indexFromNewest * 35,
+            newMembersLast7Days: min(28, 8 + seed),
+            newMembersLast30Days: min(120, 28 + seed * 5),
+            newMembersInPeriod: max(0, newInMonth),
+            inactiveMembers30Days: 88 + indexFromNewest * 5,
+            inactiveMembers90Days: 260 + indexFromNewest * 12,
+            pointsAveragePerMember: 95 + Double(seed) * 2.2,
+            activeMembersInPeriod: active,
+            retentionPct: min(78, 52 + Double(seed) * 2.1),
+            recurrentMembersInPeriod: 42 + seed * 3,
+            visitsInPeriod: 620 + indexFromNewest * 40,
+            avgVisitsPerActiveMember: 2.1 + Double(seed) * 0.08,
+            avgBasketEur: 22.5 + Double(indexFromNewest) * 0.85,
+            baselineAvgBasketEur: 20.0,
+            rewardsRedeemedCount: 6 + seed,
+            rewardsRedeemedBreakdown: [
+                RewardRedeemedBreakdownRowDTO(label: "Boisson offerte", count: 2 + seed / 2),
+                RewardRedeemedBreakdownRowDTO(label: "Dessert au choix", count: 3 + seed / 3),
+                RewardRedeemedBreakdownRowDTO(label: "Récompense tampons", count: 1),
+            ],
+            pointsRedeemedInPeriod: 720 + indexFromNewest * 55,
+            googleReviewsNewInPeriod: max(0, 4 - indexFromNewest / 2),
+            notificationCampaigns: indexFromNewest == 0 ? sampleCampaigns : [],
+            businessName: "Boutique démo"
+        )
+
+        return CommerceStatisticsPreviewMonthPayload(stats: stats, evolution: evolution)
+    }
+
+    private static var sampleCampaigns: [NotificationCampaignInsightDTO] {
+        [
+            NotificationCampaignInsightDTO(
+                batchId: "demo-batch-1",
+                triggerName: "Réactivation week-end",
+                createdAt: "2026-03-15T10:00:00.000Z",
+                sentTotal: 480,
+                recipientsDistinct: 480,
+                returnedWithin48h: 62,
+                notificationTitle: "C’est le week-end",
+                message: "Venez retirer un café offert dès 15 € d’achat, ce samedi seulement.",
+                sentPasskit: 300,
+                sentWebPush: 180
+            ),
+            NotificationCampaignInsightDTO(
+                batchId: "demo-batch-2",
+                triggerName: "Happy hour café",
+                createdAt: "2026-04-02T14:30:00.000Z",
+                sentTotal: 320,
+                recipientsDistinct: 320,
+                returnedWithin48h: 41,
+                notificationTitle: "Happy hour 17h",
+                message: "−10 % sur les pâtisseries aujourd’hui après 17 h."
+            ),
+        ]
+    }
+}

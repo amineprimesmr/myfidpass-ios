@@ -8,8 +8,9 @@ Ce document complète le code : après avoir ouvert le projet dans **Xcode**, su
 - `Purchases.configure` au lancement (`RevenueCatBootstrap` / `myfidpassApp`).
 - Identifiant RevenueCat utilisateur = `AuthStorage.userId` (API) sinon email.
 - Entitlement attendu : **`myfidpass_premium`** (constant `RevenueCatConfig.premiumEntitlementId`).
-- Feuille **`MerchantSubscriptionGateView`** : `PaywallView()` + lien secondaire Stripe.
+- Feuille **`MerchantSubscriptionGateView`** : `CustomMerchantProPaywallView` (StoreKit) + abonnement Stripe côté site si besoin.
 - Déblocage UI : abonnement Stripe (API) **ou** entitlement RevenueCat.
+- Synchronisation API : `POST /api/auth/revenuecat-sync` (après achat) + voir [APP_STORE_IAP_TARIFICATION.md](APP_STORE_IAP_TARIFICATION.md).
 
 ## 2. À faire dans Xcode (obligatoire)
 
@@ -18,11 +19,9 @@ Ce document complète le code : après avoir ouvert le projet dans **Xcode**, su
 3. **File → Packages** : vérifie que le package `https://github.com/RevenueCat/purchases-ios-spm.git` est résolu (premier build télécharge les binaires).
 4. Configuration **Release** : dans `RevenueCatConfig.swift`, remplace `REPLACE_WITH_APPL_PUBLIC_KEY` par la clé publique **`appl_…`** (RevenueCat → **API keys** → app iOS).
 
-## 3. App Store Connect
+## 3. App Store Connect (tarification cible)
 
-1. Crée un **abonnement auto-renouvelable** (ex. mensuel) pour l’app `com.myfidpass`.
-2. Renseigne prix, localisations, review note.
-3. Soumet les métadonnées IAP avec une version d’app (même binaire ou build suivant).
+Configure les **prix** et **offres intro** sur les abonnements (France / EUR : **49,99 €/mois**, **399,00 €/an** ; **3 j d’essai** sur les deux ; 1,00 € 1ʳ mois côté **mensuel** si ta fiche l’autorise). Voir **[APP_STORE_IAP_TARIFICATION.md](APP_STORE_IAP_TARIFICATION.md)**.
 
 ## 4. RevenueCat (dashboard)
 
@@ -31,8 +30,8 @@ Ce document complète le code : après avoir ouvert le projet dans **Xcode**, su
 3. **Apps** → lier l’app iOS + App Store Connect (clé API App Store Connect ou clé P8 selon flux RC).
 4. **Products** : ajoute le produit StoreKit (même identifiant qu’App Store Connect).
 5. **Entitlements** : crée un entitlement nommé exactement **`myfidpass_premium`** et attache-lui le produit d’abonnement.
-6. **Offerings** : crée une offering **default** (ou marque « default ») contenant le package mensuel.
-7. **Paywalls** : crée un paywall (éditeur RC) et associe-le à l’offering **default** — `PaywallView()` l’affiche sans code supplémentaire.
+6. **Offerings** : offering **default** avec **deux** packages : `monthly` + `annual` (prix affichés par l’app).
+7. L’app utilise le paywall **maison** `CustomMerchantProPaywallView` (texte = StoreKit), pas l’éditeur RC obligatoire.
 
 ## 5. Tests
 
@@ -40,16 +39,11 @@ Ce document complète le code : après avoir ouvert le projet dans **Xcode**, su
 - **Sandbox** : compte testeur App Store (Réglages → App Store → Compte sandbox).
 - Après achat, vérifie dans RC **Customers** que l’utilisateur a l’entitlement actif.
 
-## 6. Backend / API (important)
+## 6. Backend / API (fidelity)
 
-L’app débloque l’interface si **Stripe** (comme avant) **ou** si **RevenueCat** voit `myfidpass_premium` actif.
-
-Les routes API qui renvoient `subscription_required` (403) ne savent pas encore lire RevenueCat. Pour un alignement total serveur + app, il faudra plus tard :
-
-- un **webhook RevenueCat** vers ton backend pour recréer / synchroniser l’état d’abonnement, **ou**
-- une vérification serveur des reçus Apple via RevenueCat REST API.
-
-En attendant, un commerçant peut payer **en IAP** et utiliser l’app (UI), mais certaines actions strictement serveur peuvent encore exiger l’abo Stripe selon ta logique métier.
+- **RevenueCat REST** (clé `sk_` sur Railway) : `GET /v1/subscribers/{app_user_id}` pour lire l’entitlement.
+- **Webhook** `POST /api/webhooks/revenuecat` (Authorization = `REVENUECAT_WEBHOOK_AUTHORIZATION` sur Railway) : met à jour la table `subscriptions` avec le sentinel `revenuecat_iap` (sans remplacer un vrai abonnement Stripe `sub_…`).
+- L’app appelle en plus `POST /api/auth/revenuecat-sync` juste après achat / restauration pour que `GET /api/auth/me` reflète tout de suite l’IAP côté API (403 en phase post-achat en moins d’attente).
 
 ## 7. Fichiers utiles
 

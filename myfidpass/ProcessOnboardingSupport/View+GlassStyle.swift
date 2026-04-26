@@ -3,13 +3,33 @@
 //  Process
 //
 //  Extension globale pour le style Liquid Glass avec compatibilité iOS 17+
-//  Utilise .buttonStyle(.glass) natif iOS 18+ avec fallback automatique pour iOS 17
+//  iOS 26+ : .buttonStyle(.glass(.regular)) ou .glass(.regular.tint(...)) — doc Apple « glass(_:) »
 //
 //  IMPORTANT: Le SDK Xcode 26 indique iOS 26.0 pour .glass, mais en runtime
 //  .glass fonctionne sur iOS 18+. L'adaptation automatique est conservée.
 //
 
 import SwiftUI
+
+// MARK: - Teinte « verre sombre » (API native)
+
+/// Teintes passées à **`Glass.regular.tint(_)`** / **`buttonStyle(.glass(.regular.tint(_)))`** — voir documentation Apple
+/// [Applying Liquid Glass to custom views](https://developer.apple.com/documentation/SwiftUI/Applying-Liquid-Glass-to-custom-views).
+enum LiquidGlassNativeTint {
+    /// Gris très sombre type contrôle sur fond flou / sombre (lisible, pas un « faux » calque : c’est l’API `tint` du Glass).
+    static let darkRegular = Color(red: 0.11, green: 0.11, blue: 0.14)
+}
+
+// MARK: - Apparence explicite Liquid Glass (boutons)
+
+/// Configuration du **matériau** passé à `buttonStyle(.glass(...))` sur iOS 26+.
+/// - `adaptive` : `Glass.regular` sans teinte — rendu **clair / translucide** géré par le système.
+/// - `regularTint` : `Glass.regular.tint(color)` — teinte **dans** l’API Glass (opaque / sombre si la couleur l’est).  
+///   Ne pas confondre avec le modificateur `.tint` sur la vue : celui-ci ne pilote pas pareil le remplissage du verre.
+enum LiquidGlassButtonAppearance: Equatable {
+    case adaptive
+    case regularTint(Color)
+}
 
 // MARK: - Glass Button Style Fallback (iOS 17)
 
@@ -26,34 +46,78 @@ struct GlassButtonStyleFallback: ButtonStyle {
     }
 }
 
+/// Repli iOS 17–25 : `adaptive` = matériau léger ; `regularTint` = couche charcoal **opaque** (lisible sur fond noir).
+private struct LiquidGlassLegacyMaterialButtonStyle: ButtonStyle {
+    var appearance: LiquidGlassButtonAppearance
+    var cornerRadius: CGFloat
+
+    @ViewBuilder
+    func makeBody(configuration: Configuration) -> some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        switch appearance {
+        case .adaptive:
+            configuration.label
+                .background(.ultraThinMaterial, in: shape)
+                .overlay(shape.stroke(Color.white.opacity(0.26), lineWidth: 1))
+        case .regularTint(let color):
+            configuration.label
+                .background {
+                    ZStack {
+                        shape.fill(.thinMaterial)
+                        shape.fill(color.opacity(0.92))
+                    }
+                }
+                .clipShape(shape)
+                .overlay(shape.strokeBorder(Color.white.opacity(0.14), lineWidth: 1))
+                .scaleEffect(configuration.isPressed ? 0.993 : 1)
+                .animation(.spring(response: 0.22, dampingFraction: 0.82), value: configuration.isPressed)
+        }
+    }
+}
+
 // MARK: - View Extension - glassStyle() avec adaptation automatique
 
 extension View {
-    /// Applique le style Liquid Glass aux boutons
-    /// iOS 26.0+ (SDK) / iOS 18+ (runtime) / watchOS 11+ : utilise .buttonStyle(.glass) natif automatiquement
-    /// iOS 17 / watchOS 10 : utilise le fallback .ultraThinMaterial + stroke blanc 28% opacity automatiquement
-    /// 
-    /// IMPORTANT: Le SDK Xcode 26 indique iOS 26.0 pour .glass, mais en runtime .glass fonctionne sur iOS 18+
-    /// Pour satisfaire le compilateur, on doit vérifier iOS 26.0, ce qui signifie que sur iOS 18-25
-    /// on utilisera le fallback (limitation du compilateur). En runtime sur iOS 26.0+, .glass fonctionnera.
+    /// `buttonStyle(.glass(.regular))` + repli matériau. Pour un verre **sombre opaque**, utiliser `liquidGlassButtonAppearance(.regularTint(...))`.
     @ViewBuilder
-    func glassStyle() -> some View {
+    func liquidGlassButtonAppearance(_ appearance: LiquidGlassButtonAppearance, cornerRadius: CGFloat = 20) -> some View {
         #if os(watchOS)
-        // ✅ watchOS : Support Liquid Glass
         if #available(watchOS 11.0, *) {
-            // watchOS 11+ : Style Liquid Glass natif
-            self.buttonStyle(.glass)
+            switch appearance {
+            case .adaptive:
+                self.buttonStyle(.glass)
+            case .regularTint(let color):
+                self.buttonStyle(.glass(.regular.tint(color)))
+            }
         } else {
-            // watchOS 10 : Fallback avec GlassButtonStyleFallback
-            self.buttonStyle(GlassButtonStyleFallback())
+            self.buttonStyle(LiquidGlassLegacyMaterialButtonStyle(appearance: appearance, cornerRadius: cornerRadius))
         }
         #else
         if #available(iOS 26.0, *) {
-            self.buttonStyle(.glass)
+            switch appearance {
+            case .adaptive:
+                self.buttonStyle(.glass)
+            case .regularTint(let color):
+                self.buttonStyle(.glass(.regular.tint(color)))
+            }
         } else {
-            self.buttonStyle(GlassButtonStyleFallback())
+            self.buttonStyle(LiquidGlassLegacyMaterialButtonStyle(appearance: appearance, cornerRadius: cornerRadius))
         }
         #endif
+    }
+
+    /// Applique le style Liquid Glass aux boutons
+    /// iOS 26+ : `buttonStyle(.glass(.regular))` (API configurable, doc Apple).
+    /// iOS 17 : repli matériau.
+    @ViewBuilder
+    func glassStyle() -> some View {
+        liquidGlassButtonAppearance(.adaptive, cornerRadius: 20)
+    }
+
+    /// Verre **sombre** via l’API native `Glass.regular.tint(...)` (onboarding clair : préférer `glassStyle()` adaptatif).
+    @ViewBuilder
+    func glassStyleDark(cornerRadius: CGFloat = 20) -> some View {
+        liquidGlassButtonAppearance(.regularTint(LiquidGlassNativeTint.darkRegular), cornerRadius: cornerRadius)
     }
 }
 
@@ -99,6 +163,39 @@ extension View {
                     RoundedRectangle(cornerRadius: cornerRadius)
                         .stroke(Color.white.opacity(0.28), lineWidth: 1)
                 )
+        }
+        #endif
+    }
+
+    /// `glassEffect(.regular.tint(...))` — verre sombre **natif** (doc Apple « Applying Liquid Glass ») ; repli matériau + teinte sinon.
+    @ViewBuilder
+    func glassEffectRegularDark(cornerRadius: CGFloat = 20) -> some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        #if os(watchOS)
+        if #available(watchOS 12.0, *) {
+            self.glassEffect(.regular.tint(LiquidGlassNativeTint.darkRegular), in: shape)
+        } else {
+            self.background {
+                ZStack {
+                    shape.fill(.thinMaterial)
+                    shape.fill(LiquidGlassNativeTint.darkRegular.opacity(0.88))
+                }
+            }
+            .clipShape(shape)
+            .overlay(shape.strokeBorder(Color.white.opacity(0.12), lineWidth: 1))
+        }
+        #else
+        if #available(iOS 26.0, *) {
+            self.glassEffect(.regular.tint(LiquidGlassNativeTint.darkRegular), in: shape)
+        } else {
+            self.background {
+                ZStack {
+                    shape.fill(.thinMaterial)
+                    shape.fill(LiquidGlassNativeTint.darkRegular.opacity(0.88))
+                }
+            }
+            .clipShape(shape)
+            .overlay(shape.strokeBorder(Color.white.opacity(0.12), lineWidth: 1))
         }
         #endif
     }
@@ -213,48 +310,50 @@ struct NativeGlassEffectSheetModifier: ViewModifier {
 
 // MARK: - Même style que le bouton « Réglages » (Commerce, en-tête)
 
-/// Appliqué au **bouton** (label + action), comme `ProfileView` / `commerceTopBar`.
+/// Appliqué au **bouton** (label + action), comme `ProfileView` / `commerceTopBar` — `.glass(.regular.tint)` sombre (API native).
 struct TopBarLiquidGlassButtonModifier: ViewModifier {
     func body(content: Content) -> some View {
         if #available(iOS 26.0, *) {
             content
-                .buttonStyle(.glass)
+                .buttonStyle(.glass(.regular.tint(LiquidGlassNativeTint.darkRegular)))
                 .buttonBorderShape(.circle)
                 .controlSize(.small)
         } else {
             content
-                .background(
-                    Circle()
-                        .fill(Color.white.opacity(0.15))
-                )
+                .background {
+                    ZStack {
+                        Circle().fill(.thinMaterial)
+                        Circle().fill(LiquidGlassNativeTint.darkRegular.opacity(0.9))
+                    }
+                }
+                .clipShape(Circle())
                 .overlay(
                     Circle()
-                        .strokeBorder(Color.white.opacity(0.35), lineWidth: 0.9)
+                        .strokeBorder(Color.white.opacity(0.14), lineWidth: 1)
                 )
-                .clipShape(Circle())
                 .buttonStyle(TopBarLiquidGlassPressableStyle())
         }
     }
 }
 
-/// Même principe que `TopBarLiquidGlassButtonModifier` : `.glass` natif, forme **capsule** (ex. Activer / Réglages).
-/// `tint` colore le verre (ex. `.green` pour l’état activé) via `.tint` + `GlassButtonStyle`, sans perdre l’effet liquid glass.
+/// Même principe que `TopBarLiquidGlassButtonModifier` : `.glass(.regular[.tint])`, forme **capsule**.
 struct LiquidGlassCapsuleButtonModifier: ViewModifier {
     var tint: Color? = nil
     var controlSize: ControlSize = .small
 
     func body(content: Content) -> some View {
         if #available(iOS 26.0, *) {
-            Group {
-                if let tint {
-                    content.tint(tint)
-                } else {
-                    content
-                }
+            if let tint {
+                content
+                    .buttonStyle(.glass(.regular.tint(tint)))
+                    .buttonBorderShape(.capsule)
+                    .controlSize(controlSize)
+            } else {
+                content
+                    .buttonStyle(.glass(.regular))
+                    .buttonBorderShape(.capsule)
+                    .controlSize(controlSize)
             }
-            .buttonStyle(.glass)
-            .buttonBorderShape(.capsule)
-            .controlSize(controlSize)
         } else {
             if let tint {
                 content

@@ -70,12 +70,13 @@ enum AppTheme {
     }
 
     // MARK: - Typographie
+    /// SF Pro (design **default**) — aligné sur les apps système Apple ; Dynamic Type respecté via styles textuels.
     enum Fonts {
-        static func largeTitle() -> Font { .system(.largeTitle, design: .rounded, weight: .bold) }
-        static func title() -> Font { .system(.title, design: .rounded, weight: .semibold) }
-        static func title2() -> Font { .system(.title2, design: .rounded, weight: .semibold) }
-        static func title3() -> Font { .system(.title3, design: .rounded, weight: .medium) }
-        static func headline() -> Font { .system(.headline, design: .rounded, weight: .semibold) }
+        static func largeTitle() -> Font { .system(.largeTitle, design: .default, weight: .bold) }
+        static func title() -> Font { .system(.title, design: .default, weight: .semibold) }
+        static func title2() -> Font { .system(.title2, design: .default, weight: .semibold) }
+        static func title3() -> Font { .system(.title3, design: .default, weight: .medium) }
+        static func headline() -> Font { .system(.headline, design: .default, weight: .semibold) }
         static func subheadline() -> Font { .system(.subheadline, design: .default, weight: .regular) }
         static func body() -> Font { .system(.body, design: .default, weight: .regular) }
         static func callout() -> Font { .system(.callout, design: .default, weight: .regular) }
@@ -195,6 +196,20 @@ extension Color {
     }
 }
 
+// MARK: - Clavier logiciel (ex. masquer la pastille d’essai 1 €)
+
+private struct IsSoftwareKeyboardVisibleKey: EnvironmentKey {
+    static let defaultValue: Bool = false
+}
+
+extension EnvironmentValues {
+    /// `true` quand le clavier logiciel iOS est affiché (texte, pas le clavier matériel seul).
+    var isSoftwareKeyboardVisible: Bool {
+        get { self[IsSoftwareKeyboardVisibleKey.self] }
+        set { self[IsSoftwareKeyboardVisibleKey.self] = newValue }
+    }
+}
+
 // MARK: - Feuilles modales (sans barre de navigation système)
 
 extension View {
@@ -224,7 +239,7 @@ struct SheetDismissBar: View {
         HStack {
             if #available(iOS 26.0, *) {
                 Button(label, action: action)
-                    .buttonStyle(.glass)
+                    .buttonStyle(.glass(.regular))
                     .buttonBorderShape(.capsule)
                     .controlSize(.regular)
             } else {

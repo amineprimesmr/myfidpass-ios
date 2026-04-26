@@ -212,7 +212,7 @@ struct GoogleEstablishmentPicker: View {
                         .font(.subheadline.weight(.semibold))
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.glass)
+                .buttonStyle(.glass(.regular))
                 .buttonBorderShape(.capsule)
                 .controlSize(.large)
             } else {
@@ -334,7 +334,7 @@ struct GoogleEstablishmentPicker: View {
                             .font(.subheadline.weight(.semibold))
                             .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.glass)
+                    .buttonStyle(.glass(.regular))
                     .buttonBorderShape(.capsule)
                     .controlSize(.large)
                 } else {

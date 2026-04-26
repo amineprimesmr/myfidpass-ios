@@ -90,6 +90,8 @@ struct AuthUser: Decodable {
         case staffLogin = "staff_login"
         case isAdmin = "is_admin"
         case workspaceRole = "workspace_role"
+        /// Variante backend (tolérance).
+        case role
     }
 
     init(from decoder: Decoder) throws {
@@ -100,7 +102,11 @@ struct AuthUser: Decodable {
         name = try c.decodeIfPresent(String.self, forKey: .name)
         phone = try c.decodeIfPresent(String.self, forKey: .phone)
         isAdmin = try c.decodeIfPresent(Bool.self, forKey: .isAdmin)
-        workspaceRole = try c.decodeIfPresent(String.self, forKey: .workspaceRole)
+        if let w = try c.decodeIfPresent(String.self, forKey: .workspaceRole) {
+            workspaceRole = w
+        } else {
+            workspaceRole = try c.decodeIfPresent(String.self, forKey: .role)
+        }
     }
 }
 
@@ -202,6 +208,14 @@ struct SubscriptionDTO: Decodable {
     let planId: String?
 }
 
+/// POST /api/auth/revenuecat-sync (alignement BDD abonnement après achat in-app)
+struct AuthRevenueCatSyncResponse: Decodable {
+    let ok: Bool?
+    let subscription: SubscriptionDTO?
+    let hasActiveSubscription: Bool?
+    let merchantTrialEndsAt: String?
+}
+
 // MARK: - GET .../dashboard/settings
 
 struct BusinessSettingsResponse: Decodable {
@@ -230,6 +244,8 @@ struct BusinessSettingsResponse: Decodable {
     let pointsPerEuro: Int?
     let pointsPerVisit: Int?
     let pointsMinAmountEur: Double?
+    /// Panier moyen « repère » (comparaison stats / compta).
+    let baselineAvgBasketEur: Double?
     let pointsRewardTiers: [PointsRewardTierDTO]?
     let expiryMonths: Int?
     let sector: String?
@@ -266,6 +282,170 @@ struct BusinessSettingsResponse: Decodable {
     let requireReceiptQrValidation: Int?
     /// Tolérance en centimes entre montant saisi et JWT (défaut 5).
     let receiptQrToleranceCents: Int?
+    /// Hypothèses pour exports bilan (valorisation, montants nominatifs indicatifs).
+    let accountingPrefs: MerchantAccountingPrefsDTO?
+}
+
+/// Préférences comptables persistées (`PATCH …/dashboard/settings` → `accounting_prefs_json`).
+struct MerchantAccountingPrefsDTO: Codable, Equatable, Sendable {
+    var valuationMethod: String?
+    var stampRewardNominalEur: Double?
+    var engagementPointNominalEur: Double?
+    var gameGiftNominalEur: Double?
+    var impliedEurPerPointOutstanding: Double?
+    /// Clés = nombre de points du palier (ex. `"100"`) → valeur faciale remise en €.
+    var tierNominalDiscountEurByPoints: [String: Double]?
+    var noteComptable: String?
+    /// `auto` lorsque le pack a tout calculé côté serveur.
+    var source: String?
+
+    enum CodingKeys: String, CodingKey {
+        case valuationMethod = "valuation_method"
+        case stampRewardNominalEur = "stamp_reward_nominal_eur"
+        case engagementPointNominalEur = "engagement_point_nominal_eur"
+        case gameGiftNominalEur = "game_gift_nominal_eur"
+        case impliedEurPerPointOutstanding = "implied_eur_per_point_outstanding"
+        case tierNominalDiscountEurByPoints = "tier_nominal_discount_eur_by_points"
+        case noteComptable = "note_comptable"
+        case source
+    }
+}
+
+// MARK: - GET .../dashboard/accounting-pack
+
+struct MerchantAccountingPackResponse: Decodable, Sendable {
+    let businessSlug: String
+    let businessName: String
+    let generatedAt: String
+    let periodLabel: String
+    let filters: MerchantAccountingPackFiltersDTO?
+    let programSnapshot: MerchantAccountingProgramSnapshotDTO?
+    let accountingPrefs: MerchantAccountingPrefsDTO?
+    let summary: MerchantAccountingPackSummaryDTO?
+    let files: [MerchantAccountingPackFileDTO]
+
+    enum CodingKeys: String, CodingKey {
+        case businessSlug = "business_slug"
+        case businessName = "business_name"
+        case generatedAt = "generated_at"
+        case periodLabel = "period_label"
+        case filters
+        case programSnapshot = "program_snapshot"
+        case accountingPrefs = "accounting_prefs"
+        case summary
+        case files
+    }
+}
+
+struct MerchantAccountingPackFiltersDTO: Decodable, Sendable {
+    let days: Int?
+    let dateFrom: String?
+    let dateTo: String?
+    let limit: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case days
+        case dateFrom = "date_from"
+        case dateTo = "date_to"
+        case limit
+    }
+}
+
+struct MerchantAccountingProgramSnapshotDTO: Decodable, Sendable {
+    let programType: String?
+    let loyaltyMode: String?
+    let pointsPerEuro: Int?
+    let pointsPerVisit: Int?
+    let pointsMinAmountEur: Double?
+    let pointsRewardTiers: [PointsRewardTierDTO]?
+    let requiredStamps: Int?
+    let stampRewardLabel: String?
+    let stampMidRewardLabel: String?
+    let stampEmoji: String?
+    let pointsPerTicket: Int?
+    let expiryMonths: Int?
+    let sector: String?
+    let baselineAvgBasketEur: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case programType = "program_type"
+        case loyaltyMode = "loyalty_mode"
+        case pointsPerEuro = "points_per_euro"
+        case pointsPerVisit = "points_per_visit"
+        case pointsMinAmountEur = "points_min_amount_eur"
+        case pointsRewardTiers = "points_reward_tiers"
+        case requiredStamps = "required_stamps"
+        case stampRewardLabel = "stamp_reward_label"
+        case stampMidRewardLabel = "stamp_mid_reward_label"
+        case stampEmoji = "stamp_emoji"
+        case pointsPerTicket = "points_per_ticket"
+        case expiryMonths = "expiry_months"
+        case sector
+        case baselineAvgBasketEur = "baseline_avg_basket_eur"
+    }
+}
+
+struct MerchantAccountingPackSummaryDTO: Decodable, Sendable {
+    let rowCount: Int?
+    let byType: [String: Int]?
+    let pointsCreditedTotal: Int?
+    let pointsDebitedTotal: Int?
+    let membersCount: Int?
+    let engagementRows: Int?
+    let ticketLedgerRows: Int?
+    let rewardGrantRows: Int?
+    let gameRewardDefinitions: Int?
+    let deliveryClaimRows: Int?
+    /// Somme indicative passif (clé API `passif_estime_sum_eur` ou ancienne `passif_estime_sum_eur_implied_points`).
+    let passifEstimeSumEurImpliedPoints: Double?
+    let valuationMode: String?
+
+    enum CodingKeys: String, CodingKey {
+        case rowCount = "row_count"
+        case byType = "by_type"
+        case pointsCreditedTotal = "points_credited_total"
+        case pointsDebitedTotal = "points_debited_total"
+        case membersCount = "members_count"
+        case engagementRows = "engagement_rows"
+        case ticketLedgerRows = "ticket_ledger_rows"
+        case rewardGrantRows = "reward_grant_rows"
+        case gameRewardDefinitions = "game_reward_definitions"
+        case deliveryClaimRows = "delivery_claim_rows"
+        case passifEstimeSumEur = "passif_estime_sum_eur"
+        case passifEstimeSumEurImpliedPointsLegacy = "passif_estime_sum_eur_implied_points"
+        case valuationMode = "valuation_mode"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        rowCount = try c.decodeIfPresent(Int.self, forKey: .rowCount)
+        byType = try c.decodeIfPresent([String: Int].self, forKey: .byType)
+        pointsCreditedTotal = try c.decodeIfPresent(Int.self, forKey: .pointsCreditedTotal)
+        pointsDebitedTotal = try c.decodeIfPresent(Int.self, forKey: .pointsDebitedTotal)
+        membersCount = try c.decodeIfPresent(Int.self, forKey: .membersCount)
+        engagementRows = try c.decodeIfPresent(Int.self, forKey: .engagementRows)
+        ticketLedgerRows = try c.decodeIfPresent(Int.self, forKey: .ticketLedgerRows)
+        rewardGrantRows = try c.decodeIfPresent(Int.self, forKey: .rewardGrantRows)
+        gameRewardDefinitions = try c.decodeIfPresent(Int.self, forKey: .gameRewardDefinitions)
+        deliveryClaimRows = try c.decodeIfPresent(Int.self, forKey: .deliveryClaimRows)
+        passifEstimeSumEurImpliedPoints =
+            try c.decodeIfPresent(Double.self, forKey: .passifEstimeSumEur)
+            ?? c.decodeIfPresent(Double.self, forKey: .passifEstimeSumEurImpliedPointsLegacy)
+        valuationMode = try c.decodeIfPresent(String.self, forKey: .valuationMode)
+    }
+}
+
+struct MerchantAccountingPackFileDTO: Decodable, Sendable, Identifiable {
+    var id: String { filename }
+    let filename: String
+    let mimeType: String?
+    let contentUtf8: String?
+
+    enum CodingKeys: String, CodingKey {
+        case filename
+        case mimeType = "mime_type"
+        case contentUtf8 = "content_utf8"
+    }
 }
 
 // MARK: - POST .../dashboard/receipt-challenge
@@ -643,6 +823,11 @@ struct NotificationStatsEndpointPayload: Decodable {
     }
 }
 
+struct RewardRedeemedBreakdownRowDTO: Codable, Sendable, Hashable {
+    let label: String
+    let count: Int
+}
+
 struct BusinessStatsResponse: Codable, Sendable {
     let period: String?
     let periodKey: String?
@@ -662,7 +847,10 @@ struct BusinessStatsResponse: Codable, Sendable {
     let avgVisitsPerActiveMember: Double?
     /// Uniquement si des montants € sont enregistrés sur les transactions (`amount_eur`), jamais dérivé des points.
     let avgBasketEur: Double?
+    /// Repère panier moyen saisi par le commerce (comparaison dans l’app).
+    let baselineAvgBasketEur: Double?
     let rewardsRedeemedCount: Int?
+    let rewardsRedeemedBreakdown: [RewardRedeemedBreakdownRowDTO]?
     let pointsRedeemedInPeriod: Int?
     let googleReviewsNewInPeriod: Int?
     let notificationCampaigns: [NotificationCampaignInsightDTO]?
@@ -965,17 +1153,18 @@ struct FlyerStateDTO: Codable, Equatable {
             colorPrimary: "#fbbf24",
             colorSecondary: "#f97316",
             colorAccent: "#ffffff",
-            colorBgTop: "#0f172a",
-            colorBgBottom: "#020617",
+            /// Fond clair, vif (dégradé) — cohérent avec le texte titre foncé.
+            colorBgTop: "#FEF3C7",
+            colorBgBottom: "#FED7AA",
             /// `png` = texture web `spinflyer` ; `segments` = secteurs aplats (sans image).
             wheelRenderMode: "png",
             wheelColorOdd: "#fbbf24",
             wheelColorEven: "#f97316",
             wheelSegmentOffsetDeg: 0,
             headlineFontId: "fraunces",
-            headlineTextColor: "#ffffff",
-            headlineStrokeColor: "#020617",
-            headlineGiftStrokeColor: "#020617",
+            headlineTextColor: "#0f172a",
+            headlineStrokeColor: "#F8FAFC",
+            headlineGiftStrokeColor: "#be185d",
             headlineStrokeWidth: 18,
             headlineLogoGapPct: 4,
             headlineLetterSpacing: 0,
@@ -987,6 +1176,7 @@ struct FlyerStateDTO: Codable, Equatable {
             flyerLogoCenterYFrac: 0.092,
             flyerLogoMaxWFrac: 0.62,
             flyerLogoMaxHFrac: 0.15,
+            /// Détourage auto du logo (fond retiré) par défaut — l’app exporte en PNG transparence.
             flyerLogoKeepSourceBackground: false
         )
     }
@@ -1098,7 +1288,9 @@ struct FlyerStateDTO: Codable, Equatable {
         colorBgTop = Self.safeHex(try c.decodeIfPresent(String.self, forKey: .colorBgTop), base.colorBgTop)
         colorBgBottom = Self.safeHex(try c.decodeIfPresent(String.self, forKey: .colorBgBottom), base.colorBgBottom)
         let wr = try c.decodeIfPresent(String.self, forKey: .wheelRenderMode) ?? base.wheelRenderMode
-        wheelRenderMode = Self.normalizeWheelRenderMode(wr)
+        var wm = Self.normalizeWheelRenderMode(wr)
+        if wm == "segments" { wm = "png" }
+        wheelRenderMode = wm
         wheelColorOdd = Self.safeHex(oddRaw, base.wheelColorOdd)
         wheelColorEven = Self.safeHex(evenRaw, base.wheelColorEven)
         wheelSegmentOffsetDeg = Self.clampWheelOffset(try c.decodeIfPresent(Double.self, forKey: .wheelSegmentOffsetDeg) ?? base.wheelSegmentOffsetDeg)
@@ -1136,6 +1328,11 @@ struct FlyerStateDTO: Codable, Equatable {
         Self.coerceFiniteNumericFields(&self)
         templateId = Self.templateIdFixed
         wheelRenderMode = Self.normalizeWheelRenderMode(wheelRenderMode)
+        /// `segments` = disques colorés sans texture ; `png` = image **spinflyer** dans l’embed web. L’app ne propose
+        /// plus le mode « roue plate » : tout état enregistré en `segments` repasse en `png` pour l’aperçu et le PUT.
+        if wheelRenderMode == "segments" {
+            wheelRenderMode = "png"
+        }
         wheelSegmentOffsetDeg = Self.clampWheelOffset(wheelSegmentOffsetDeg)
         colorPrimary = Self.safeHex(colorPrimary, Self.default.colorPrimary)
         colorSecondary = Self.safeHex(colorSecondary, Self.default.colorSecondary)
@@ -1260,7 +1457,8 @@ struct FlyerStateDTO: Codable, Equatable {
 }
 
 extension DashboardFlyerGetResponse {
-    /// L’onglet Commerce ne doit pas se baser uniquement sur les data URL du GET : un flyer enregistré a souvent `state` + `updated_at` alors que fond/logo sont absents ou chargés autrement (hub → hydratation).
+    /// Flyer réellement personnalisé / enregistré : visuels ou textes-couleurs ≠ gabarit par défaut.
+    /// Ne **pas** se baser sur `updated_at` seul : une ligne créée côté serveur peut avoir un horodatage sans aucune action commerçant (sinon « Créer » / hub se confondent avec « Modifier »).
     var commerceIndicatesFlyerRegistered: Bool {
         let bg = (flyerPrefs?.customBgDataUrl ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let lg = (flyerPrefs?.customLogoDataUrl ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1273,8 +1471,6 @@ extension DashboardFlyerGetResponse {
             rhs.normalizeClamps()
             if lhs != rhs { return true }
         }
-        let ua = (updatedAt ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if !ua.isEmpty { return true }
         return false
     }
 }
@@ -1494,6 +1690,11 @@ struct WorkspaceTeamMemberDTO: Decodable, Identifiable {
     let role: String?
     let status: String?
     let createdAt: String?
+    /// Activité caisse enregistrée sur les transactions (`actor_user_id`) — optionnel si l’API est ancienne.
+    let pointsAddCount: Int?
+    let rewardRedeemCount: Int?
+    let pointsIssued: Int?
+    let amountEurSum: Double?
 
     var id: String {
         if let m = membershipId?.trimmingCharacters(in: .whitespacesAndNewlines), !m.isEmpty { return "m:\(m)" }
@@ -1509,6 +1710,10 @@ struct WorkspaceTeamMemberDTO: Decodable, Identifiable {
         case email, name, role, status
         case staffLogin = "staff_login"
         case createdAt = "created_at"
+        case pointsAddCount = "points_add_count"
+        case rewardRedeemCount = "reward_redeem_count"
+        case pointsIssued = "points_issued"
+        case amountEurSum = "amount_eur_sum"
     }
 }
 

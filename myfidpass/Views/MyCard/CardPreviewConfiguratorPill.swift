@@ -7,10 +7,8 @@
 
 import SwiftUI
 
-/// Pastille animée : indique où cliquer sur la carte pour compléter un élément obligatoire.
+/// Pastille sur l’aperçu : indique où taper pour compléter un élément obligatoire (sans animation continue).
 struct CardPreviewConfiguratorPill: View {
-    @State private var pulse = false
-
     var body: some View {
         HStack(spacing: 0) {
             Image(systemName: "hand.tap.fill")
@@ -33,13 +31,7 @@ struct CardPreviewConfiguratorPill: View {
             Capsule(style: .continuous)
                 .strokeBorder(Color.white.opacity(0.35), lineWidth: 1)
         )
-        .shadow(color: .orange.opacity(pulse ? 0.55 : 0.28), radius: pulse ? 6 : 3, y: 2)
-        .scaleEffect(pulse ? 1.04 : 1.0)
-        .onAppear {
-            withAnimation(.easeInOut(duration: 0.85).repeatForever(autoreverses: true)) {
-                pulse = true
-            }
-        }
+        .shadow(color: .orange.opacity(0.32), radius: 4, y: 2)
     }
 }
 

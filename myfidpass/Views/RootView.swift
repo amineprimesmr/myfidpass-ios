@@ -35,6 +35,14 @@ private struct WelcomeFlow: View {
 struct RootView: View {
     @EnvironmentObject var authService: AuthService
     @Environment(\.managedObjectContext) private var viewContext
+    /// Même clé que `MainTabView` / `OneTimeOnBoarding` : tant que le tutoriel n’est pas fini, on n’affiche pas
+    /// l’écran « Chargement du compte… » (sinon icône de chargement par-dessus le parcours tutoriel).
+    @AppStorage("myfidpass.homeTutorial.v1") private var homeTutorialCompleted = false
+
+    /// Blocage plein écran uniquement pour les comptes qui ont **déjà** terminé le tutoriel (retour app, cold start).
+    private var shouldBlockAuthenticatedUIForBootstrap: Bool {
+        !authService.merchantSubscriptionEligibilityResolved && homeTutorialCompleted
+    }
 
     var body: some View {
         Group {
@@ -43,7 +51,7 @@ struct RootView: View {
                 WelcomeFlow()
             case .authenticated:
                 Group {
-                    if !authService.merchantSubscriptionEligibilityResolved {
+                    if shouldBlockAuthenticatedUIForBootstrap {
                         ZStack {
                             Color(.systemBackground).ignoresSafeArea()
                             VStack(spacing: 14) {
@@ -52,9 +60,6 @@ struct RootView: View {
                                     .font(.subheadline)
                                     .foregroundStyle(.secondary)
                             }
-                        }
-                        .task {
-                            await authService.refreshBusinessesIfNeeded()
                         }
                     } else {
                         Group {
@@ -65,6 +70,11 @@ struct RootView: View {
                             }
                         }
                         .environment(\.managedObjectContext, viewContext)
+                    }
+                }
+                .task {
+                    if !authService.merchantSubscriptionEligibilityResolved {
+                        await authService.refreshBusinessesIfNeeded()
                     }
                 }
             }

@@ -105,7 +105,12 @@ extension AuthService {
     /// Accès « abonnement payant » : Stripe (API) **ou** achat App Store via RevenueCat.
     func subscriptionAccessUnlocked(revenueCatPremium: Bool) -> Bool {
         if isPlatformAdmin { return true }
+        if mustOpenMandatoryPaywallAfterSignup, !revenueCatPremium { return false }
         if revenueCatPremium { return true }
-        return hasActiveMerchantSubscription
+        /// Essai gratuit applicatif actif : accès autorisé tant que la fenêtre n’est pas expirée.
+        if isMerchantTrialPeriodActive { return true }
+        /// `hasActiveMerchantSubscription` peut être vrai dans certains états transitoires / hérités.
+        /// Pour le verrou d’accès principal, on ne débloque que sur un abonnement Stripe réellement qualifiant.
+        return hasPaidStripeSubscription
     }
 }

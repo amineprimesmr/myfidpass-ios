@@ -502,7 +502,7 @@ private struct PerimeterMapPitchGlassButton: View {
                         .foregroundStyle(palette.onCanvasPrimary)
                         .frame(minWidth: 44, minHeight: 40)
                 }
-                .buttonStyle(.glass)
+                .buttonStyle(.glass(.regular))
                 .buttonBorderShape(.capsule)
             } else {
                 Button(action: action) {
@@ -550,7 +550,7 @@ private struct PerimeterEditorSheet: View {
         HStack(alignment: .center, spacing: 8) {
             if #available(iOS 26.0, *) {
                 Button("Fermer", action: onDismiss)
-                    .buttonStyle(.glass)
+                    .buttonStyle(.glass(.regular))
                     .buttonBorderShape(.capsule)
                     .controlSize(.regular)
             } else {
@@ -585,7 +585,7 @@ private struct PerimeterEditorSheet: View {
                     }
                 }
                 .disabled(isSaving || !hasLocation)
-                .buttonStyle(.glass)
+                .buttonStyle(.glass(.regular))
                 .buttonBorderShape(.capsule)
                 .controlSize(.regular)
                 .tint(AppTheme.Colors.primary)
@@ -726,7 +726,7 @@ private struct PerimeterEditorSheet: View {
             .sheetHideNavigationBar()
         }
         .presentationDetents([.medium, .large])
-        .presentationDragIndicator(.visible)
+        .presentationDragIndicator(.hidden)
         .modifier(LiquidGlassSheetModifier())
         .onChange(of: locationLat) { _, _ in hasUnsavedChanges = true }
         .onChange(of: locationLng) { _, _ in hasUnsavedChanges = true }

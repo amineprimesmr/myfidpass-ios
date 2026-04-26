@@ -30,6 +30,8 @@ enum AuthStorage {
         static let dashboardTokensBySlug = "myfidpass.auth.dashboardTokensBySlug"
         /// Après `POST /api/auth/register` : afficher le paywall avant l’accès aux onglets.
         static let pendingOpenMerchantSubscriptionSheetAfterSignup = "myfidpass.auth.pendingOpenMerchantSubscriptionSheetAfterSignup"
+        /// Après sortie du paywall post-inscription : relancer le tutoriel commerçant.
+        static let pendingShowMerchantHomeTutorialAfterSignup = "myfidpass.auth.pendingShowMerchantHomeTutorialAfterSignup"
         /// Identifiant utilisateur API (`GET /me` → `user.id`) — RevenueCat `logIn` (stable par compte).
         static let userId = "myfidpass.auth.userId"
         /// Dernier `MerchantWorkspaceRole` connu (affichage au cold start avant `GET /me`).
@@ -163,6 +165,11 @@ enum AuthStorage {
         set { defaults.set(newValue, forKey: Key.pendingOpenMerchantSubscriptionSheetAfterSignup) }
     }
 
+    static var pendingShowMerchantHomeTutorialAfterSignup: Bool {
+        get { defaults.bool(forKey: Key.pendingShowMerchantHomeTutorialAfterSignup) }
+        set { defaults.set(newValue, forKey: Key.pendingShowMerchantHomeTutorialAfterSignup) }
+    }
+
     static var merchantWorkspaceRoleRaw: String? {
         get { defaults.string(forKey: Key.merchantWorkspaceRole) }
         set {
@@ -188,8 +195,8 @@ enum AuthStorage {
         defaults.removeObject(forKey: Key.currentBusinessSlug)
         defaults.removeObject(forKey: Key.dashboardTokensBySlug)
         defaults.removeObject(forKey: Key.pendingOpenMerchantSubscriptionSheetAfterSignup)
+        defaults.removeObject(forKey: Key.pendingShowMerchantHomeTutorialAfterSignup)
         defaults.removeObject(forKey: Key.merchantWorkspaceRole)
-        defaults.removeObject(forKey: "myfidpass.auth.pendingShowMerchantHomeTutorialAfterSignup")
         defaults.removeObject(forKey: "myfidpass.merchantHomeTutorial.v2")
         defaults.removeObject(forKey: "myfidpass.merchantHomeTutorial.v1")
     }

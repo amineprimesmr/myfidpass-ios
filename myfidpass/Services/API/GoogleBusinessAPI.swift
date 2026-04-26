@@ -214,6 +214,41 @@ actor GoogleBusinessAPI {
         _ = try await delete(slug: slug, path: "/media/\(urlSeg(mediaId))", type: GoogleBusinessOkResponse.self)
     }
 
+    // MARK: - PENDING LOCATION RETRY
+
+    struct RetryPendingLocationResponse: Decodable {
+        let ok: Bool
+        let resolved: Bool
+        let locationPending: Bool
+        let locationTitle: String?
+        let lastError: String?
+    }
+
+    /// Retente la résolution de fiche Google Business quand location_pending=true.
+    /// Retourne le nouvel état (resolved=true si la fiche a pu être identifiée).
+    func retryPendingLocation(slug: String) async throws -> RetryPendingLocationResponse {
+        try await post(slug: slug, path: "/retry-pending-location", body: EmptyBody(), type: RetryPendingLocationResponse.self)
+    }
+
+    // MARK: - LOCATIONS (multi-établissements)
+
+    /// Liste toutes les fiches Google Business gérées par le compte OAuth connecté.
+    /// Le backend renvoie 404 ou [] si le compte n'a qu'un seul établissement (déjà auto-sélectionné).
+    func listLocations(slug: String) async throws -> [GoogleBusinessLocationItem] {
+        try await get(slug: slug, path: "/locations", type: GoogleBusinessLocationsResponse.self).locations
+    }
+
+    /// Sélectionne manuellement une fiche parmi celles du compte OAuth quand il en gère plusieurs.
+    func selectLocation(slug: String, locationId: String) async throws -> GoogleBusinessSelectLocationResponse {
+        struct Body: Encodable { let locationId: String }
+        return try await post(
+            slug: slug,
+            path: "/location/select",
+            body: Body(locationId: locationId),
+            type: GoogleBusinessSelectLocationResponse.self
+        )
+    }
+
     // MARK: - Internals
 
     /// Pour décoder les réponses 200 OK au format libre sans les utiliser. Toujours successful.

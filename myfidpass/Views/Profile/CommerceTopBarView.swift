@@ -57,7 +57,7 @@ struct CommerceTopBarView: View {
         HStack(spacing: 12) {
             leadingAvatar
             Text(title.isEmpty ? "Ma boutique" : title)
-                .font(.system(.headline, design: .rounded, weight: .semibold))
+                .font(.system(.headline, design: .default, weight: .semibold))
                 .foregroundStyle(.white)
                 .lineLimit(1)
             Spacer(minLength: 6)

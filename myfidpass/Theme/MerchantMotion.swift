@@ -38,7 +38,7 @@ struct MerchantPressableButtonStyle: ButtonStyle {
 
 // MARK: - Onboarding flyer (secousse CTA)
 
-/// Secousse horizontale du bloc « Créer mon flyer de jeu » quand l’utilisateur tente un autre onglet.
+/// Secousse horizontale du seul CTA « Créer mon flyer de jeu » (onglet Commerce) quand l’utilisateur tente un autre onglet.
 struct FlyerPrimaryCTAShakeModifier: ViewModifier {
     let shakeToken: Int
     @State private var offsetX: CGFloat = 0
@@ -49,12 +49,13 @@ struct FlyerPrimaryCTAShakeModifier: ViewModifier {
             .onChange(of: shakeToken) { _, _ in
                 guard shakeToken > 0 else { return }
                 Task { @MainActor in
-                    let pattern: [CGFloat] = [0, -11, 11, -9, 9, -6, 6, -3, 3, 0]
+                    // Assez long à l’écran (~1,1 s de pauses + ressort) pour que la secousse se lise clairement.
+                    let pattern: [CGFloat] = [0, -20, 20, -18, 18, -16, 16, -12, 12, -8, 8, -4, 4, 0]
                     for x in pattern {
                         withAnimation(MerchantMotion.flyerCTAShakeStep) {
                             offsetX = x
                         }
-                        try? await Task.sleep(nanoseconds: 38_000_000)
+                        try? await Task.sleep(nanoseconds: 80_000_000)
                     }
                 }
             }
@@ -62,8 +63,13 @@ struct FlyerPrimaryCTAShakeModifier: ViewModifier {
 }
 
 extension MerchantMotion {
-    /// Petits pas rapides pour la secousse « indispensable ».
-    static let flyerCTAShakeStep: Animation = .spring(response: 0.16, dampingFraction: 0.62, blendDuration: 0)
+    /// Pulsations lisibles (chaque impulsion a le temps d’aller au point avant la suivante).
+    static let flyerCTAShakeStep: Animation = .interpolatingSpring(
+        mass: 0.3,
+        stiffness: 300,
+        damping: 16,
+        initialVelocity: 0
+    )
 }
 
 extension View {

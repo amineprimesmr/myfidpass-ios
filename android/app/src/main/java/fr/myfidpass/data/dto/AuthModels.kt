@@ -46,6 +46,8 @@ data class AuthUser(
     val email: String? = null,
     val name: String? = null,
     @SerialName("is_admin") val isAdmin: Boolean? = null,
+    /** `owner` | `manager` | `staff` — accès employé limité à l’app commerçant. */
+    @SerialName("workspace_role") val workspaceRole: String? = null,
 )
 
 @Serializable

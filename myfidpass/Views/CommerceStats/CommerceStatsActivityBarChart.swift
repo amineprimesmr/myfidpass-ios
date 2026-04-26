@@ -22,7 +22,7 @@ struct CommerceStatsActivityBarChart: View {
             HStack(alignment: .bottom, spacing: 28) {
                 VStack(spacing: 8) {
                     Text(primaryLabel)
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(CommerceStatisticsTheme.statsText(size: 12, weight: .semibold))
                         .foregroundStyle(CommerceStatisticsTheme.secondaryLabel)
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
                         .fill(CommerceStatisticsTheme.positive)
@@ -30,7 +30,7 @@ struct CommerceStatsActivityBarChart: View {
                 }
                 VStack(spacing: 8) {
                     Text(secondaryLabel)
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(CommerceStatisticsTheme.statsText(size: 12, weight: .semibold))
                         .foregroundStyle(CommerceStatisticsTheme.secondaryLabel)
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
                         .fill(CommerceStatisticsTheme.negative.opacity(0.9))
@@ -42,7 +42,7 @@ struct CommerceStatsActivityBarChart: View {
 
             if !axisCaption.isEmpty {
                 Text(axisCaption)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(CommerceStatisticsTheme.statsText(size: 12, weight: .medium))
                     .foregroundStyle(CommerceStatisticsTheme.secondaryLabel)
             }
         }

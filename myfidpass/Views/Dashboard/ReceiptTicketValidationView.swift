@@ -221,7 +221,7 @@ struct ReceiptTicketValidationView: View {
                     .padding(.horizontal, 20)
 
                     Text("Alignez le QR imprimé sur le ticket de caisse")
-                        .font(.system(size: 15, weight: .medium, design: .rounded))
+                        .font(.system(size: 15, weight: .medium, design: .default))
                         .foregroundStyle(.white.opacity(0.82))
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 28)
@@ -250,7 +250,7 @@ struct ReceiptTicketValidationView: View {
                             Image(systemName: showReferenceQR ? "chevron.up" : "qrcode")
                             Text(showReferenceQR ? "Masquer le QR à imprimer" : "Afficher le QR à imprimer sur le ticket")
                         }
-                        .font(.system(size: 15, weight: .semibold, design: .rounded))
+                        .font(.system(size: 15, weight: .semibold, design: .default))
                         .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 14)
@@ -305,10 +305,10 @@ struct ReceiptTicketValidationView: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 Text("Ticket de caisse")
-                    .font(.system(size: 22, weight: .bold, design: .rounded))
+                    .font(.system(size: 22, weight: .bold, design: .default))
                     .foregroundStyle(.white)
                 Text("Montant attendu : \(amountText) €")
-                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .font(.system(size: 14, weight: .semibold, design: .default))
                     .foregroundStyle(.cyan.opacity(0.95))
                 if let exp = session.expiresAt {
                     Text("QR valide jusqu’à \(formatExp(exp))")

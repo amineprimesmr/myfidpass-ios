@@ -8,6 +8,9 @@
 import Foundation
 
 enum EngagementTemporaryVisibility {
+    /// Masquage temporaire global de toute UI « Avis Google » en attente d'autorisation Google.
+    static let hideGoogleReviewsUI = true
+
     static let hideSecondaryReviewNetworks = true
 
     static let hiddenSocialMetricChannelIds: Set<String> = [

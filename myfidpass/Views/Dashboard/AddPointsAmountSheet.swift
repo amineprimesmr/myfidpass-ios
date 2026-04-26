@@ -465,29 +465,29 @@ struct AddPointsAmountSheet: View {
                         VStack(alignment: .leading, spacing: 0) {
                             HStack(alignment: .firstTextBaseline, spacing: 0) {
                                 Text("EUR")
-                                    .font(.system(size: eurLabelSize, weight: .medium, design: .rounded))
+                                    .font(.system(size: eurLabelSize, weight: .medium, design: .default))
                                     .foregroundStyle(topChrome.tertiary)
                                     .tracking(1.2)
                                 Spacer(minLength: 8)
                                 HStack(alignment: .firstTextBaseline, spacing: 2) {
                                     Text(entry.displayInteger)
-                                        .font(.system(size: amountMainSize, weight: .bold, design: .rounded))
+                                        .font(.system(size: amountMainSize, weight: .bold, design: .default))
                                         .foregroundStyle(topChrome.primary)
                                         .contentTransition(.numericText())
                                         .lineLimit(1)
                                         .minimumScaleFactor(0.6)
                                     if entry.hasComma {
                                         Text(",")
-                                            .font(.system(size: amountMainSize, weight: .bold, design: .rounded))
+                                            .font(.system(size: amountMainSize, weight: .bold, design: .default))
                                             .foregroundStyle(topChrome.primary)
                                     }
                                     if !entry.displayFraction.isEmpty {
                                         Text(entry.displayFraction)
-                                            .font(.system(size: amountFracSize, weight: .semibold, design: .rounded))
+                                            .font(.system(size: amountFracSize, weight: .semibold, design: .default))
                                             .foregroundStyle(topChrome.primary.opacity(0.92))
                                     }
                                     Text("€")
-                                        .font(.system(size: amountEuroSuffixSize, weight: .medium, design: .rounded))
+                                        .font(.system(size: amountEuroSuffixSize, weight: .medium, design: .default))
                                         .foregroundStyle(topChrome.secondary)
                                         .padding(.leading, 4)
                                 }
@@ -676,7 +676,7 @@ struct AddPointsAmountSheet: View {
                             .foregroundStyle(topChrome.primary)
                             .frame(width: 44, height: 44)
                     }
-                    .buttonStyle(.glass)
+                    .buttonStyle(.glass(.regular))
                     .buttonBorderShape(.circle)
                     .accessibilityLabel("Annuler")
                 } else {
@@ -699,7 +699,7 @@ struct AddPointsAmountSheet: View {
             }
 
             Text(memberName)
-                .font(.system(size: 21, weight: .semibold, design: .rounded))
+                .font(.system(size: 21, weight: .semibold, design: .default))
                 .foregroundStyle(topChrome.primary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.68)
@@ -715,7 +715,7 @@ struct AddPointsAmountSheet: View {
 
     private var rewardProgressCaptionLabel: some View {
         Text(rewardProgressCaption)
-            .font(.system(size: 15, weight: .medium, design: .rounded))
+            .font(.system(size: 15, weight: .medium, design: .default))
             .foregroundStyle(topChrome.primary)
             .multilineTextAlignment(.leading)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -729,7 +729,7 @@ struct AddPointsAmountSheet: View {
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(topChrome.secondary)
             Text("Solde actuel : \(formatPts(displayedPoints)) pts")
-                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .font(.system(size: 13, weight: .semibold, design: .default))
                 .foregroundStyle(topChrome.secondary)
             Spacer(minLength: 0)
         }
@@ -809,7 +809,7 @@ struct AddPointsAmountSheet: View {
             }
             if !others.isEmpty {
                 Text("Autres récompenses au solde actuel")
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .font(.system(size: 12, weight: .semibold, design: .default))
                     .foregroundStyle(topChrome.tertiary)
                     .padding(.top, 4)
                 ForEach(others, id: \.self) { tier in
@@ -836,11 +836,11 @@ struct AddPointsAmountSheet: View {
                     .foregroundStyle(enabled ? Color(red: 1, green: 0.84, blue: 0.35) : topChrome.tertiary)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
-                        .font(.system(size: 16, weight: .semibold, design: .rounded))
+                        .font(.system(size: 16, weight: .semibold, design: .default))
                         .foregroundStyle(enabled ? topChrome.primary : topChrome.tertiary)
                         .multilineTextAlignment(.leading)
                     Text(subtitle)
-                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                        .font(.system(size: 13, weight: .medium, design: .default))
                         .foregroundStyle(topChrome.secondary)
                 }
                 Spacer(minLength: 0)
@@ -916,7 +916,7 @@ struct AddPointsAmountSheet: View {
                     .fill(AddPointsTheme.keyFill)
                     .shadow(color: .black.opacity(0.04), radius: 2, y: 1)
                 Text("\(n)")
-                    .font(.system(size: 34, weight: .medium, design: .rounded))
+                    .font(.system(size: 34, weight: .medium, design: .default))
                     .foregroundStyle(.black.opacity(0.82))
                     .multilineTextAlignment(.center)
             }
@@ -932,7 +932,7 @@ struct AddPointsAmountSheet: View {
                     .fill(AddPointsTheme.keyFill)
                     .shadow(color: .black.opacity(0.04), radius: 2, y: 1)
                 Text(title)
-                    .font(.system(size: 34, weight: .medium, design: .rounded))
+                    .font(.system(size: 34, weight: .medium, design: .default))
                     .foregroundStyle(.black.opacity(0.75))
                     .multilineTextAlignment(.center)
             }
@@ -978,7 +978,7 @@ struct AddPointsAmountSheet: View {
             commitSubmit()
         } label: {
             Text(title)
-                .font(.system(size: compactDark ? 16 : 17, weight: .semibold, design: .rounded))
+                .font(.system(size: compactDark ? 16 : 17, weight: .semibold, design: .default))
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity)
                 .frame(height: barHeight)

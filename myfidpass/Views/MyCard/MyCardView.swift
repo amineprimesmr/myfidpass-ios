@@ -115,7 +115,13 @@ private struct LocalImagePreviewView: View {
     }
 }
 
+/// Nombre de paliers points **éditables** dans « Récompenses » (ex. 30 € / 60 € / 100 €), hors « Début du jeu ».
+private enum MyCardPointsRewardTiers {
+    static let slotCount = 3
+}
+
 /// État comparé pour savoir si « Enregistrer » doit apparaître (aligné sur ce que `saveTemplate` envoie).
+
 private struct MyCardPersistedSnapshot: Equatable {
     var displayName: String
     var requiredStamps: Int
@@ -200,9 +206,9 @@ struct MyCardView: View {
     @State private var pointsPerEuro: Int = 1
     @State private var pointsPerVisit: Int = 0
     @State private var pointsMinAmountEur: String = ""
-    /// Paliers points (jusqu’à 5), alignés sur le SaaS web.
-    @State private var tierPoints: [String] = Array(repeating: "", count: 5)
-    @State private var tierLabels: [String] = Array(repeating: "", count: 5)
+    /// Paliers points (3, hors ligne « Début du jeu »), alignés sur le SaaS web.
+    @State private var tierPoints: [String] = Array(repeating: "", count: MyCardPointsRewardTiers.slotCount)
+    @State private var tierLabels: [String] = Array(repeating: "", count: MyCardPointsRewardTiers.slotCount)
     @State private var stampRewardLabel: String = ""
     /// Récompense « Début du jeu » (1ʳᵉ tour de roue à l’ouverture de la carte) — persiste localement via `CardPreviewDisplaySnapshot`.
     @State private var startGameRewardLabel: String = ""
@@ -513,8 +519,8 @@ struct MyCardView: View {
     }
 
     private static func normalizeTierStrings(_ arr: [String]) -> [String] {
-        var out = Array(arr.prefix(5))
-        while out.count < 5 { out.append("") }
+        var out = Array(arr.prefix(MyCardPointsRewardTiers.slotCount))
+        while out.count < MyCardPointsRewardTiers.slotCount { out.append("") }
         return out
     }
 
@@ -558,71 +564,75 @@ struct MyCardView: View {
 
     private var previewSection: some View {
         VStack(spacing: AppTheme.Spacing.md) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(AppTheme.Colors.shadow)
-                    .blur(radius: 18)
-                    .offset(y: 6)
-                    .opacity(0.4)
+            GeometryReader { geo in
+                ZStack {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(AppTheme.Colors.shadow)
+                        .blur(radius: 18)
+                        .offset(y: 6)
+                        .opacity(0.4)
 
-                Group {
-                    if programType == "stamps" {
-                        CafeDesArtsCardPreview(
-                            displayName: displayName.isEmpty ? "Ma Carte Fidélité" : displayName,
-                            requiredStamps: Int32(requiredStamps),
-                            stampsCount: Int32(previewStampsCount),
-                            primaryColorHex: primaryHex,
-                            accentColorHex: accentHex,
-                            stripColorHex: nil,
-                            logoURL: logoURL.isEmpty ? nil : logoURL,
-                            stripDisplayMode: stripDisplayMode,
-                            stripText: stripText.isEmpty ? nil : stripText,
-                            stampEmoji: stampEmoji.isEmpty ? nil : stampEmoji,
-                            cardBackgroundImagePath: CardLogoStorage.resolvedDisplayPath(forStoredPath: cardBackgroundImagePath),
-                            cardBackgroundRemoteURL: cardBackgroundRemoteURL,
-                            labelColorHex: labelHex.trimmingCharacters(in: .whitespaces).isEmpty ? nil : labelHex,
-                            headerRightText: CardRewardsHeaderLink.displayText,
-                            memberPreviewText: cardMemberPreviewText,
-                            memberColumnTitle: previewMemberColumnTitle,
-                            stampMidRewardLabel: stampMidRewardLabel,
-                            stampRewardLabel: stampRewardLabel,
-                            restantsCaption: labelRestants.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Restants" : labelRestants.trimmingCharacters(in: .whitespacesAndNewlines),
-                            compact: false,
-                            onEditZoneTap: { handleCardPreviewZoneTap($0) },
-                            fidelityQRPayloadURL: fidelityCardPageURLString,
-                            completionHighlightZones: shouldShowCompletionPills ? cardCompletionPreviewZones : []
-                        )
-                    } else {
-                        WalletCardPreview(
-                            displayName: displayName.isEmpty ? "Ma Carte Fidélité" : displayName,
-                            requiredStamps: Int32(requiredStamps),
-                            stampsCount: Int32(previewPointsCount),
-                            primaryColorHex: primaryHex,
-                            accentColorHex: accentHex,
-                            stripColorHex: nil,
-                            logoURL: logoURL.isEmpty ? nil : logoURL,
-                            stripDisplayMode: stripDisplayMode,
-                            stripText: stripText.isEmpty ? nil : stripText,
-                            stampEmoji: stampEmoji.isEmpty ? nil : stampEmoji,
-                            cardBackgroundImagePath: CardLogoStorage.resolvedDisplayPath(forStoredPath: cardBackgroundImagePath),
-                            cardBackgroundRemoteURL: cardBackgroundRemoteURL,
-                            labelColorHex: labelHex.trimmingCharacters(in: .whitespaces).isEmpty ? nil : labelHex,
-                            headerRightText: CardRewardsHeaderLink.displayText,
-                            memberPreviewText: cardMemberPreviewText,
-                            memberColumnTitle: previewMemberColumnTitle,
-                            compact: false,
-                            onEditZoneTap: { handleCardPreviewZoneTap($0) },
-                            fidelityQRPayloadURL: fidelityCardPageURLString,
-                            completionHighlightZones: shouldShowCompletionPills ? cardCompletionPreviewZones : []
-                        )
+                    Group {
+                        if programType == "stamps" {
+                            CafeDesArtsCardPreview(
+                                displayName: displayName.isEmpty ? "Ma Carte Fidélité" : displayName,
+                                requiredStamps: Int32(requiredStamps),
+                                stampsCount: Int32(previewStampsCount),
+                                primaryColorHex: primaryHex,
+                                accentColorHex: accentHex,
+                                stripColorHex: nil,
+                                logoURL: logoURL.isEmpty ? nil : logoURL,
+                                stripDisplayMode: stripDisplayMode,
+                                stripText: stripText.isEmpty ? nil : stripText,
+                                stampEmoji: stampEmoji.isEmpty ? nil : stampEmoji,
+                                cardBackgroundImagePath: CardLogoStorage.resolvedDisplayPath(forStoredPath: cardBackgroundImagePath),
+                                cardBackgroundRemoteURL: cardBackgroundRemoteURL,
+                                labelColorHex: labelHex.trimmingCharacters(in: .whitespaces).isEmpty ? nil : labelHex,
+                                headerRightText: CardRewardsHeaderLink.displayText,
+                                memberPreviewText: cardMemberPreviewText,
+                                memberColumnTitle: previewMemberColumnTitle,
+                                stampMidRewardLabel: stampMidRewardLabel,
+                                stampRewardLabel: stampRewardLabel,
+                                restantsCaption: labelRestants.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Restants" : labelRestants.trimmingCharacters(in: .whitespacesAndNewlines),
+                                compact: false,
+                                onEditZoneTap: { handleCardPreviewZoneTap($0) },
+                                fidelityQRPayloadURL: fidelityCardPageURLString,
+                                completionHighlightZones: shouldShowCompletionPills ? cardCompletionPreviewZones : []
+                            )
+                        } else {
+                            WalletCardPreview(
+                                displayName: displayName.isEmpty ? "Ma Carte Fidélité" : displayName,
+                                requiredStamps: Int32(requiredStamps),
+                                stampsCount: Int32(previewPointsCount),
+                                primaryColorHex: primaryHex,
+                                accentColorHex: accentHex,
+                                stripColorHex: nil,
+                                logoURL: logoURL.isEmpty ? nil : logoURL,
+                                stripDisplayMode: stripDisplayMode,
+                                stripText: stripText.isEmpty ? nil : stripText,
+                                stampEmoji: stampEmoji.isEmpty ? nil : stampEmoji,
+                                cardBackgroundImagePath: CardLogoStorage.resolvedDisplayPath(forStoredPath: cardBackgroundImagePath),
+                                cardBackgroundRemoteURL: cardBackgroundRemoteURL,
+                                labelColorHex: labelHex.trimmingCharacters(in: .whitespaces).isEmpty ? nil : labelHex,
+                                headerRightText: CardRewardsHeaderLink.displayText,
+                                memberPreviewText: cardMemberPreviewText,
+                                memberColumnTitle: previewMemberColumnTitle,
+                                compact: false,
+                                onEditZoneTap: { handleCardPreviewZoneTap($0) },
+                                fidelityQRPayloadURL: fidelityCardPageURLString,
+                                completionHighlightZones: shouldShowCompletionPills ? cardCompletionPreviewZones : []
+                            )
+                        }
                     }
+                    .padding(.horizontal, AppTheme.Spacing.lg)
+                    .frame(minHeight: previewMinHeight)
                 }
-                .padding(.horizontal, AppTheme.Spacing.lg)
-                .frame(minHeight: previewMinHeight)
+                .frame(width: geo.size.width, height: geo.size.height)
+                .id(
+                    "\(programType)-\(primaryHex)-\(accentHex)-\(labelHex)-\(logoURL)-\(stripDisplayMode)-\(stripText)-\(displayName)-\(requiredStamps)-\(previewStampsCount)-\(previewPointsCount)-\(cardBackgroundImagePath ?? "")-\(cardBackgroundRemoteURL ?? "")-\(cardMemberPreviewText)-\(previewMemberColumnTitle)-\(stampEmoji)-\(stampRewardLabel)-\(stampMidRewardLabel)-\(labelRestants)"
+                )
             }
-            .id(
-                "\(programType)-\(primaryHex)-\(accentHex)-\(labelHex)-\(logoURL)-\(stripDisplayMode)-\(stripText)-\(displayName)-\(requiredStamps)-\(previewStampsCount)-\(previewPointsCount)-\(cardBackgroundImagePath ?? "")-\(cardBackgroundRemoteURL ?? "")-\(cardMemberPreviewText)-\(previewMemberColumnTitle)-\(stampEmoji)-\(stampRewardLabel)-\(stampMidRewardLabel)-\(labelRestants)"
-            )
+            .frame(height: previewMinHeight + 36)
             .padding(.vertical, AppTheme.Spacing.xs)
         }
         .padding(.top, AppTheme.Spacing.md)
@@ -1000,7 +1010,13 @@ struct MyCardView: View {
         case .walletCardBackground:
             await applyCardBackgroundImage(cropped)
         case .squareIcon:
+            break
+        case .stampIcon:
             await applyStampIconJPEGFromCroppedImage(cropped)
+        case .flyerPromoLogo:
+            break
+        case .flyerCustomBackground:
+            break
         }
     }
 
@@ -1072,8 +1088,8 @@ struct MyCardView: View {
         if let lr = s.labelRestants?.trimmingCharacters(in: .whitespacesAndNewlines), !lr.isEmpty {
             labelRestants = lr
         }
-        if let tp = s.tierPoints, tp.count == 5 { tierPoints = tp }
-        if let tl = s.tierLabels, tl.count == 5 { tierLabels = tl }
+        if let tp = s.tierPoints { tierPoints = Self.normalizeTierStrings(tp) }
+        if let tl = s.tierLabels { tierLabels = Self.normalizeTierStrings(tl) }
         let localBG = !(cardBackgroundImagePath ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         if !localBG {
             // Restaurer le fichier local si le snapshot indique qu'il existe sur disque.
@@ -1232,7 +1248,7 @@ struct MyCardView: View {
                 pointsMinAmountEur = settings.pointsMinAmountEur.map { String(format: "%.2f", $0) } ?? ""
                 if let tiers = settings.pointsRewardTiers, !tiers.isEmpty {
                     let sorted = tiers.filter { $0.points > 0 }.sorted { $0.points < $1.points }
-                    for i in 0..<5 {
+                    for i in 0..<MyCardPointsRewardTiers.slotCount {
                         if i < sorted.count {
                             tierPoints[i] = String(sorted[i].points)
                             tierLabels[i] = sorted[i].label.isEmpty ? "Récompense" : sorted[i].label
@@ -1242,8 +1258,8 @@ struct MyCardView: View {
                         }
                     }
                 } else {
-                    tierPoints = Array(repeating: "", count: 5)
-                    tierLabels = Array(repeating: "", count: 5)
+                    tierPoints = Array(repeating: "", count: MyCardPointsRewardTiers.slotCount)
+                    tierLabels = Array(repeating: "", count: MyCardPointsRewardTiers.slotCount)
                 }
                 stampRewardLabel = settings.stampRewardLabel ?? ""
                 let midSaved = settings.stampMidRewardLabel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -1470,7 +1486,7 @@ struct MyCardView: View {
         var rewardTiers: [PointsRewardTierPayload]? = nil
         if programType == "points" {
             var tiers: [PointsRewardTierPayload] = []
-            for i in 0..<5 {
+            for i in 0..<MyCardPointsRewardTiers.slotCount {
                 let ptsStr = tierPoints[i].trimmingCharacters(in: .whitespaces)
                 let lab = tierLabels[i].trimmingCharacters(in: .whitespaces)
                 guard let pts = Int(ptsStr), pts >= 0, !lab.isEmpty else { continue }

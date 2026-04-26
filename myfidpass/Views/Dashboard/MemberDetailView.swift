@@ -237,7 +237,7 @@ struct MemberDetailView: View {
                 .environmentObject(syncService)
                 .environmentObject(dataService)
                 .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
+                .presentationDragIndicator(.hidden)
                 .modifier(LiquidGlassSheetModifier())
         }
         .fullScreenCover(item: $memberPointsAmountFlow) { flow in

@@ -37,15 +37,15 @@ struct CommerceStatsDonutChart: View {
 
             VStack(spacing: 4) {
                 Text(centerTitle)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(CommerceStatisticsTheme.statsText(size: 13, weight: .medium))
                     .foregroundStyle(CommerceStatisticsTheme.secondaryLabel)
                 Text(centerValue)
-                    .font(.system(size: 34, weight: .bold, design: .rounded))
+                    .font(CommerceStatisticsTheme.statisticNumbers(size: 34, weight: .bold))
                     .foregroundStyle(.white)
                     .minimumScaleFactor(0.7)
                     .lineLimit(1)
                 Text(centerCaption)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(CommerceStatisticsTheme.statsText(size: 13, weight: .medium))
                     .foregroundStyle(CommerceStatisticsTheme.secondaryLabel)
             }
             .padding(.horizontal, 28)
