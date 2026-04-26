@@ -1,17 +1,15 @@
 {
   "images" : [
     {
-      "filename" : "spinflyer-1x.png",
+      "filename" : "giftflyer.png",
       "idiom" : "universal",
       "scale" : "1x"
     },
     {
-      "filename" : "spinflyer-2x.png",
       "idiom" : "universal",
       "scale" : "2x"
     },
     {
-      "filename" : "spinflyer-3x.png",
       "idiom" : "universal",
       "scale" : "3x"
     }
