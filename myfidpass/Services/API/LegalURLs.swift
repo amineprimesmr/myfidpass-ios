@@ -29,6 +29,9 @@ enum LegalURLs {
     /// Page web d’abonnement (essai → paiement Stripe). Même origine que la redirection canonique Vercel (www) pour le localStorage WKWebView.
     static let merchantSubscriptionCheckout = URL(string: "https://www.myfidpass.fr/abonnement")!
 
+    /// Page Plan Pro (SPA `/paiement`) — même UI que le site ; utilisée par le paywall iOS (WKWebView).
+    static let merchantSaasProPaymentPage = URL(string: "https://www.myfidpass.fr/paiement")!
+
     /// Payment Link abonnement (fallback) — code **MYFID1EURO** aligné 1er mois à 1 € sur le mensuel. Préférer `/abonnement` (Payment Element + forfait annuel).
     static func merchantStripeSubscriptionPaymentLinkWithPromo(prefilledEmail: String?) -> URL {
         var components = URLComponents(string: "https://buy.stripe.com/7sYcN53Z72N88et4Cr8Zq01")!

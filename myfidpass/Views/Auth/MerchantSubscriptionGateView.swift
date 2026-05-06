@@ -2,10 +2,11 @@
 //  MerchantSubscriptionGateView.swift
 //  myfidpass
 //
-//  Paywall natif RevenueCat (StoreKit) — seul chemin de souscription dans l’app (Stripe retiré de l’UI).
+//  Paywall : page web `/paiement` (plan Pro) ; RevenueCat + réconciliation Stripe côté API.
 //
 
 import SwiftUI
+import UIKit
 
 struct MerchantSubscriptionGateView: View {
     @Environment(\.dismiss) private var dismiss
@@ -30,10 +31,11 @@ struct MerchantSubscriptionGateView: View {
         ZStack(alignment: .bottom) {
             Color.black.ignoresSafeArea()
 
-            CustomMerchantProPaywallView(
+            MerchantSaasPaymentWebView(
                 allowsCloseButton: showsPaywallCloseButton,
                 onCloseRequested: showsPaywallCloseButton ? { finishMerchantSubscriptionGate() } : nil,
-                headerExtraTopPadding: isMandatory ? 4 : 28
+                headerExtraTopPadding: isMandatory ? 4 : 28,
+                closeButtonRevealDelay: showsPaywallCloseButton ? 0 : 5
             )
 
             if isMandatory && !canCloseMandatoryGateDuringTrial {
@@ -64,6 +66,19 @@ struct MerchantSubscriptionGateView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task {
             await revenueCatSubscriptionState.refreshCustomerInfo()
+            await authService.reconcileStripeSubscriptionFromServer(force: true)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
+            Task {
+                await revenueCatSubscriptionState.refreshCustomerInfo()
+                await authService.reconcileStripeSubscriptionFromServer(force: true)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .myfidpassSubscriptionPaymentCompleted)) { _ in
+            Task {
+                await authService.reconcileStripeSubscriptionFromServer(force: true)
+                await revenueCatSubscriptionState.refreshCustomerInfo()
+            }
         }
         .onChange(of: revenueCatSubscriptionState.hasPremiumEntitlement) { _, _ in
             if shouldDismissGateAsSubscribed { finishMerchantSubscriptionGate() }
