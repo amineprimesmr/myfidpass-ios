@@ -9,6 +9,11 @@
 import SwiftUI
 import UIKit
 
+/// Tutoriel d'accueil (overlay) : `true` = désactivé temporairement. Repasser à `false` pour réactiver l'overlay et le bouton « Relancer le tutoriel ».
+enum HomeTutorialTemporaryDisable {
+    static let isOn = true
+}
+
 // MARK: - Modèle item
 
 fileprivate struct OnBoardingItem: Identifiable {
@@ -23,7 +28,6 @@ fileprivate struct OnBoardingItem: Identifiable {
 @Observable
 fileprivate class OnBoardingCoordinator {
     var items: [OnBoardingItem] = []
-    var overlayWindow: UIWindow?
     var isOnBoardingFinished: Bool = false
     /// Snapshot courant affiché dans l'overlay (mis à jour à chaque étape).
     var currentSnapshot: UIImage?
@@ -32,6 +36,21 @@ fileprivate class OnBoardingCoordinator {
 
     var orderedItems: [OnBoardingItem] {
         items.sorted { $0.id < $1.id }
+    }
+}
+
+// MARK: - Coordinator fourni quand l’overlay tutoriel est **désactivé**
+
+/// Si `HomeTutorialTemporaryDisable` saute `OneTimeOnBoarding`, le contenu des onglets reçoit quand
+/// même un `OnBoardingCoordinator` — les modificateurs `.onBoarding()` sur `DashboardView`, etc. lisent
+/// `@Environment(OnBoardingCoordinator.self)` : sans cela, l’app plante au 1ʳᵉ layout.
+struct OnBoardingEnvironmentPlaceholder<Content: View>: View {
+    @ViewBuilder var content: () -> Content
+    @State private var coordinator = OnBoardingCoordinator()
+
+    var body: some View {
+        content()
+            .environment(coordinator)
     }
 }
 
@@ -62,8 +81,18 @@ struct OneTimeOnBoarding<Content: View>: View {
 
     // @State préserve le coordinator entre les re-renders du parent.
     @State private var coordinator = OnBoardingCoordinator()
+    /// Tant que vrai, le contenu sous-jacent (onglets) ne reçoit **aucun** toucher — évite d’agir sur la
+    /// pastille d’essai / paywall / UI située *au-dessus* ou derrière (plus de 2e UIWindow).
+    @State private var tutorialAbsorbsAllTouches = false
     /// Calque plein écran le temps d’enregistrer la géométrie des onglets + 1ʳᵉ capture (évite l’enchaînement d’onglets visible).
     @State private var hidesAppDuringTutorialPreparation = false
+    /// Accueil visible pleinement, avec une entrée douce (offset) avant le tutoriel — pas d’assombrissement.
+    @State private var homePrewarmPresentation = false
+
+    private var homeIntroOffsetY: CGFloat {
+        if isOnBoarded { return 0 }
+        return homePrewarmPresentation ? 0 : 12
+    }
 
     var body: some View {
         ZStack {
@@ -72,14 +101,36 @@ struct OneTimeOnBoarding<Content: View>: View {
                 .transaction { tx in
                     if tabRouter.isTutorialTabPriming { tx.disablesAnimations = true }
                 }
+                .offset(y: homeIntroOffsetY)
+                /// Bloque toute l’app sous le tutoriel (même feuilles / surcouches parentes non maîtrisées 100 %).
+                .allowsHitTesting(!tutorialAbsorbsAllTouches)
+            if tutorialAbsorbsAllTouches, coordinator.currentSnapshot != nil {
+                HomeTutorialOverlayContent()
+                    .environment(coordinator)
+                    .zIndex(20_000)
+            }
             if hidesAppDuringTutorialPreparation {
-                Color(red: 0.05, green: 0.06, blue: 0.1)
+                // Fond système (pas un noir) : on masque le « pilote auto » des onglets, sans ressembler à un plantage.
+                Color(UIColor.systemBackground)
                     .ignoresSafeArea()
                     .allowsHitTesting(true)
+                    .zIndex(20_001)
+            }
+        }
+        .onAppear {
+            if isOnBoarded {
+                homePrewarmPresentation = true
+            } else {
+                withAnimation(MerchantMotion.contentReveal) {
+                    homePrewarmPresentation = true
+                }
             }
         }
         .task {
             if !isOnBoarded {
+                // D’abord l’onglet 0 (Accueil) seul, avec animation — puis **1 s** calme avant
+                // toute capture / cycle d’onglets (évite le flash « bricolage technique »).
+                try? await Task.sleep(for: .seconds(1))
                 await MainActor.run {
                     tabRouter.isTutorialTabPriming = true
                     hidesAppDuringTutorialPreparation = true
@@ -94,7 +145,7 @@ struct OneTimeOnBoarding<Content: View>: View {
                 // 1–2 frames + marge (carte / WebView / images) pour que l’image réelle se peigne.
                 try? await Task.sleep(nanoseconds: 320_000_000)
             }
-            await createWindow()
+            await mountTutorialInAppOverlay()
             await MainActor.run {
                 tabRouter.isTutorialTabPriming = false
             }
@@ -102,65 +153,35 @@ struct OneTimeOnBoarding<Content: View>: View {
         .onChange(of: coordinator.isOnBoardingFinished) { _, newValue in
             if newValue {
                 isOnBoarded = true
+                tutorialAbsorbsAllTouches = false
+                coordinator.currentSnapshot = nil
                 onBoardingFinished()
-                hideWindow()
             }
         }
     }
 
-    private func createWindow() async {
-        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-              !isOnBoarded,
-              coordinator.overlayWindow == nil else { return }
+    /// Tutoriel **dans** la même `UIWindow` : plus de 2e fenêtre (les touchers tombaient sur le paywall / pastille).
+    private func mountTutorialInAppOverlay() async {
+        guard !isOnBoarded else { return }
 
         coordinator.onBeforeStep = onBeforeStep
 
-        if let existing = scene.windows.first(where: { $0.tag == 1009 }) {
-            existing.rootViewController = nil
-            existing.isHidden = false
-            existing.isUserInteractionEnabled = true
-            coordinator.overlayWindow = existing
-        } else {
-            let window = UIWindow(windowScene: scene)
-            window.backgroundColor = .clear
-            window.isHidden = false
-            window.isUserInteractionEnabled = true
-            window.tag = 1009
-            coordinator.overlayWindow = window
-        }
-
-        // Laisse onGeometryChange peupler les items.
         try? await Task.sleep(for: .seconds(0.1))
 
         if coordinator.items.isEmpty {
-            hideWindow()
             return
         }
 
-        // Stabilise le layout de l'étape 0 avant le snapshot initial : données résolues,
-        // animations terminées, onGeometryChange à jour. Sans cet appel, le snapshot peut
-        // être pris alors que la carte est encore en placeholder ou en cours d'animation.
         if let prep = coordinator.onBeforeStep {
             await prep(0)
         }
 
-        guard let snapshot = snapshotScreen() else {
-            hideWindow()
-            return
+        let snapshot = await MainActor.run { tutorialSnapshotMainAppWindow() }
+        guard let snapshot else { return }
+        await MainActor.run {
+            coordinator.currentSnapshot = snapshot
+            tutorialAbsorbsAllTouches = true
         }
-        coordinator.currentSnapshot = snapshot
-
-        let hostController = UIHostingController(
-            rootView: OverlayWindowView().environment(coordinator)
-        )
-        hostController.view.backgroundColor = .clear
-        coordinator.overlayWindow?.rootViewController = hostController
-    }
-
-    private func hideWindow() {
-        coordinator.overlayWindow?.rootViewController = nil
-        coordinator.overlayWindow?.isHidden = true
-        coordinator.overlayWindow?.isUserInteractionEnabled = false
     }
 }
 
@@ -244,50 +265,86 @@ fileprivate struct OnBoardingItemSetter<OnBoardingContent: View>: ViewModifier {
     }
 }
 
-// MARK: - Overlay animé
+// MARK: - Bouton retour (style material — le Suivant utilise `LiquidGlassCapsuleButtonModifier`)
 
-fileprivate struct OverlayWindowView: View {
+fileprivate struct HomeTutorialOverlayBackButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        let pressed = configuration.isPressed
+        return configuration.label
+            .background {
+                ZStack {
+                    Circle().fill(.ultraThinMaterial)
+                    Circle().fill(LiquidGlassNativeTint.darkRegular.opacity(0.88))
+                }
+            }
+            .clipShape(Circle())
+            .shadow(color: .black.opacity(0.35), radius: 4, y: 2)
+            .scaleEffect(pressed ? 0.94 : 1)
+    }
+}
+
+// MARK: - Overlay (même arbre que l’app — plein écran, absorbe les touchers)
+
+fileprivate struct HomeTutorialOverlayContent: View {
     @Environment(OnBoardingCoordinator.self) var coordinator
     @State private var animate: Bool = false
     @State private var currentIndex: Int = 0
     @State private var isTransitioning: Bool = false
+    /// Spinner seulement si l’étape met > ~200 ms (évite un flash inutile sur transitions rapides).
+    @State private var showStepTransitionSpinner: Bool = false
 
     var body: some View {
-        GeometryReader {
-            let safeArea = $0.safeAreaInsets
-            let isHomeButtoniPhone = safeArea.bottom == 0
-            let cornerRadius: CGFloat = isHomeButtoniPhone ? 15 : 35
+        ZStack {
+            Color.black
+                .ignoresSafeArea()
+                .contentShape(Rectangle())
+            GeometryReader { proxy in
+                let safeArea = proxy.safeAreaInsets
+                let isHomeButtoniPhone = safeArea.bottom == 0
+                let cornerRadius: CGFloat = isHomeButtoniPhone ? 15 : 35
 
-            ZStack {
-                Rectangle().fill(.black)
+                ZStack {
+                    Rectangle()
+                        .fill(.black.opacity(0.001))
+                        .contentShape(Rectangle())
 
-                if let snapshot = coordinator.currentSnapshot {
-                    Image(uiImage: snapshot)
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .overlay {
-                            Rectangle()
-                                .fill(.black.opacity(0.5))
-                                .reverseMask(alignment: .topLeading) {
-                                    if !orderedItems.isEmpty, currentIndex < orderedItems.count {
-                                        let item = orderedItems[currentIndex]
-                                        RoundedRectangle(cornerRadius: item.cornerRadius, style: .continuous)
-                                            .frame(width: item.maskLocation.width, height: item.maskLocation.height)
-                                            .offset(x: item.maskLocation.minX, y: item.maskLocation.minY)
-                                    }
+                    if let snapshot = coordinator.currentSnapshot {
+                        // Les boutons doivent être **au-dessus** de l’image (pas en `.background`) sinon
+                        // l’`Image` plein cadre capte les touchers et « Suivant » ne réagit pas.
+                        ZStack(alignment: .bottom) {
+                            Image(uiImage: snapshot)
+                                .resizable()
+                                .aspectRatio(contentMode: .fit)
+                                .overlay {
+                                    Rectangle()
+                                        .fill(.black.opacity(0.5))
+                                        .reverseMask(alignment: .topLeading) {
+                                            if !orderedItems.isEmpty, currentIndex < orderedItems.count {
+                                                let item = orderedItems[currentIndex]
+                                                RoundedRectangle(cornerRadius: item.cornerRadius, style: .continuous)
+                                                    .frame(width: item.maskLocation.width, height: item.maskLocation.height)
+                                                    .offset(x: item.maskLocation.minX, y: item.maskLocation.minY)
+                                            }
+                                        }
+                                        .opacity(animate ? 1 : 0)
                                 }
-                                .opacity(animate ? 1 : 0)
+                                .clipShape(.rect(cornerRadius: animate ? cornerRadius : 0, style: .circular))
+                                .overlay { iPhoneShape(safeArea) }
+                                .scaleEffect(animate ? 0.65 : 1, anchor: .top)
+                                .offset(y: animate ? safeArea.top + 25 : 0)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                .allowsHitTesting(false)
+
+                            bottomView(safeArea)
+                                .zIndex(1_000)
                         }
-                        .clipShape(.rect(cornerRadius: animate ? cornerRadius : 0, style: .circular))
-                        .overlay { iPhoneShape(safeArea) }
-                        .scaleEffect(animate ? 0.65 : 1, anchor: .top)
-                        .offset(y: animate ? safeArea.top + 25 : 0)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .background(alignment: .bottom) { bottomView(safeArea) }
+                    }
                 }
+                .ignoresSafeArea()
             }
-            .ignoresSafeArea()
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
             guard !animate else { return }
             // Ressort « smooth » + image plein écran = saccades sur appareil moins récent.
@@ -328,76 +385,74 @@ fileprivate struct OverlayWindowView: View {
                     }
                 }
             }
-            .frame(height: 70)
-            .frame(maxWidth: 280)
+            .frame(minHeight: 100)
+            .frame(maxWidth: 300)
 
             HStack(spacing: 6) {
                 if currentIndex > 0 {
                     Button {
                         navigateTo(currentIndex - 1)
                     } label: {
-                        Image(systemName: "chevron.left.circle.fill")
-                            .font(.system(size: 38))
-                            .foregroundStyle(.white, .gray.opacity(0.4))
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Circle())
                     }
+                    .buttonStyle(HomeTutorialOverlayBackButtonStyle())
                     .disabled(isTransitioning)
                 }
 
                 Button {
                     if currentIndex == orderedItems.count - 1 {
-                        closeWindow()
+                        completeTutorial()
                     } else {
                         navigateTo(currentIndex + 1)
                     }
                 } label: {
-                    Group {
-                        if isTransitioning {
+                    HStack(spacing: 10) {
+                        Text(currentIndex == orderedItems.count - 1 ? "Terminer" : "Suivant")
+                            .font(.body.weight(.semibold))
+                            .contentTransition(.numericText())
+                        if showStepTransitionSpinner {
                             ProgressView()
                                 .tint(.white)
-                                .scaleEffect(0.8)
-                        } else {
-                            Text(currentIndex == orderedItems.count - 1 ? "Terminer" : "Suivant")
-                                .fontWeight(.semibold)
-                                .contentTransition(.numericText())
+                                .controlSize(.small)
                         }
                     }
-                    .frame(maxWidth: .infinity)
+                    .frame(maxWidth: .infinity, minHeight: 48)
                     .foregroundStyle(.white)
-                    .padding(.vertical, 10)
-                    .background(.blue.gradient, in: .capsule)
+                    .opacity(isTransitioning ? 0.92 : 1)
+                    .padding(.vertical, 12)
+                    .padding(.horizontal, 12)
+                    .contentShape(Capsule())
                 }
+                .modifier(LiquidGlassCapsuleButtonModifier(tint: LiquidGlassNativeTint.darkRegular, controlSize: .regular))
                 .disabled(isTransitioning)
             }
-            .frame(maxWidth: 250)
-            .frame(height: 50)
+            .frame(maxWidth: 300)
             .padding(.leading, currentIndex > 0 ? -45 : 0)
-
-            Button(action: closeWindow) {
-                Text("Passer")
-                    .font(.callout)
-                    .underline()
-            }
-            .foregroundStyle(.gray)
-            .disabled(isTransitioning)
         }
         .padding(.horizontal, 15)
         .padding(.bottom, safeArea.bottom + 10)
     }
 
     /// Navigue vers une étape : appelle onBeforeStep, re-snapshot, puis avance.
+    /// Tout le travail async est **@MainActor** : sinon `drawHierarchy` / fin de transition peuvent partir
+    /// d’un pool d’exécution arbitraire → UIKit plante silencieusement et `isTransitioning` ne repasse jamais à `false`.
     private func navigateTo(_ targetIndex: Int) {
         guard !isTransitioning else { return }
         isTransitioning = true
-        Task {
-            // Callback : navigation onglet, attente animation, etc.
-            if let prep = coordinator.onBeforeStep {
-                await prep(targetIndex)
+        showStepTransitionSpinner = false
+        Task { @MainActor in
+            let spinnerTask = Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(220))
+                guard !Task.isCancelled else { return }
+                if isTransitioning { showStepTransitionSpinner = true }
             }
-            // Nouveau snapshot après que la bonne page est visible.
-            if let newSnap = snapshotScreen() {
-                coordinator.currentSnapshot = newSnap
-            }
-            await MainActor.run {
+            defer {
+                spinnerTask.cancel()
+                showStepTransitionSpinner = false
                 withAnimation(.easeInOut(duration: 0.28)) {
                     if targetIndex < orderedItems.count {
                         currentIndex = targetIndex
@@ -405,10 +460,16 @@ fileprivate struct OverlayWindowView: View {
                 }
                 isTransitioning = false
             }
+            if let prep = coordinator.onBeforeStep {
+                await prep(targetIndex)
+            }
+            if let newSnap = tutorialSnapshotMainAppWindow() {
+                coordinator.currentSnapshot = newSnap
+            }
         }
     }
 
-    private func closeWindow() {
+    private func completeTutorial() {
         withAnimation(.easeInOut(duration: 0.25), completionCriteria: .removed) {
             animate = false
         } completion: {
@@ -419,23 +480,29 @@ fileprivate struct OverlayWindowView: View {
     var orderedItems: [OnBoardingItem] { coordinator.orderedItems }
 }
 
+// MARK: - Capture écran (app principale, hors overlay tutoriel)
+
+/// **Obligatoirement sur le main thread** : `UIGraphicsImageRenderer` / `drawHierarchy` hors MainActor = blocages / échecs silencieux quand on appuie sur « Suivant ».
+@MainActor
+fileprivate func tutorialSnapshotMainAppWindow() -> UIImage? {
+    guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else { return nil }
+    // Exclure la fenêtre toast `PassThroughWindow` (tag 1009) — pas le contenu des onglets.
+    let pool = scene.windows.filter { $0.tag != 1009 && !$0.isHidden }
+    let window: UIWindow? = {
+        let normals = pool.filter { $0.windowLevel == .normal }
+        let candidates = normals.isEmpty ? pool : normals
+        return candidates.max(by: { $0.bounds.width * $0.bounds.height < $1.bounds.width * $1.bounds.height })
+    }()
+    guard let window else { return nil }
+    let renderer = UIGraphicsImageRenderer(size: window.bounds.size)
+    return renderer.image { _ in
+        window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+    }
+}
+
 // MARK: - Extensions utilitaires
 
 extension View {
-    fileprivate func snapshotScreen() -> UIImage? {
-        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else { return nil }
-        // Jamais 1009 (tutoriel). Préférer la fenêtre clé, sinon la plus grande = contenu app.
-        let pool = scene.windows.filter { $0.tag != 1009 && !$0.isHidden }
-        let window: UIWindow? = {
-            if let w = pool.first(where: { $0.isKeyWindow }) { return w }
-            return pool.max(by: { $0.bounds.width * $0.bounds.height < $1.bounds.width * $1.bounds.height })
-        }()
-        guard let window else { return nil }
-        let renderer = UIGraphicsImageRenderer(size: window.bounds.size)
-        return renderer.image { _ in
-            window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
-        }
-    }
 
     @ViewBuilder
     fileprivate func reverseMask<Content: View>(

@@ -7,8 +7,6 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		6747383E2F94DF7300A490E0 /* RevenueCat in Frameworks */ = {isa = PBXBuildFile; productRef = 76FCB1AE2F51B695009FC002 /* RevenueCat */; };
-		6747383F2F94DF7300A490E0 /* RevenueCatUI in Frameworks */ = {isa = PBXBuildFile; productRef = 76FCB1AF2F51B695009FC003 /* RevenueCatUI */; };
 		67473A0B2F94E30E00A490E0 /* StoreKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 67473A0A2F94E30E00A490E0 /* StoreKit.framework */; };
 		677770B52F51B695009FC324 /* HomeScannerActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 677770AD2F51B695009FC324 /* HomeScannerActivityAttributes.swift */; };
 		677770B62F51B695009FC324 /* MyFidpassHomeScanExtension.swift in Sources */ = {isa = PBXBuildFile; fileRef = 677770B22F51B695009FC324 /* MyFidpassHomeScanExtension.swift */; };
@@ -79,8 +77,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				67473A0B2F94E30E00A490E0 /* StoreKit.framework in Frameworks */,
-				6747383F2F94DF7300A490E0 /* RevenueCatUI in Frameworks */,
-				6747383E2F94DF7300A490E0 /* RevenueCat in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -174,8 +170,6 @@
 			);
 			name = myfidpass;
 			packageProductDependencies = (
-				76FCB1AE2F51B695009FC002 /* RevenueCat */,
-				76FCB1AF2F51B695009FC003 /* RevenueCatUI */,
 			);
 			productName = myfidpass;
 			productReference = 676750BB2F51B695009FC324 /* myfidpass.app */;
@@ -250,7 +244,6 @@
 			mainGroup = 676750B22F51B695009FC324;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				76FCB1AD2F51B695009FC001 /* XCRemoteSwiftPackageReference "purchases-ios-spm" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 676750BC2F51B695009FC324 /* Products */;
@@ -494,6 +487,7 @@
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_ENABLE_EXPLICIT_MODULES = YES;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -541,6 +535,7 @@
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_ENABLE_EXPLICIT_MODULES = YES;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -713,30 +708,6 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
-
-/* Begin XCRemoteSwiftPackageReference section */
-		76FCB1AD2F51B695009FC001 /* XCRemoteSwiftPackageReference "purchases-ios-spm" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/RevenueCat/purchases-ios-spm.git";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 5.0.0;
-			};
-		};
-/* End XCRemoteSwiftPackageReference section */
-
-/* Begin XCSwiftPackageProductDependency section */
-		76FCB1AE2F51B695009FC002 /* RevenueCat */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 76FCB1AD2F51B695009FC001 /* XCRemoteSwiftPackageReference "purchases-ios-spm" */;
-			productName = RevenueCat;
-		};
-		76FCB1AF2F51B695009FC003 /* RevenueCatUI */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 76FCB1AD2F51B695009FC001 /* XCRemoteSwiftPackageReference "purchases-ios-spm" */;
-			productName = RevenueCatUI;
-		};
-/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 676750B32F51B695009FC324 /* Project object */;
 }

@@ -41,6 +41,22 @@ enum CommerceStatisticsPreviewMock {
         let newInMonth = 38 + seed * 4 - indexFromNewest * 3
         let active = 210 + seed * 12 - indexFromNewest * 8
 
+        let rewardsBreakdown: [RewardRedeemedBreakdownRowDTO] = [
+            RewardRedeemedBreakdownRowDTO(label: "Boisson offerte", count: 2 + seed / 2),
+            RewardRedeemedBreakdownRowDTO(label: "Dessert au choix", count: 3 + seed / 3),
+            RewardRedeemedBreakdownRowDTO(label: "Récompense tampons", count: 1),
+        ]
+        let socialFollows = SocialFollowsClaimedDTO(
+            instagram: max(0, 7 - indexFromNewest * 1),
+            tiktok: max(0, 4 - indexFromNewest),
+            facebook: max(0, 3 - indexFromNewest),
+            twitter: max(0, 2 - indexFromNewest / 2)
+        )
+        let campaigns: [NotificationCampaignInsightDTO] = indexFromNewest == 0 ? Self.paywallTeaserNotificationCampaigns : []
+        let pointsAvg: Double = 95 + Double(seed) * 2.2
+        let retention: Double = min(78, 52 + Double(seed) * 2.1)
+        let avgVisits: Double = 2.1 + Double(seed) * 0.08
+        let avgBasket: Double = 22.5 + Double(indexFromNewest) * 0.85
         let stats = BusinessStatsResponse(
             period: title,
             periodKey: monthKey,
@@ -52,30 +68,28 @@ enum CommerceStatisticsPreviewMock {
             newMembersInPeriod: max(0, newInMonth),
             inactiveMembers30Days: 88 + indexFromNewest * 5,
             inactiveMembers90Days: 260 + indexFromNewest * 12,
-            pointsAveragePerMember: 95 + Double(seed) * 2.2,
+            pointsAveragePerMember: pointsAvg,
             activeMembersInPeriod: active,
-            retentionPct: min(78, 52 + Double(seed) * 2.1),
+            retentionPct: retention,
             recurrentMembersInPeriod: 42 + seed * 3,
             visitsInPeriod: 620 + indexFromNewest * 40,
-            avgVisitsPerActiveMember: 2.1 + Double(seed) * 0.08,
-            avgBasketEur: 22.5 + Double(indexFromNewest) * 0.85,
+            avgVisitsPerActiveMember: avgVisits,
+            avgBasketEur: avgBasket,
             baselineAvgBasketEur: 20.0,
             rewardsRedeemedCount: 6 + seed,
-            rewardsRedeemedBreakdown: [
-                RewardRedeemedBreakdownRowDTO(label: "Boisson offerte", count: 2 + seed / 2),
-                RewardRedeemedBreakdownRowDTO(label: "Dessert au choix", count: 3 + seed / 3),
-                RewardRedeemedBreakdownRowDTO(label: "Récompense tampons", count: 1),
-            ],
+            rewardsRedeemedBreakdown: rewardsBreakdown,
             pointsRedeemedInPeriod: 720 + indexFromNewest * 55,
             googleReviewsNewInPeriod: max(0, 4 - indexFromNewest / 2),
-            notificationCampaigns: indexFromNewest == 0 ? sampleCampaigns : [],
+            socialFollowsClaimed: socialFollows,
+            notificationCampaigns: campaigns,
             businessName: "Boutique démo"
         )
 
         return CommerceStatisticsPreviewMonthPayload(stats: stats, evolution: evolution)
     }
 
-    private static var sampleCampaigns: [NotificationCampaignInsightDTO] {
+    /// Campagnes factices (aperçu impact + teaser avant abonnement payant).
+    static let paywallTeaserNotificationCampaigns: [NotificationCampaignInsightDTO] = {
         [
             NotificationCampaignInsightDTO(
                 batchId: "demo-batch-1",
@@ -100,5 +114,5 @@ enum CommerceStatisticsPreviewMock {
                 message: "−10 % sur les pâtisseries aujourd’hui après 17 h."
             ),
         ]
-    }
+    }()
 }

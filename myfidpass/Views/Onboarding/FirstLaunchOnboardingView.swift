@@ -85,22 +85,101 @@ enum FirstLaunchOnboarding {
             "myfidpass.ob.placeDescription",
             "myfidpass.ob.relaxPlaceRequirement",
             "myfidpass.ob.establishment",
+            "myfidpass.ob.establishments",
             "myfidpass.ob.loyaltyStyle",
             "myfidpass.ob.priorities",
             "myfidpass.ob.teamSize",
+            signupCommerceDraftBackupKey,
         ].forEach { d.removeObject(forKey: $0) }
+        MerchantLinkedPlaceCache.clear()
+    }
+
+    /// Copie JSON de secours du commerce (survit aux pertes partielles de `myfidpass.ob.*` avant inscription).
+    private static let signupCommerceDraftBackupKey = "myfidpass.ob.signupCommerceDraftBackup.v1"
+
+    /// Compte existant : pas de lieu Google requis pour se connecter (OAuth / Apple).
+    static func markRelaxPlaceRequirementForExistingAccountFlow() {
+        UserDefaults.standard.set(true, forKey: "myfidpass.ob.relaxPlaceRequirement")
+    }
+
+    static func persistSignupCommerceDraftBackup(placeId: String, establishmentName: String) {
+        let pid = placeId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = establishmentName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !pid.isEmpty, !name.isEmpty else {
+            clearSignupCommerceDraftBackup()
+            return
+        }
+        let payload: [String: String] = ["place_id": pid, "establishment_name": name]
+        guard let data = try? JSONSerialization.data(withJSONObject: payload),
+              let raw = String(data: data, encoding: .utf8) else { return }
+        UserDefaults.standard.set(raw, forKey: signupCommerceDraftBackupKey)
+    }
+
+    static func clearSignupCommerceDraftBackup() {
+        UserDefaults.standard.removeObject(forKey: signupCommerceDraftBackupKey)
+    }
+
+    private static func readSignupCommerceDraftBackup() -> (placeId: String?, name: String?) {
+        guard let raw = UserDefaults.standard.string(forKey: signupCommerceDraftBackupKey)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty,
+              let data = raw.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return (nil, nil) }
+        let pid = (obj["place_id"] as? String ?? obj["placeId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = (obj["establishment_name"] as? String ?? obj["establishmentName"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let p = pid.flatMap { $0.isEmpty ? nil : $0 }
+        let n = name.flatMap { $0.isEmpty ? nil : $0 }
+        return (p, n)
+    }
+
+    /// Restaure `myfidpass.ob.placeId` / `placeDescription` depuis le cache lieu ou la sauvegarde JSON si les clés principales sont vides.
+    static func rehydratePendingEstablishmentFromAllSourcesIfNeeded() {
+        if hasCompletePendingEstablishmentForRegistration() { return }
+        let cache = MerchantLinkedPlaceCache.read()
+        if let pid = cache.placeId?.trimmingCharacters(in: .whitespacesAndNewlines), !pid.isEmpty {
+            let desc = cache.description?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !desc.isEmpty {
+                applyRehydratedPlaceToUserDefaults(placeId: pid, establishmentName: desc)
+                return
+            }
+        }
+        let backup = readSignupCommerceDraftBackup()
+        if let pid = backup.placeId, let name = backup.name, !pid.isEmpty, !name.isEmpty {
+            applyRehydratedPlaceToUserDefaults(placeId: pid, establishmentName: name)
+        }
+    }
+
+    private static func applyRehydratedPlaceToUserDefaults(placeId: String, establishmentName: String) {
+        let d = UserDefaults.standard
+        d.set(placeId, forKey: "myfidpass.ob.placeId")
+        d.set(establishmentName, forKey: "myfidpass.ob.placeDescription")
+        MerchantLinkedPlaceCache.save(placeId: placeId, description: establishmentName)
+    }
+
+    /// Phase « commerce » terminée mais aucun lieu retenu (ni mode compte existant) : retour à l’étape « nom du commerce ».
+    static func shouldRewindToMerchantPremisesSelectionAfterRehydration() -> Bool {
+        guard hasCompleted else { return false }
+        if hasCompletePendingEstablishmentForRegistration() { return false }
+        if readPendingEstablishment().relax { return false }
+        return true
+    }
+
+    /// Retour à la première étape (sélection commerce) et purge des brouillons incohérents.
+    static func rewindToMerchantPremisesSelectionForFreshCommercePick() {
+        UserDefaults.standard.set(phaseNeeds, forKey: merchantPremisesPhaseKey)
+        clearPendingEstablishmentFromOnboarding()
         MerchantLinkedPlaceCache.clear()
     }
 
     /// Lieu saisi pendant l’onboarding — à effacer une fois le compte créé (ne pas réappliquer au prochain utilisateur).
     static func clearPendingEstablishmentFromOnboarding() {
         let d = UserDefaults.standard
-        ["myfidpass.ob.placeId", "myfidpass.ob.placeDescription", "myfidpass.ob.relaxPlaceRequirement"].forEach {
+        ["myfidpass.ob.placeId", "myfidpass.ob.placeDescription", "myfidpass.ob.relaxPlaceRequirement", "myfidpass.ob.establishments"].forEach {
             d.removeObject(forKey: $0)
         }
+        clearSignupCommerceDraftBackup()
     }
 
-    /// Source de vérité tant que l’inscription n’a pas réussi (évite les ratés si @State LoginView n’a pas fusionné).
+    /// Source de vérité tant que l’inscription n’a pas réussi (évite les ratés si l’UI onboarding perd son état local).
     static func readPendingEstablishment() -> (placeId: String?, description: String?, relax: Bool) {
         let d = UserDefaults.standard
         let rawId = d.string(forKey: "myfidpass.ob.placeId")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -108,6 +187,23 @@ enum FirstLaunchOnboarding {
         let desc = d.string(forKey: "myfidpass.ob.placeDescription")
         let relax = d.bool(forKey: "myfidpass.ob.relaxPlaceRequirement")
         return (pid, desc, relax)
+    }
+
+    static func readPendingEstablishments() -> [(placeId: String, description: String)] {
+        let d = UserDefaults.standard
+        guard let raw = d.string(forKey: "myfidpass.ob.establishments"), !raw.isEmpty,
+              let data = raw.data(using: .utf8) else { return [] }
+        struct PendingEstablishment: Decodable {
+            let placeId: String
+            let description: String
+        }
+        guard let decoded = try? JSONDecoder().decode([PendingEstablishment].self, from: data) else { return [] }
+        return decoded.compactMap { item in
+            let pid = item.placeId.trimmingCharacters(in: .whitespacesAndNewlines)
+            let desc = item.description.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !pid.isEmpty, !desc.isEmpty else { return nil }
+            return (pid, desc)
+        }
     }
 
     /// Lieu + nom d’établissement requis pour une **nouvelle** inscription (même règle que l’API).
@@ -121,6 +217,7 @@ enum FirstLaunchOnboarding {
 
 struct FirstLaunchOnboardingView: View {
     var onComplete: () -> Void
+    var onAlreadyHaveAccount: (() -> Void)? = nil
 
     var body: some View {
         MyfidpassMerchantOnboardingRootView(
@@ -129,8 +226,13 @@ struct FirstLaunchOnboardingView: View {
                 onComplete()
             },
             onAlreadyHaveAccount: {
+                FirstLaunchOnboarding.markRelaxPlaceRequirementForExistingAccountFlow()
                 FirstLaunchOnboarding.hasCompleted = true
-                onComplete()
+                if let onAlreadyHaveAccount {
+                    onAlreadyHaveAccount()
+                } else {
+                    onComplete()
+                }
             }
         )
         .ignoresSafeArea()

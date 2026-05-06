@@ -70,9 +70,6 @@ struct GoogleReviewsCommerceDashboardView: View {
         .task(id: placeIdTrimmed) {
             await loadMetrics(autoRefreshPlaces: true)
         }
-        .onReceive(NotificationCenter.default.publisher(for: .myfidpassRemoteSyncDidMerge)) { _ in
-            Task { await loadMetrics(autoRefreshPlaces: true) }
-        }
         .onReceive(NotificationCenter.default.publisher(for: .myfidpassEngagementOAuthDidComplete)) { _ in
             Task { await loadMetrics(autoRefreshPlaces: false) }
         }
@@ -324,11 +321,74 @@ struct GoogleReviewsCommerceDashboardView: View {
                     .foregroundStyle(AppTheme.Colors.textSecondary)
             }
 
+            // Aperçu des derniers avis (Places API ou Google Business Profile OAuth)
+            if let samples = ch.reviewsSample, !samples.isEmpty {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        Text("Derniers avis")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(AppTheme.Colors.textPrimary)
+                        Spacer()
+                        if ch.oauthConnected == true {
+                            Label("Google Business", systemImage: "checkmark.shield.fill")
+                                .font(.caption2.weight(.medium))
+                                .foregroundStyle(AppTheme.Colors.success)
+                        }
+                    }
+                    ForEach(Array(samples.prefix(3))) { item in
+                        reviewSampleCard(item: item)
+                    }
+                    if samples.count > 3 {
+                        Text("+ \(samples.count - 3) autre\(samples.count - 3 > 1 ? "s" : "") avis dans la section Google Business")
+                            .font(.caption2)
+                            .foregroundStyle(AppTheme.Colors.textSecondary)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                    }
+                }
+            }
+
             Text("Données actualisées automatiquement — aucune action requise.")
                 .font(.caption2)
                 .foregroundStyle(AppTheme.Colors.textSecondary.opacity(0.9))
         }
         .padding(.vertical, 4)
+    }
+
+    @ViewBuilder
+    private func reviewSampleCard(item: GoogleReviewSampleItem) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline) {
+                let name = item.author?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                Text(name.isEmpty ? "Client Google" : name)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(AppTheme.Colors.textPrimary)
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                if let r = item.rating {
+                    Text(String(format: "%.1f / 5", r))
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(AppTheme.Colors.textSecondary)
+                }
+            }
+            if let body = item.text?.trimmingCharacters(in: .whitespacesAndNewlines), !body.isEmpty {
+                Text(body)
+                    .font(AppTheme.Fonts.caption())
+                    .foregroundStyle(AppTheme.Colors.textSecondary)
+                    .lineLimit(3)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(AppTheme.Colors.cardBackground.opacity(0.95))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(AppTheme.Colors.textSecondary.opacity(0.08), lineWidth: 1)
+        )
     }
 
     private func averageMonthlyReviewsHint(bars: [GoogleReviewHistoryBar]) -> String? {

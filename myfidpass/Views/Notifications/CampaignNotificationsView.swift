@@ -11,6 +11,7 @@ import UIKit
 import CoreData
 import Foundation
 import MapKit
+import CoreLocation
 
 // MARK: - Catalogue (aligné backend `campaign-automation-cron.js` — segments produit simplifiés)
 
@@ -27,6 +28,16 @@ private struct CampaignFamilySpec: Identifiable {
     let title: String
     let icon: String
     let rules: [CampaignRuleSpec]
+}
+
+private enum NotificationsTopRoundedPanel {
+    static let shape = UnevenRoundedRectangle(
+        topLeadingRadius: 24,
+        bottomLeadingRadius: 0,
+        bottomTrailingRadius: 0,
+        topTrailingRadius: 24,
+        style: .continuous
+    )
 }
 
 // MARK: - Aide Apple Wallet (écran verrouillé vs message commerçant)
@@ -119,7 +130,7 @@ private let campaignFamilies: [CampaignFamilySpec] = [
         icon: "arrow.counterclockwise.circle",
         rules: [
             CampaignRuleSpec(
-                id: "inactive_14",
+                id: "inactive14",
                 title: "Client inactif +14 jours",
                 subtitle: "Aucune visite depuis 2 semaines",
                 segmentKey: "inactive14"
@@ -132,7 +143,7 @@ private let campaignFamilies: [CampaignFamilySpec] = [
         icon: "gift.fill",
         rules: [
             CampaignRuleSpec(
-                id: "birthday_today",
+                id: "birthdayToday",
                 title: "Anniversaire du jour",
                 subtitle: "Profil complété avec date de naissance (téléphone + ville)",
                 segmentKey: "birthdayToday"
@@ -143,13 +154,21 @@ private let campaignFamilies: [CampaignFamilySpec] = [
         id: "local",
         title: "Local & Wallet",
         icon: "location.circle",
-        rules: []
+        rules: [
+            CampaignRuleSpec(
+                id: "locationEntry",
+                title: "Entrée dans le périmètre",
+                subtitle: "Notification quand le client entre dans la zone Wallet",
+                segmentKey: nil
+            ),
+        ]
     ),
 ]
 
 private let defaultRuleMessages: [String: String] = [
-    "inactive_14": "Ça fait un moment... Revenez nous voir aujourd'hui et profitez de -10 %.",
-    "birthday_today": "Joyeux anniversaire ! Profitez de -20 % en commandant aujourd'hui.",
+    "inactive14": "Ça fait un moment... Revenez nous voir aujourd'hui et profitez de -10 %.",
+    "birthdayToday": "Joyeux anniversaire ! Profitez de -20 % en commandant aujourd'hui.",
+    "locationEntry": "Vous êtes à proximité de notre commerce. Passez nous voir, votre carte Wallet est prête.",
 ]
 
 /// Message suggéré pour relances inactifs (événement « Inactif depuis X jours ») — le commerçant peut l’ajuster.
@@ -161,9 +180,19 @@ private func mergedAutomation(from api: CampaignAutomationConfigDTO?) -> Campaig
     for family in campaignFamilies {
         for r in family.rules where !r.id.hasPrefix("_info") {
             let defMsg = defaultRuleMessages[r.id] ?? ""
-            let existing = api?.rules?[r.id]
+            let existing: CampaignAutomationRuleDTO? = {
+                if let exact = api?.rules?[r.id] { return exact }
+                switch r.id {
+                case "inactive14":
+                    return api?.rules?["inactive_14"]
+                case "birthdayToday":
+                    return api?.rules?["birthday_today"]
+                default:
+                    return nil
+                }
+            }()
             rules[r.id] = CampaignAutomationRuleDTO(
-                enabled: existing?.enabled ?? false,
+                enabled: true,
                 message: (existing?.message?.isEmpty == false ? existing?.message : defMsg) ?? defMsg,
                 segment: existing?.segment,
                 title: existing?.title
@@ -175,7 +204,9 @@ private func mergedAutomation(from api: CampaignAutomationConfigDTO?) -> Campaig
             if k.hasPrefix("custom_") || k.hasPrefix("event_") {
                 rules[k] = v
             } else if rules[k] == nil {
-                rules[k] = v
+                var copy = v
+                if copy.enabled != true { copy.enabled = true }
+                rules[k] = copy
             }
         }
     }
@@ -183,11 +214,76 @@ private func mergedAutomation(from api: CampaignAutomationConfigDTO?) -> Campaig
     return CampaignAutomationConfigDTO(version: api?.version ?? 1, globalCooldownDays: min(90, max(1, cd)), rules: rules)
 }
 
+// MARK: - Barre de progression envoi (bandeau tout en haut — `progress` suit les étapes réelles de `send()`)
+
+/// Remplissage 0…1 + halo blanc très vif ; léger pulsage (TimelineView) pendant l’attente réseau / synchro.
+private struct NotificationSendTopProgressStrip: View {
+    var progress: CGFloat
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 24.0)) { timeline in
+            let t = timeline.date.timeIntervalSinceReferenceDate
+            let breathe = 0.62 + 0.38 * (0.5 + 0.5 * sin(t * 1.15))
+            GeometryReader { geo in
+                let w = max(geo.size.width, 1)
+                let p = max(0, min(1, progress))
+                let fillW = max(0, p * w)
+
+                ZStack(alignment: .leading) {
+                    Capsule(style: .continuous)
+                        .fill(Color.white.opacity(0.22 + 0.12 * breathe))
+                        .frame(height: 6)
+
+                    if fillW > 0.5 {
+                        Capsule(style: .continuous)
+                            .fill(Color.white.opacity(0.55 * breathe))
+                            .frame(width: fillW + 14, height: 12)
+                            .blur(radius: 10)
+                            .offset(x: -7)
+
+                        Capsule(style: .continuous)
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        Color.white.opacity(0.97),
+                                        Color.white,
+                                        Color.white.opacity(0.98),
+                                    ],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                            )
+                            .frame(width: fillW, height: 6)
+                            .shadow(color: Color.white.opacity(0.95), radius: 12, x: 0, y: 0)
+                            .shadow(color: Color.white.opacity(0.55), radius: 22, x: 0, y: 0)
+
+                        if fillW > 18 {
+                            Capsule(style: .continuous)
+                                .fill(Color.white)
+                                .frame(width: min(16, fillW * 0.08), height: 7)
+                                .blur(radius: 2.5)
+                                .offset(x: fillW - 10)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                .compositingGroup()
+            }
+        }
+        .frame(height: 18)
+        .accessibilityLabel("Progression d’envoi de la notification")
+        .accessibilityValue("\(Int((max(0, min(1, progress))) * 100)) pour cent")
+        .accessibilityAddTraits(.updatesFrequently)
+    }
+}
+
 // MARK: - Vue principale
 
 struct CampaignNotificationsView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @EnvironmentObject private var syncService: SyncService
+    @EnvironmentObject private var tabRouter: MainTabRouter
+    @EnvironmentObject private var authService: AuthService
     @StateObject private var dataService: DataService
 
     @State private var title = ""
@@ -199,38 +295,64 @@ struct CampaignNotificationsView: View {
     @State private var message: String?
 
     @State private var isLoadingData = false
+    @State private var isLoadingCampaignDataInFlight = false
+    @State private var lastCampaignDataLoadAt: Date?
     @State private var loadError: String?
     @State private var isSending = false
+    /// 0…1 : avancement réel des étapes dans `send()` (barre blanche en tête de page).
+    @State private var notificationSendProgress: CGFloat = 0
     @State private var isNotificationSendInFlight = false
+    /// Nombre de destinataires du dernier envoi réussi — affiché brièvement dans le bouton avant de vider le champ.
+    @State private var sendSuccessCount: Int? = nil
+    /// Après envoi manuel, garder le champ vide même si le serveur renvoie encore l'ancien message.
+    @State private var keepManualMessageFieldClearedAfterSend = false
     @State private var isApplyingRemoteSettings = false
     @State private var bannerTextsAutoSaveTask: Task<Void, Never>?
     @State private var campaignAutomationSaveTask: Task<Void, Never>?
+    /// Timestamp local pour éviter les rechargements serveur pendant une édition automatique.
+    @State private var lastAutomationLocalEditAt: Date?
     /// Message **périmètre / géolocalisation** (`location_relevant_text`) — distinct du message **manuel** (`bodyText`).
     @State private var perimeterRelevantMessageText = ""
     @State private var perimeterRelevantTextSaveTask: Task<Void, Never>?
+    /// Empêche les reload distants d'écraser la saisie locale tant qu'elle n'est pas persistée.
+    @State private var isPerimeterRelevantTextDirty = false
     @State private var notificationIconPhotoItem: PhotosPickerItem?
     @State private var notificationIconCropPayload: ImageCropPayload?
     @State private var isUploadingNotificationIcon = false
     /// Même URL `…/notification-icon` après upload : recréer les vues image + appliquer le nouveau `?v=`.
     @State private var notificationIconReloadNonce = 0
-    @State private var editingRuleId: String?
-    @FocusState private var notificationEditorFocus: CampaignNotificationEditorField?
+    /// Une seule feuille à la fois (sinon iOS : « only presenting a single sheet is supported »).
+    private enum AuxiliarySheet: Identifiable, Equatable {
+        case ruleEditor(String)
+        case customAutomation
+        case eventAutomation
+
+        var id: String {
+            switch self {
+            case .ruleEditor(let rid): return "rule:\(rid)"
+            case .customAutomation: return "custom"
+            case .eventAutomation: return "event"
+            }
+        }
+    }
+
+    @State private var auxiliarySheet: AuxiliarySheet?
+    /// Même schéma que le popup « panier repère » sur la page Commerce (fond + carte centrée).
+    @State private var notificationLogoPopupPresented = false
+    @State private var notificationIconNudgeTask: Task<Void, Never>?
     @State private var showPerimeterMapSheet = false
-    /// Caméra 3D (pitch + distance) pour la carte du carrousel « périmètre » — alignée sur `PerimeterMapView`.
-    @State private var localMapCameraPosition: MapCameraPosition = .camera(
-        MapCamera(
-            centerCoordinate: CLLocationCoordinate2D(latitude: 46.5, longitude: 2.5),
-            distance: 2_800_000,
-            heading: 0,
-            pitch: 48
-        )
-    )
-    @State private var showCustomAutomationSheet = false
     @State private var customRuleBeingEdited: String?
     @State private var customDraftTitle = ""
     @State private var customDraftSegment = ""
     @State private var customDraftMessage = ""
     @State private var customRulePendingDelete: String?
+
+    /// Envoi manuel de campagne : même déblocage que les stats détaillées (Stripe qualifiant ou admin).
+    private var campaignManualSendUnlocked: Bool {
+        if authService.isPlatformAdmin { return true }
+        if authService.hasPaidStripeSubscription { return true }
+        return false
+    }
 
     // MARK: - Event-based custom automations (no segment)
     @State private var eventAutomationsRuleBeingEdited: String?
@@ -246,12 +368,13 @@ struct CampaignNotificationsView: View {
     @State private var eventDraftAIInstruction: String = ""
     @State private var isEventDraftAIParsing = false
     @State private var eventRulePendingDelete: String?
-    @State private var showEventAutomationSheet = false
-    @State private var selectedAutomationDetail: AutomationDetailTarget?
-    /// Page du carrousel « Notifs automatiques » (géolocalisation + inactifs).
+    /// Page du carrousel « Notifications automatiques » (géolocalisation + inactifs).
     @State private var automationCarouselPage: Int = 0
     /// Confirmation **uniquement** avant de désactiver tout un bloc d’automatisations.
     @State private var familyAutomationDisableConfirm: FamilyAutomationDisableConfirm?
+    @State private var lastCarouselHapticPage: Int = 0
+    @State private var lastCampaignDataSlug: String?
+    @State private var scheduledCampaignDataReloadTask: Task<Void, Never>?
 
     init(context: NSManagedObjectContext) {
         _dataService = StateObject(wrappedValue: DataService(context: context))
@@ -320,13 +443,6 @@ struct CampaignNotificationsView: View {
         return t.isEmpty ? bannerFieldPromptFallback : t
     }
 
-    private var lockScreenTimeString: String {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "fr_FR")
-        f.dateFormat = "HH:mm"
-        return f.string(from: Date())
-    }
-
     private func resolveSlugForAPI() -> String? {
         if let s = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty {
             return s
@@ -335,6 +451,18 @@ struct CampaignNotificationsView: View {
             return s
         }
         return nil
+    }
+
+    private var activeSlugForViewChange: String {
+        resolveSlugForAPI() ?? ""
+    }
+
+    /// Réserve verticale sous le chrome noir (barre titre + bandeau d’envoi éventuel) pour ne pas recouvrir le panneau blanc.
+    private var campaignNotificationsScrollTopInset: CGFloat {
+        let baseHeaderChrome: CGFloat = DashboardHomeMinimalTopBarLayout.scrollContentTopInset
+        // `NotificationSendTopProgressStrip` : frame 18 + paddings top 4 / bottom 6.
+        let sendStripBlock: CGFloat = isSending ? 28 : 0
+        return baseHeaderChrome + sendStripBlock
     }
 
     /// Segments manuels (envoi immédiat) — clés API (`CAMPAIGN_SEGMENT_KEYS` côté serveur).
@@ -360,99 +488,184 @@ struct CampaignNotificationsView: View {
     private var campaignNotificationsScrollStack: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: AppTheme.Spacing.lg) {
-                headerBlock
                 previewSection
-                    .onBoarding(3, cornerRadius: 20) {
-                        VStack(spacing: 6) {
-                            Text("Notifications manuelles")
-                                .font(.headline)
-                            Text("Rédigez un message et appuyez sur « Envoyer » pour notifier vos clients directement sur leur Wallet.")
-                                .font(.caption)
-                                .multilineTextAlignment(.center)
-                        }
-                    }
+                    .padding(.top, 14)
                 automationsContent
+                    .padding(.horizontal, AppTheme.Spacing.md)
             }
-            .padding(.horizontal, AppTheme.Spacing.md)
             .padding(.bottom, 100)
             .contentShape(Rectangle())
             .onTapGesture {
-                notificationEditorFocus = nil
+                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
             }
         }
     }
 
     private var campaignNotificationsWithLifecycle: some View {
-        campaignNotificationsScrollStack
-            .scrollDismissesKeyboard(.interactively)
-            .background(AppTheme.Colors.background)
-            .toolbar(.hidden, for: .navigationBar)
-            .task {
-                await loadCampaignData()
-            }
-            .onChange(of: syncService.lastSyncDate) { _, _ in
-                Task { await loadCampaignData() }
-            }
-            .refreshable {
-                await loadCampaignData()
-            }
-            .alert("Info", isPresented: .init(get: { message != nil }, set: { if !$0 { message = nil } })) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                if let message { Text(message) }
-            }
-            .onChange(of: notificationIconPhotoItem) { _, item in
-                guard let item else { return }
-                Task { await prepareNotificationIconCrop(from: item) }
-            }
-            .fullScreenCover(item: $notificationIconCropPayload) { payload in
-                let spec = payload.spec
-                ImageCropEditorView(
-                    spec: spec,
-                    sourceImage: payload.image,
-                    onCancel: { notificationIconCropPayload = nil },
-                    onComplete: { cropped in
-                        notificationIconCropPayload = nil
-                        Task { await uploadCroppedNotificationIcon(cropped) }
-                    }
-                )
-            }
-            .onChange(of: title) { _, _ in
-                guard !isApplyingRemoteSettings, !isNotificationSendInFlight else { return }
-                scheduleBannerTextsAutoSave()
-            }
-            .onChange(of: bodyText) { _, _ in
-                guard !isApplyingRemoteSettings, !isNotificationSendInFlight else { return }
-                scheduleBannerTextsAutoSave()
-            }
-            .onDisappear {
-                cancelPendingCampaignNotificationSaves()
-                cancelPerimeterRelevantTextSaveTask()
-                Task {
-                    await flushBannerTextsAutoSave()
-                    await flushCampaignAutomationSave()
-                    await flushPerimeterRelevantTextSave()
+        ZStack(alignment: .top) {
+            Color.black
+                .ignoresSafeArea(edges: .top)
+
+            campaignNotificationsScrollStack
+                .background(AppTheme.Colors.background)
+                .clipShape(NotificationsTopRoundedPanel.shape)
+                .padding(.top, campaignNotificationsScrollTopInset)
+                .ignoresSafeArea(edges: .bottom)
+                .scrollDismissesKeyboard(.interactively)
+
+            VStack(spacing: 0) {
+                if isSending {
+                    NotificationSendTopProgressStrip(progress: notificationSendProgress)
+                        .padding(.horizontal, 14)
+                        .padding(.top, 4)
+                        .padding(.bottom, 6)
+                        .frame(maxWidth: .infinity)
+                        .background(Color.black)
+                        .ignoresSafeArea(edges: .top)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                        .allowsHitTesting(false)
                 }
+                headerBlock
+                Color.clear
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .allowsHitTesting(false)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+
+            if notificationLogoPopupPresented {
+                Color.black.opacity(0.22)
+                    .ignoresSafeArea()
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        withAnimation(.spring(response: 0.34, dampingFraction: 0.9)) {
+                            notificationLogoPopupPresented = false
+                        }
+                        scheduleNotificationIconNudgeIfNeeded()
+                    }
+                    .zIndex(28)
+
+                NotificationManualLogoCommercePopupCard(
+                    logoURL: notificationPreviewIconURLForView,
+                    isUploadingNotificationIcon: isUploadingNotificationIcon,
+                    notificationIconPhotoItem: $notificationIconPhotoItem
+                )
+                .frame(maxWidth: 430)
+                .padding(.horizontal, 18)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                .transition(.scale(scale: 0.97).combined(with: .opacity))
+                .zIndex(29)
+            }
+        }
+        .animation(.spring(response: 0.34, dampingFraction: 0.9), value: notificationLogoPopupPresented)
+        .animation(.easeInOut(duration: 0.28), value: isSending)
+        .toolbar(.hidden, for: .navigationBar)
+        .onAppear {
+            scheduleNotificationIconNudgeIfNeeded()
+        }
+        .onChange(of: auxiliarySheet) { _, newVal in
+            if newVal != nil {
+                notificationLogoPopupPresented = false
+                return
+            }
+            if !hasCustomNotificationIconFromSettings {
+                scheduleNotificationIconNudgeIfNeeded()
+            }
+        }
+        .onChange(of: notificationLogoPopupPresented) { _, isOpen in
+            if !isOpen, !hasCustomNotificationIconFromSettings {
+                scheduleNotificationIconNudgeIfNeeded()
+            }
+        }
+        .onChange(of: hasCustomNotificationIconFromSettings) { _, hasIcon in
+            if hasIcon {
+                cancelNotificationIconNudge()
+                notificationLogoPopupPresented = false
+            } else {
+                scheduleNotificationIconNudgeIfNeeded()
+            }
+        }
+        .task {
+            await Task.yield()
+            await loadCampaignData()
+        }
+        .onChange(of: activeSlugForViewChange) { _, _ in
+            if let slug = resolveSlugForAPI(),
+               let cached = ScanFlowSettingsCache.cached(for: slug) {
+                CampaignNotificationImageCache.applyPreviewTimestamps(from: cached, slug: slug)
+                dashboardSettings = cached
+                prewarmNotificationIconIfPossible(slug: slug, settings: cached)
+            } else {
+                dashboardSettings = nil
+            }
+            segments = nil
+            notificationIconReloadNonce &+= 1
+            scheduleCampaignDataReload(force: true, debounceNs: 0)
+            scheduleNotificationIconNudgeIfNeeded()
+        }
+        .onChange(of: syncService.lastSyncDate) { _, _ in
+            scheduleCampaignDataReload(force: false, debounceNs: 220_000_000)
+        }
+        .refreshable {
+            await loadCampaignData()
+        }
+        .alert("Info", isPresented: .init(get: { message != nil }, set: { if !$0 { message = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            if let message { Text(message) }
+        }
+        .onChange(of: notificationIconPhotoItem) { _, item in
+            guard let item else { return }
+            Task { await prepareNotificationIconCrop(from: item) }
+        }
+        .fullScreenCover(item: $notificationIconCropPayload) { payload in
+            let spec = payload.spec
+            ImageCropEditorView(
+                spec: spec,
+                sourceImage: payload.image,
+                onCancel: { notificationIconCropPayload = nil },
+                onComplete: { cropped in
+                    notificationIconCropPayload = nil
+                    Task { await uploadCroppedNotificationIcon(cropped) }
+                }
+            )
+        }
+        .onChange(of: title) { _, _ in
+            guard !isApplyingRemoteSettings, !isNotificationSendInFlight else { return }
+            scheduleBannerTextsAutoSave()
+        }
+        .onChange(of: bodyText) { _, _ in
+            if !isApplyingRemoteSettings,
+               !bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                keepManualMessageFieldClearedAfterSend = false
+            }
+            guard !isApplyingRemoteSettings, !isNotificationSendInFlight else { return }
+            scheduleBannerTextsAutoSave()
+        }
+        .onDisappear {
+            notificationLogoPopupPresented = false
+            cancelNotificationIconNudge()
+            cancelPendingCampaignNotificationSaves()
+            cancelPerimeterRelevantTextSaveTask()
+            scheduledCampaignDataReloadTask?.cancel()
+            scheduledCampaignDataReloadTask = nil
+            Task {
+                await flushBannerTextsAutoSave()
+                await flushCampaignAutomationSave()
+                await flushPerimeterRelevantTextSave()
+            }
+        }
     }
 
     private var campaignNotificationsWithPresentations: some View {
         campaignNotificationsWithLifecycle
-            .sheet(item: Binding(
-                get: { editingRuleId.map { RuleEditToken(id: $0) } },
-                set: { editingRuleId = $0?.id }
-            )) { token in
-                ruleEditSheet(ruleId: token.id)
-            }
-            .sheet(isPresented: $showCustomAutomationSheet) {
-                customAutomationEditorSheet
-            }
-            .sheet(isPresented: $showEventAutomationSheet) {
-                eventAutomationEditorSheet
-            }
-            .sheet(item: $selectedAutomationDetail) { target in
-                automationDetailSheet(target: target) {
-                    selectedAutomationDetail = nil
+            .sheet(item: $auxiliarySheet) { sheet in
+                switch sheet {
+                case .ruleEditor(let ruleId):
+                    ruleEditSheet(ruleId: ruleId)
+                case .customAutomation:
+                    customAutomationEditorSheet
+                case .eventAutomation:
+                    eventAutomationEditorSheet
                 }
             }
             .alert("Supprimer cette automatisation ?", isPresented: Binding(
@@ -517,9 +730,56 @@ struct CampaignNotificationsView: View {
         campaignAutomationSaveTask = nil
     }
 
+    private func scheduleCampaignDataReload(force: Bool, debounceNs: UInt64) {
+        scheduledCampaignDataReloadTask?.cancel()
+        scheduledCampaignDataReloadTask = Task {
+            if debounceNs > 0 {
+                try? await Task.sleep(nanoseconds: debounceNs)
+            }
+            guard !Task.isCancelled else { return }
+            if shouldDeferCampaignDataReloadDuringEdit { return }
+            await loadCampaignData(force: force)
+        }
+    }
+
+    private func prewarmNotificationIconIfPossible(slug: String, settings: BusinessSettingsResponse?) {
+        let raw = settings?.notificationIconUrl?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !raw.isEmpty else { return }
+        guard let resolved = APIResourceURL.resolved(from: raw) else { return }
+        var components = URLComponents(url: resolved, resolvingAgainstBaseURL: false)
+        if let d = CampaignNotificationImageCache.bestBustDate(for: slug) {
+            components?.queryItems = [URLQueryItem(name: "v", value: String(Int64((d.timeIntervalSince1970 * 1000).rounded())))]
+        }
+        let displayURL = components?.url ?? resolved
+        Task.detached(priority: .utility) {
+            await AuthenticatedMediaLoader.prefetch(url: displayURL)
+        }
+    }
+
     private func cancelPerimeterRelevantTextSaveTask() {
         perimeterRelevantTextSaveTask?.cancel()
         perimeterRelevantTextSaveTask = nil
+    }
+
+    private func cancelNotificationIconNudge() {
+        notificationIconNudgeTask?.cancel()
+        notificationIconNudgeTask = nil
+    }
+
+    /// Après 3 s sur l’onglet : rappel si aucune icône personnalisée (tant que pas d’autre feuille modale).
+    private func scheduleNotificationIconNudgeIfNeeded() {
+        cancelNotificationIconNudge()
+        notificationIconNudgeTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            guard !Task.isCancelled else { return }
+            guard resolveSlugForAPI() != nil else { return }
+            guard !hasCustomNotificationIconFromSettings else { return }
+            guard auxiliarySheet == nil else { return }
+            guard notificationIconCropPayload == nil else { return }
+            guard !isUploadingNotificationIcon else { return }
+            guard !notificationLogoPopupPresented else { return }
+            notificationLogoPopupPresented = true
+        }
     }
 
     private struct FamilyAutomationDisableConfirm: Identifiable {
@@ -527,152 +787,90 @@ struct CampaignNotificationsView: View {
         let carouselFamilyId: String
     }
 
-    private struct RuleEditToken: Identifiable {
-        let id: String
-    }
-
-    private enum AutomationDetailTarget: Identifiable {
-        case event
-        case family(String)
-
-        var id: String {
-            switch self {
-            case .event:
-                return "event"
-            case .family(let id):
-                return "family_\(id)"
-            }
-        }
-    }
-
     // MARK: - Sous-vues
 
     private var headerBlock: some View {
-        HStack(spacing: 0) {}
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.top, 4)
+        DashboardHomeMinimalTopBar(
+            title: "Notifications",
+            merchantName: notificationsTopBarTitle,
+            accountEmail: authService.currentUserEmail ?? AuthStorage.userEmail,
+            notificationIconURL: dashboardSettings?.notificationIconUrl,
+            hasNotificationIcon: hasCustomNotificationIconFromSettings,
+            businesses: authService.businesses,
+            activeBusinessSlug: AuthStorage.currentBusinessSlug,
+            canCreateBusiness: authService.canCreateBusiness,
+            onSelectBusiness: { slug in
+                authService.selectBusiness(slug: slug)
+                Task {
+                    defer { authService.finishBusinessSwitch() }
+                    await loadCampaignData(force: true)
+                    await syncService.syncAfterServerMutation()
+                    await loadCampaignData(force: true)
+                }
+            },
+            onAddCommerce: {
+                NotificationCenter.default.post(name: .myfidpassOpenAddCommerceSheet, object: nil)
+            },
+            onUpgradeCommerceQuota: {
+                NotificationCenter.default.post(name: .myfidpassOpenMerchantSubscriptionSheet, object: nil)
+            }
+        )
+    }
+
+    private var notificationsTopBarTitle: String {
+        let businessName = dataService.currentBusiness()?.name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return businessName.isEmpty ? "Notifs" : businessName
     }
 
     private var previewSection: some View {
         VStack(alignment: .leading, spacing: AppTheme.Spacing.sm) {
             if let err = loadError {
                 errorCard(err)
+                    .padding(.horizontal, AppTheme.Spacing.md)
             }
-            AppleNotificationCampaignEditorPreview(
-                commerceBannerTitle: $title,
-                messageBody: $bodyText,
-                iconPhotoItem: $notificationIconPhotoItem,
-                bannerPromptFallback: bannerFieldPromptFallback,
-                logoURL: notificationPreviewIconURLForView,
-                statusBarTime: lockScreenTimeString,
-                isUploadingIcon: isUploadingNotificationIcon,
-                focusedField: $notificationEditorFocus,
-                onSaveTexts: {
-                    await flushBannerTextsAutoSave()
-                }
-            )
-            .id(notificationIconReloadNonce)
-            if resolveSlugForAPI() != nil {
-                previewCampaignActionsBar
-                if isSending {
-                    Text("Envoi en cours…")
-                        .font(AppTheme.Fonts.caption2())
-                        .foregroundStyle(AppTheme.Colors.textSecondary)
-                }
-            }
-        }
-        .onChange(of: segment) { _, newValue in
-            guard let key = newValue, let def = defaultMessages[key] else { return }
-            if bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                bodyText = def
-            }
-        }
-    }
+            ZStack {
+                BorderBeamManualNotificationComposerView(
+                    messageBody: $bodyText,
+                    segment: $segment,
+                    segmentChoices: manualSegmentChoices,
+                    defaultMessages: defaultMessages,
+                    keepManualMessageFieldClearedAfterSend: keepManualMessageFieldClearedAfterSend,
+                    hasSlug: resolveSlugForAPI() != nil,
+                    sendingLocked: !campaignManualSendUnlocked,
+                    isSending: isSending,
+                    isUploadingNotificationIcon: isUploadingNotificationIcon,
+                    sendSuccessCount: sendSuccessCount,
+                    onSend: { Task { await send() } }
+                )
+                .blur(radius: campaignManualSendUnlocked ? 0 : 2.2)
+                .allowsHitTesting(campaignManualSendUnlocked)
 
-    private var segmentMenuLabel: String {
-        guard let s = segment, !s.isEmpty else { return "Tous les clients" }
-        return manualSegmentChoices.first(where: { $0.key == s })?.label ?? s
-    }
-
-    /// Sous l’aperçu : catégories (segment) + envoi — même logique que l’ancien onglet Manuel.
-    private var previewCampaignActionsBar: some View {
-        HStack(spacing: 8) {
-            campaignCategoryMenu
-            campaignSendButton
-        }
-        .padding(.top, 2)
-    }
-
-    private var campaignCategoryMenu: some View {
-        Menu {
-            Button("Tous les clients") {
-                segment = nil
-            }
-            ForEach(manualSegmentChoices, id: \.key) { c in
-                Button(c.label) {
-                    segment = c.key
-                    if let def = defaultMessages[c.key],
-                       bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        bodyText = def
+                if !campaignManualSendUnlocked {
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .fill(Color.black.opacity(0.04))
+                        .allowsHitTesting(false)
+                    MerchantProUnlockTeaserButton(preferDarkGlassTint: false) {
+                        NotificationCenter.default.post(name: .myfidpassOpenMerchantSubscriptionSheet, object: nil)
                     }
+                    .accessibilityLabel("Déverrouiller avec Pro pour envoyer des notifications")
+                    .accessibilityAddTraits(.isButton)
                 }
             }
-        } label: {
-            HStack(spacing: 4) {
-                Image(systemName: "square.grid.2x2")
-                    .font(.system(size: 11, weight: .semibold))
-                Text(segmentMenuLabel)
-                    .lineLimit(1)
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.system(size: 9, weight: .bold))
-            }
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(AppTheme.Colors.textPrimary)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 7)
-            .padding(.horizontal, 9)
+            .padding(.horizontal, AppTheme.Spacing.md)
         }
-        .modifier(CampaignGlassCapsuleButtonModifier())
-        .accessibilityLabel("Catégorie de destinataires")
-    }
-
-    private var campaignSendButton: some View {
-        Button {
-            Task { await send() }
-        } label: {
-            HStack(spacing: 4) {
-                if isSending {
-                    ProgressView()
-                        .scaleEffect(0.85)
-                } else {
-                    Text("Envoyer")
-                    Image(systemName: "arrow.right")
-                        .font(.system(size: 11, weight: .bold))
-                }
-            }
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(AppTheme.Colors.textPrimary)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 7)
-            .padding(.horizontal, 9)
-        }
-        .disabled(
-            isSending
-                || isUploadingNotificationIcon
-                || bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                || resolveSlugForAPI() == nil
-        )
-        .modifier(CampaignGlassCapsuleButtonModifier())
-        .accessibilityLabel("Envoyer la campagne")
+        .padding(.bottom, 2)
     }
 
     private var automationsContent: some View {
-        VStack(alignment: .leading, spacing: AppTheme.Spacing.md) {
+        VStack(alignment: .leading, spacing: 0) {
             if resolveSlugForAPI() == nil {
                 syncRequiredCard
             } else {
-                automationsTopBar
-                automationsCarouselBlock
+                /// Titre + carrousel serrés (évite la double marge : paddings barre + `TabView` + padding des pages).
+                VStack(alignment: .leading, spacing: 0) {
+                    automationsTopBar
+                    automationsCarouselBlock
+                }
             }
         }
     }
@@ -692,7 +890,7 @@ struct CampaignNotificationsView: View {
     /// Aperçu notif **périmètre** : uniquement `location_relevant_text`, jamais le message manuel campagne.
     private func perimeterAutomationPreviewLine() -> String {
         let t = perimeterRelevantMessageText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !t.isEmpty { return String(t.prefix(220)) }
+        if !t.isEmpty { return t }
         return "Message affiché quand un client entre dans la zone autour de votre commerce (Apple Wallet)."
     }
 
@@ -747,6 +945,10 @@ struct CampaignNotificationsView: View {
         }
         campaignAutomation.rules = r
         scheduleCampaignAutomationSave()
+        if fid == "local" {
+            // Le toggle localisation contrôle aussi l’envoi du message périmètre serveur.
+            schedulePerimeterRelevantTextSave()
+        }
     }
 
     private func carouselMessageBinding(ruleId: String?) -> Binding<String>? {
@@ -771,9 +973,13 @@ struct CampaignNotificationsView: View {
     private func carouselPerimeterMessageBinding() -> Binding<String>? {
         guard resolveSlugForAPI() != nil else { return nil }
         return Binding(
-            get: { String(perimeterRelevantMessageText.prefix(200)) },
+            get: {
+                String(perimeterRelevantMessageText.replacingOccurrences(of: "\n", with: "").prefix(200))
+            },
             set: { v in
-                perimeterRelevantMessageText = String(v.prefix(200))
+                let flattened = v.replacingOccurrences(of: "\n", with: "")
+                perimeterRelevantMessageText = String(flattened.prefix(200))
+                isPerimeterRelevantTextDirty = true
                 schedulePerimeterRelevantTextSave()
             }
         )
@@ -805,8 +1011,7 @@ struct CampaignNotificationsView: View {
                         setFamilyAutomationEnabled(carouselFamilyId: summaryFamilyId, enabled: true)
                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
                     }
-                },
-                onOpenDetail: { selectedAutomationDetail = .family(summaryFamilyId) }
+                }
             )
             .zIndex(0)
 
@@ -826,13 +1031,38 @@ struct CampaignNotificationsView: View {
             .accessibilityLabel("Aperçu notification pour cette automatisation")
         }
         .padding(.horizontal, 6)
-        .padding(.top, 6)
+        .padding(.top, 2)
     }
 
     @ViewBuilder
-    private func automationPerimeterPageStack(pageIndex: Int) -> some View {
+    private func automationPerimeterPageStack(pageIndex: Int, carouselSelection: Int) -> some View {
+        let trimmedPerimeter = perimeterRelevantMessageText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hasPerimeterMessage = !trimmedPerimeter.isEmpty
+        let rulesActive = isFamilyAutomationActive(carouselFamilyId: "local")
+        /// Les règles peuvent être « on » par défaut sans texte Wallet : l’UI « Activé » exige un vrai message périmètre.
+        let showsActivé = rulesActive && hasPerimeterMessage
+        /// Désactivé seulement sans message et sans règle à couper (état incohérent rules on + texte vide → tap pour éteindre).
+        let perimeterButtonEnabled = hasPerimeterMessage || rulesActive
+        let corner = RoundedRectangle(cornerRadius: AppTheme.Radius.lg, style: .continuous)
         ZStack(alignment: .top) {
-            localWalletMapSection(cardHeight: 236)
+            localWalletMapSection(
+                cardHeight: 236,
+                isLiveElevationMapActive: carouselSelection == pageIndex,
+                showsActivé: showsActivé,
+                isButtonEnabled: perimeterButtonEnabled,
+                onToggleActive: {
+                    guard perimeterButtonEnabled else { return }
+                    if showsActivé {
+                        familyAutomationDisableConfirm = FamilyAutomationDisableConfirm(carouselFamilyId: "local")
+                    } else if rulesActive && !hasPerimeterMessage {
+                        setFamilyAutomationEnabled(carouselFamilyId: "local", enabled: false)
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    } else if !rulesActive && hasPerimeterMessage {
+                        setFamilyAutomationEnabled(carouselFamilyId: "local", enabled: true)
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    }
+                }
+            )
                 .zIndex(0)
 
             AutomationCarouselLiquidNotificationBanner(
@@ -842,7 +1072,16 @@ struct CampaignNotificationsView: View {
                 textFieldPlaceholder: "Message périmètre (géolocalisation Wallet)…",
                 logoURL: notificationPreviewIconURLForView,
                 pageIndex: pageIndex,
-                currentPage: automationCarouselPage
+                currentPage: automationCarouselPage,
+                useMultilineMessageField: false,
+                onSubmitActivate: {
+                    let msg = perimeterRelevantMessageText.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !msg.isEmpty else { return }
+                    // Déjà actif (règles + message) : la touche ✓ ne fait que fermer le clavier.
+                    guard !(rulesActive && hasPerimeterMessage) else { return }
+                    setFamilyAutomationEnabled(carouselFamilyId: "local", enabled: true)
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                }
             )
             .id(notificationIconReloadNonce)
             .padding(.horizontal, 10)
@@ -851,16 +1090,21 @@ struct CampaignNotificationsView: View {
             .accessibilityElement(children: .combine)
             .accessibilityLabel("Aperçu notification dans le périmètre")
         }
+        .clipShape(corner)
+        .overlay(
+            corner
+                .stroke(Color.white.opacity(0.14), lineWidth: 1)
+        )
         .padding(.horizontal, 6)
-        .padding(.top, 6)
+        .padding(.top, 2)
     }
 
     /// Carrousel : notif liquid glass superposée à la carte, swipe fluide + indicateurs.
     private var automationsCarouselBlock: some View {
-        let tabH: CGFloat = 288
+        let tabH: CGFloat = 318
         return VStack(alignment: .leading, spacing: 12) {
             TabView(selection: $automationCarouselPage) {
-                automationPerimeterPageStack(pageIndex: 0)
+                automationPerimeterPageStack(pageIndex: 0, carouselSelection: automationCarouselPage)
                     .tag(0)
                 ForEach(Array(predefinedAutomationFamilies.enumerated()), id: \.element.id) { index, family in
                     automationCarouselPageStack(
@@ -873,16 +1117,14 @@ struct CampaignNotificationsView: View {
                 }
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
+            /// Le style page réserve souvent ~10–14 pt en haut même sans indicateur système — on le compense.
+            .padding(.top, -20)
             .frame(height: tabH)
-            .animation(.spring(response: 0.38, dampingFraction: 0.88), value: automationCarouselPage)
 
             HStack(spacing: 0) {
                 ForEach(0..<automationCarouselPageCount, id: \.self) { i in
                     Button {
-                        withAnimation(.spring(response: 0.4, dampingFraction: 0.86)) {
-                            automationCarouselPage = i
-                        }
-                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        withAnimation(.easeOut(duration: 0.18)) { automationCarouselPage = i }
                     } label: {
                         Capsule()
                             .fill(i == automationCarouselPage ? AppTheme.Colors.primary : AppTheme.Colors.textSecondary.opacity(0.28))
@@ -902,16 +1144,22 @@ struct CampaignNotificationsView: View {
                 automationCarouselPage = maxPage
             }
         }
+        .onChange(of: automationCarouselPage) { _, newPage in
+            guard newPage != lastCarouselHapticPage else { return }
+            lastCarouselHapticPage = newPage
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        }
     }
 
     private var automationsTopBar: some View {
         HStack(alignment: .center) {
-            Text("Notifs automatiques")
-                .font(.system(size: 28, weight: .semibold, design: .default))
-                .foregroundStyle(AppTheme.Colors.textPrimary)
+            Text("Notifications automatiques")
+                .font(.system(size: 12, weight: .semibold, design: .default))
+                .foregroundStyle(AppTheme.Colors.textSecondary)
             Spacer(minLength: 8)
         }
-        .padding(.vertical, 4)
+        .padding(.top, 6)
+        .padding(.bottom, -10)
     }
 
     private func automationSummaryTitleLines(for familyId: String) -> (String, String) {
@@ -941,8 +1189,7 @@ struct CampaignNotificationsView: View {
         accent: Color,
         isActive: Bool,
         familyId: String,
-        onToggleActive: @escaping () -> Void,
-        onOpenDetail: (() -> Void)? = nil
+        onToggleActive: @escaping () -> Void
     ) -> some View {
         let backgroundAssetName: String? = {
             switch familyId {
@@ -957,19 +1204,7 @@ struct CampaignNotificationsView: View {
         let cardHeight: CGFloat = 236
         let corner = AppTheme.Radius.lg
         return VStack(alignment: .leading, spacing: 10) {
-            if let onOpenDetail {
-                Color.clear
-                    .contentShape(Rectangle())
-                    .frame(maxWidth: .infinity, minHeight: 52)
-                    .frame(maxHeight: .infinity)
-                    .onTapGesture {
-                        onOpenDetail()
-                    }
-                    .accessibilityAddTraits(.isButton)
-                    .accessibilityLabel("Détails et règles de l’automatisation")
-            } else {
-                Spacer(minLength: 52)
-            }
+            Spacer(minLength: 52)
 
             HStack(alignment: .center, spacing: 8) {
                 Button(action: onToggleActive) {
@@ -1020,45 +1255,7 @@ struct CampaignNotificationsView: View {
             RoundedRectangle(cornerRadius: corner, style: .continuous)
                 .stroke(Color.white.opacity(0.12), lineWidth: 1)
         )
-        .shadow(color: .black.opacity(0.1), radius: 12, y: 5)
-    }
-
-    @ViewBuilder
-    private func automationDetailSheet(target: AutomationDetailTarget, onDismiss: @escaping () -> Void) -> some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: AppTheme.Spacing.md) {
-                    switch target {
-                    case .event:
-                        eventAutomationsSection
-                    case .family(let familyId):
-                        if let family = predefinedAutomationFamilies.first(where: { $0.id == familyId }) {
-                            familyCard(family)
-                        }
-                    }
-                }
-                .padding(.horizontal, AppTheme.Spacing.md)
-                .padding(.top, 12)
-                .padding(.bottom, 50)
-            }
-            .background(AppTheme.Colors.background)
-            .navigationBarTitleDisplayMode(.inline)
-            .navigationTitle(automationDetailTitle(target: target))
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Fermer") { onDismiss() }
-                }
-            }
-        }
-    }
-
-    private func automationDetailTitle(target: AutomationDetailTarget) -> String {
-        switch target {
-        case .event:
-            return "Créer une automatisation"
-        case .family(let familyId):
-            return familyHeroTitle(familyId)
-        }
+        .shadow(color: .clear, radius: 0, y: 0)
     }
 
     private var predefinedAutomationFamilies: [CampaignFamilySpec] {
@@ -1262,7 +1459,7 @@ struct CampaignNotificationsView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Annuler") {
-                        showCustomAutomationSheet = false
+                        auxiliarySheet = nil
                     }
                 }
                 ToolbarItem(placement: .confirmationAction) {
@@ -1362,14 +1559,14 @@ struct CampaignNotificationsView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     if #available(iOS 26.0, *) {
                         Button("Annuler") {
-                            showEventAutomationSheet = false
+                            auxiliarySheet = nil
                         }
                         .buttonStyle(.glass(.regular))
                         .buttonBorderShape(.capsule)
                         .controlSize(.large)
                     } else {
                         Button("Annuler") {
-                            showEventAutomationSheet = false
+                            auxiliarySheet = nil
                         }
                     }
                 }
@@ -1417,7 +1614,7 @@ struct CampaignNotificationsView: View {
         let firstSeg = manualSegmentChoices.first?.key ?? "inactive14"
         customDraftSegment = firstSeg
         customDraftMessage = defaultMessages[firstSeg] ?? ""
-        showCustomAutomationSheet = true
+        auxiliarySheet = .customAutomation
     }
 
     private func prepareNewEventAutomation() {
@@ -1432,7 +1629,7 @@ struct CampaignNotificationsView: View {
         eventDraftDelayMinutes = 2
         eventDraftMessage = "Bienvenue ! Votre carte est prête."
         eventDraftAIInstruction = ""
-        showEventAutomationSheet = true
+        auxiliarySheet = .eventAutomation
     }
 
     private func openEditEventAutomation(ruleId: String) {
@@ -1444,7 +1641,7 @@ struct CampaignNotificationsView: View {
         eventDraftDelayMinutes = row?.delayMinutes ?? 2
         eventDraftMessage = row?.message ?? ""
         eventDraftAIInstruction = ""
-        showEventAutomationSheet = true
+        auxiliarySheet = .eventAutomation
     }
 
     private func saveEventAutomationDraft() {
@@ -1467,7 +1664,7 @@ struct CampaignNotificationsView: View {
         )
         r[key] = row
         campaignAutomation.rules = r
-        showEventAutomationSheet = false
+        auxiliarySheet = nil
         eventAutomationsRuleBeingEdited = nil
         scheduleCampaignAutomationSave()
     }
@@ -1706,7 +1903,7 @@ struct CampaignNotificationsView: View {
         customDraftTitle = row?.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         customDraftSegment = row?.segment ?? manualSegmentChoices.first?.key ?? "inactive14"
         customDraftMessage = row?.message ?? ""
-        showCustomAutomationSheet = true
+        auxiliarySheet = .customAutomation
     }
 
     private func saveCustomAutomationDraft() {
@@ -1724,7 +1921,7 @@ struct CampaignNotificationsView: View {
         )
         r[key] = row
         campaignAutomation.rules = r
-        showCustomAutomationSheet = false
+        auxiliarySheet = nil
         customRuleBeingEdited = nil
         scheduleCampaignAutomationSave()
     }
@@ -1736,102 +1933,20 @@ struct CampaignNotificationsView: View {
         scheduleCampaignAutomationSave()
     }
 
-    private var hasStoreCoordinate: Bool {
-        guard let lat = dashboardSettings?.locationLat, let lng = dashboardSettings?.locationLng else { return false }
-        return lat != 0 && lng != 0 && abs(lat) <= 90 && abs(lng) <= 180
-    }
-
-    private func syncLocalMapCameraFromSettings() {
-        guard let la = dashboardSettings?.locationLat,
-              let lo = dashboardSettings?.locationLng,
-              la != 0, lo != 0,
-              abs(la) <= 90, abs(lo) <= 180 else {
-            localMapCameraPosition = .camera(
-                MapCamera(
-                    centerCoordinate: CLLocationCoordinate2D(latitude: 46.5, longitude: 2.5),
-                    distance: 2_800_000,
-                    heading: 0,
-                    pitch: 48
-                )
+    private func localWalletMapSection(
+        cardHeight: CGFloat = 204,
+        isLiveElevationMapActive: Bool,
+        showsActivé: Bool,
+        isButtonEnabled: Bool,
+        onToggleActive: @escaping () -> Void
+    ) -> some View {
+        return ZStack(alignment: .bottomLeading) {
+            LocalAutomationReliefMapBackdrop(
+                latitude: dashboardSettings?.locationLat,
+                longitude: dashboardSettings?.locationLng,
+                radiusMeters: dashboardSettings?.locationRadiusMeters,
+                isLiveElevationMapActive: isLiveElevationMapActive
             )
-            return
-        }
-        let center = CLLocationCoordinate2D(latitude: la, longitude: lo)
-        let r = Double(dashboardSettings?.locationRadiusMeters ?? 100)
-        let distance = max(450, r * 4.5)
-        localMapCameraPosition = .camera(
-            MapCamera(centerCoordinate: center, distance: distance, heading: 0, pitch: 55)
-        )
-    }
-
-    private func localWalletMapSection(cardHeight: CGFloat = 204) -> some View {
-        let centerCoord: CLLocationCoordinate2D = {
-            if hasStoreCoordinate, let la = dashboardSettings?.locationLat, let lo = dashboardSettings?.locationLng {
-                return CLLocationCoordinate2D(latitude: la, longitude: lo)
-            }
-            return CLLocationCoordinate2D(latitude: 46.5, longitude: 2.5)
-        }()
-        let radiusM = CLLocationDistance(dashboardSettings?.locationRadiusMeters ?? 100)
-
-        return ZStack(alignment: .topLeading) {
-            Map(position: $localMapCameraPosition, interactionModes: []) {
-                if hasStoreCoordinate {
-                    Annotation("Commerce", coordinate: centerCoord) {
-                        VStack(spacing: 0) {
-                            Image(systemName: "mappin.circle.fill")
-                                .font(.system(size: 40))
-                                .foregroundStyle(AppTheme.Colors.primary)
-                                .shadow(color: .black.opacity(0.28), radius: 4, x: 0, y: 2)
-                            Image(systemName: "triangle.fill")
-                                .font(.system(size: 11))
-                                .foregroundStyle(AppTheme.Colors.primary)
-                                .offset(y: -6)
-                        }
-                    }
-                    MapCircle(center: centerCoord, radius: radiusM)
-                        .foregroundStyle(AppTheme.Colors.primary.opacity(0.2))
-                        .stroke(AppTheme.Colors.primary, lineWidth: 2)
-                }
-            }
-            .mapStyle(.standard(elevation: .realistic))
-            .allowsHitTesting(false)
-
-            LinearGradient(
-                colors: [Color.black.opacity(0.72), Color.black.opacity(0.42), Color.black.opacity(0.12), Color.clear],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .frame(height: 158)
-            .allowsHitTesting(false)
-
-            RadialGradient(
-                colors: [Color.black.opacity(0.6), Color.black.opacity(0.26), Color.clear],
-                center: .topLeading,
-                startRadius: 8,
-                endRadius: 210
-            )
-            .allowsHitTesting(false)
-
-            LinearGradient(
-                colors: [Color.clear, Color.black.opacity(0.12)],
-                startPoint: .center,
-                endPoint: .bottom
-            )
-            .allowsHitTesting(false)
-
-            HStack(alignment: .top, spacing: 10) {
-                Text("Notification dans le périmètre")
-                    .font(.system(size: 24, weight: .bold, design: .default))
-                    .foregroundStyle(.white)
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.84)
-                    .shadow(color: .black.opacity(0.28), radius: 8, x: 0, y: 2)
-
-                Spacer(minLength: 8)
-            }
-            .padding(.horizontal, 14)
-            .padding(.top, 14)
-            .allowsHitTesting(false)
 
             Button {
                 showPerimeterMapSheet = true
@@ -1842,6 +1957,25 @@ struct CampaignNotificationsView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Ouvrir la carte et le périmètre")
+
+            Button(action: onToggleActive) {
+                HStack(spacing: 5) {
+                    Image(systemName: showsActivé ? "checkmark.circle.fill" : "location.circle.fill")
+                        .font(.system(size: 13, weight: .semibold))
+                    Text(showsActivé ? "Activé" : "Activer")
+                        .font(.system(size: 13, weight: .semibold, design: .default))
+                }
+                .foregroundStyle(showsActivé ? Color.green : (isButtonEnabled ? AppTheme.Colors.textPrimary : AppTheme.Colors.textSecondary))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+            }
+            .modifier(LiquidGlassCapsuleButtonModifier(controlSize: .small))
+            .disabled(!isButtonEnabled)
+            .opacity(isButtonEnabled ? 1 : 0.48)
+            // Aligné sur `automationSummaryCard` : padding carte 14 + leading interne 12 pour le bloc « Activer ».
+            .padding(.leading, 26)
+            // Légèrement plus haut que le bas strict (14) des autres cartes — repère visuel carte carte.
+            .padding(.bottom, 18)
         }
         .frame(height: cardHeight)
         .clipShape(RoundedRectangle(cornerRadius: AppTheme.Radius.lg, style: .continuous))
@@ -1849,7 +1983,7 @@ struct CampaignNotificationsView: View {
             RoundedRectangle(cornerRadius: AppTheme.Radius.lg, style: .continuous)
                 .stroke(Color.white.opacity(0.14), lineWidth: 1)
         )
-        .shadow(color: .black.opacity(0.1), radius: 14, y: 5)
+        .shadow(color: .clear, radius: 0, y: 0)
     }
 
     private func familyCard(_ family: CampaignFamilySpec) -> some View {
@@ -1904,7 +2038,7 @@ struct CampaignNotificationsView: View {
             RoundedRectangle(cornerRadius: AppTheme.Radius.lg, style: .continuous)
                 .stroke(Color.white.opacity(0.12), lineWidth: 1)
         )
-        .shadow(color: .black.opacity(0.1), radius: 12, y: 5)
+        .shadow(color: .clear, radius: 0, y: 0)
     }
 
     private func ruleRow(_ rule: CampaignRuleSpec, socialAvisStyle: Bool) -> some View {
@@ -2062,6 +2196,8 @@ struct CampaignNotificationsView: View {
     /// Libellé court pour les confirmations (carrousel).
     private func automationFamilyDisplayName(for carouselFamilyId: String) -> String {
         switch carouselFamilyId {
+        case "local":
+            return "Notification dans le périmètre"
         case "reactivation":
             return "Client inactif +14 jours"
         case "birthday":
@@ -2086,7 +2222,7 @@ struct CampaignNotificationsView: View {
     private func editRuleGlassButton(ruleId: String) -> some View {
         if #available(iOS 26.0, *) {
             Button {
-                editingRuleId = ruleId
+                auxiliarySheet = .ruleEditor(ruleId)
             } label: {
                 Image(systemName: "pencil")
             }
@@ -2095,7 +2231,7 @@ struct CampaignNotificationsView: View {
             .controlSize(.small)
         } else {
             Button {
-                editingRuleId = ruleId
+                auxiliarySheet = .ruleEditor(ruleId)
             } label: {
                 Image(systemName: "pencil")
             }
@@ -2205,7 +2341,7 @@ struct CampaignNotificationsView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("OK") { editingRuleId = nil }
+                    Button("OK") { auxiliarySheet = nil }
                 }
             }
         }
@@ -2232,6 +2368,7 @@ struct CampaignNotificationsView: View {
 
     private func scheduleCampaignAutomationSave() {
         guard resolveSlugForAPI() != nil else { return }
+        lastAutomationLocalEditAt = Date()
         campaignAutomationSaveTask?.cancel()
         campaignAutomationSaveTask = Task {
             try? await Task.sleep(nanoseconds: Self.campaignAutomationDebounceNs)
@@ -2250,7 +2387,6 @@ struct CampaignNotificationsView: View {
             var patch = FullDashboardSettingsPatch()
             patch.campaignAutomation = campaignAutomation
             _ = try await APIClient.shared.request(APIEndpoint.patchDashboardSettings(slug: slug, patch: patch)) as EmptyResponse
-            await syncService.syncAfterServerMutation()
         } catch {
             if !shouldSuppressCancelledNetworkNoise(error) {
                 message = (error as? APIError)?.errorDescription ?? error.localizedDescription
@@ -2277,8 +2413,10 @@ struct CampaignNotificationsView: View {
         do {
             var patch = FullDashboardSettingsPatch()
             let t = perimeterRelevantMessageText.trimmingCharacters(in: .whitespacesAndNewlines)
-            patch.locationRelevantText = t.isEmpty ? nil : String(t.prefix(200))
+            let localEnabled = campaignAutomation.rules?["locationEntry"]?.enabled ?? true
+            patch.locationRelevantText = localEnabled ? (t.isEmpty ? nil : String(t.prefix(200))) : nil
             _ = try await APIClient.shared.request(APIEndpoint.patchDashboardSettings(slug: slug, patch: patch)) as EmptyResponse
+            isPerimeterRelevantTextDirty = false
             await syncService.syncAfterServerMutation()
         } catch {
             if !shouldSuppressCancelledNetworkNoise(error) {
@@ -2310,14 +2448,18 @@ struct CampaignNotificationsView: View {
 
     @discardableResult
     @MainActor
-    private func persistBannerTextsToServer() async -> Bool {
+    private func persistBannerTextsToServer(clearAfterSend: Bool = false) async -> Bool {
         guard let slug = resolveSlugForAPI() else { return false }
         do {
             var patch = FullDashboardSettingsPatch()
             let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
             let b = bodyText.trimmingCharacters(in: .whitespacesAndNewlines)
             patch.notificationTitleOverride = t.isEmpty ? nil : String(t.prefix(80))
-            patch.notificationChangeMessage = b.isEmpty ? nil : String(b.prefix(200))
+            if clearAfterSend && b.isEmpty {
+                patch.clearNotificationChangeMessage = true
+            } else {
+                patch.notificationChangeMessage = b.isEmpty ? nil : String(b.prefix(200))
+            }
             _ = try await APIClient.shared.request(APIEndpoint.patchDashboardSettings(slug: slug, patch: patch)) as EmptyResponse
             return true
         } catch {
@@ -2329,28 +2471,54 @@ struct CampaignNotificationsView: View {
         }
     }
 
-    /// Réseau séquentiel (évite deux décodages JSON concurrents) ; toute la logique d’état sur le MainActor avec `DataService` / `@State`.
+    /// Chargement initial optimisé : settings + segments en parallèle pour réduire la latence perçue.
     @MainActor
-    private func loadCampaignData() async {
+    private func loadCampaignData(force: Bool = false) async {
+        if isLoadingCampaignDataInFlight { return }
         guard let slug = resolveSlugForAPI() else {
             segments = nil
             dashboardSettings = nil
             perimeterRelevantMessageText = ""
+            isPerimeterRelevantTextDirty = false
             loadError = nil
             isLoadingData = false
+            lastCampaignDataSlug = nil
             return
         }
+        if !force,
+           slug == lastCampaignDataSlug,
+           let last = lastCampaignDataLoadAt,
+           Date().timeIntervalSince(last) < 1.2 {
+            return
+        }
+        if slug != lastCampaignDataSlug {
+            if let cached = ScanFlowSettingsCache.cached(for: slug) {
+                CampaignNotificationImageCache.applyPreviewTimestamps(from: cached, slug: slug)
+                dashboardSettings = cached
+                prewarmNotificationIconIfPossible(slug: slug, settings: cached)
+            } else {
+                dashboardSettings = nil
+            }
+            segments = nil
+        }
 
+        isLoadingCampaignDataInFlight = true
         isLoadingData = true
         loadError = nil
+        defer { isLoadingCampaignDataInFlight = false }
 
         do {
-            let gotSettings: BusinessSettingsResponse = try await APIClient.shared.request(.businessSettings(slug: slug))
-            let gotSeg: CampaignSegmentsResponse = try await APIClient.shared.request(.dashboardNotificationSegments(slug: slug))
-            CampaignNotificationImageCache.applyPreviewTimestamps(from: gotSettings)
+            async let settingsReq: BusinessSettingsResponse = APIClient.shared.request(.businessSettings(slug: slug))
+            async let segmentsReq: CampaignSegmentsResponse = APIClient.shared.request(.dashboardNotificationSegments(slug: slug))
+            let (gotSettings, gotSeg) = try await (settingsReq, segmentsReq)
+            ScanFlowSettingsCache.store(gotSettings, for: slug)
+            CampaignNotificationImageCache.applyPreviewTimestamps(from: gotSettings, slug: slug)
             dashboardSettings = gotSettings
-            perimeterRelevantMessageText = gotSettings.locationRelevantText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            syncLocalMapCameraFromSettings()
+            prewarmNotificationIconIfPossible(slug: slug, settings: gotSettings)
+            if !shouldDeferCampaignDataReloadDuringEdit {
+                perimeterRelevantMessageText = gotSettings.locationRelevantText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                isPerimeterRelevantTextDirty = false
+            }
             segments = gotSeg
             campaignAutomation = mergedAutomation(from: gotSettings.campaignAutomation)
             isApplyingRemoteSettings = true
@@ -2358,13 +2526,16 @@ struct CampaignNotificationsView: View {
             if title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 title = t
             }
-            if bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+               !keepManualMessageFieldClearedAfterSend {
                 let hint = gotSettings.notificationChangeMessage?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 if !hint.isEmpty { bodyText = hint }
             }
             isApplyingRemoteSettings = false
             loadError = nil
             isLoadingData = false
+            lastCampaignDataLoadAt = Date()
+            lastCampaignDataSlug = slug
         } catch {
             if shouldSuppressCancelledNetworkNoise(error) {
                 isLoadingData = false
@@ -2384,6 +2555,18 @@ struct CampaignNotificationsView: View {
             return shouldSuppressCancelledNetworkNoise(wrapped)
         }
         return false
+    }
+
+    /// Pendant une saisie périmètre en cours (dirty ou debounce actif), ne pas réappliquer l'état distant.
+    private var shouldDeferCampaignDataReloadDuringEdit: Bool {
+        let automationRecentlyEdited: Bool = {
+            guard let lastAutomationLocalEditAt else { return false }
+            return Date().timeIntervalSince(lastAutomationLocalEditAt) < 1.4
+        }()
+        return isPerimeterRelevantTextDirty
+            || perimeterRelevantTextSaveTask != nil
+            || campaignAutomationSaveTask != nil
+            || automationRecentlyEdited
     }
 
     private func prepareNotificationIconCrop(from item: PhotosPickerItem) async {
@@ -2418,7 +2601,7 @@ struct CampaignNotificationsView: View {
             var patch = FullDashboardSettingsPatch()
             patch.notificationIconBase64 = payload
             _ = try await APIClient.shared.request(APIEndpoint.patchDashboardSettings(slug: slug, patch: patch)) as EmptyResponse
-            UserDefaults.standard.set(Date(), forKey: SyncService.lastNotificationIconUploadAtKey)
+            CampaignNotificationImageCache.markLocalUploadNow(slug: slug)
             invalidateCachedGETNotificationIconResponses()
             // Bump immédiat : la vue se recrée tout de suite avec le nouveau `?v=` basé sur `localAt`
             // frais. Sans cela, si l'utilisateur regardait la preview avant `loadCampaignData`, SwiftUI
@@ -2426,11 +2609,12 @@ struct CampaignNotificationsView: View {
             notificationIconReloadNonce &+= 1
             // PATCH serveur : envoi PassKit APNs ; délai pour que le bundle à jour soit servi avant resync aperçu.
             try await Task.sleep(nanoseconds: 500_000_000)
-            await loadCampaignData()
+            await loadCampaignData(force: true)
             // Deuxième bump : après `loadCampaignData` la vue reflète aussi le nouveau `notification_icon_updated_at`
             // serveur — on force un autre re-render pour éviter tout état transitoire.
             notificationIconReloadNonce &+= 1
             await syncService.syncAfterServerMutation()
+            notificationLogoPopupPresented = false
         } catch {
             if !shouldSuppressCancelledNetworkNoise(error) {
                 message = (error as? APIError)?.errorDescription ?? error.localizedDescription
@@ -2440,23 +2624,36 @@ struct CampaignNotificationsView: View {
 
     @MainActor
     private func send() async {
+        guard campaignManualSendUnlocked else {
+            NotificationCenter.default.post(name: .myfidpassOpenMerchantSubscriptionSheet, object: nil)
+            return
+        }
         guard let slug = resolveSlugForAPI() else { return }
-        let msg = bodyText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard hasCustomNotificationIconFromSettings else {
+            notificationLogoPopupPresented = true
+            return
+        }
+        let msg = bodyText
+            .replacingOccurrences(of: "\n", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !msg.isEmpty else { return }
 
         bannerTextsAutoSaveTask?.cancel()
         bannerTextsAutoSaveTask = nil
         // Sans ce flush, `notification_change_message` peut rester sur un texte précédent
         // (autosave annulé ou course) alors que la campagne envoie un nouveau corps → Wallet concatène.
-        _ = await persistBannerTextsToServer()
-
         isSending = true
         isNotificationSendInFlight = true
+        notificationSendProgress = 0.06
         defer {
             isSending = false
             isNotificationSendInFlight = false
+            notificationSendProgress = 0
         }
         do {
+            _ = await persistBannerTextsToServer()
+            withAnimation(.easeInOut(duration: 0.55)) { notificationSendProgress = 0.20 }
+
             // Un seul POST /notifications/send : le backend persiste titre + modèle et envoie PassKit
             // (évite le double push PATCH dashboard + POST qui cassait les bannières après changement de texte).
             var payload = NotificationSendPayload(
@@ -2477,12 +2674,172 @@ struct CampaignNotificationsView: View {
                 message: msg,
                 count: touched
             )
+            withAnimation(.easeInOut(duration: 0.58)) { notificationSendProgress = 0.64 }
+
+            // Affiche brièvement le résultat dans le bouton avant de vider le champ.
+            withAnimation(.easeInOut(duration: 0.22)) { sendSuccessCount = touched }
+            withAnimation(.easeInOut(duration: 0.45)) { notificationSendProgress = 0.72 }
+
+            try? await Task.sleep(nanoseconds: 1_400_000_000)
+            withAnimation(.easeInOut(duration: 0.42)) { notificationSendProgress = 0.80 }
+
+            // Vider le champ localement.
+            keepManualMessageFieldClearedAfterSend = true
+            withAnimation(.easeOut(duration: 0.2)) {
+                bodyText = ""
+                sendSuccessCount = nil
+            }
+            withAnimation(.easeInOut(duration: 0.38)) { notificationSendProgress = 0.86 }
+
+            // Efface le champ côté serveur (null explicite) pour que le prochain GET ne réinjecte pas
+            // l'ancien message dans l'éditeur — nil seul ne suffit pas (le PATCH ignore les champs nil).
+            _ = await persistBannerTextsToServer(clearAfterSend: true)
+            withAnimation(.easeInOut(duration: 0.38)) { notificationSendProgress = 0.91 }
+
             invalidateCachedGETNotificationIconResponses()
             notificationIconReloadNonce &+= 1
-            await loadCampaignData()
+            await loadCampaignData(force: true)
+            withAnimation(.easeInOut(duration: 0.52)) { notificationSendProgress = 0.97 }
+
             await syncService.syncAfterServerMutation()
+            withAnimation(.easeInOut(duration: 0.38)) { notificationSendProgress = 1.0 }
+
+            try? await Task.sleep(nanoseconds: 260_000_000)
         } catch {
             message = (error as? APIError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+}
+
+// MARK: - Popup logo notif (même schéma que Commerce — panier repère)
+
+private struct NotificationLogoPopupGlassCardModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content.glassEffect(.regular, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        } else {
+            content
+                .background(
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .fill(Color.white.opacity(0.94))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .strokeBorder(Color.black.opacity(0.08), lineWidth: 1)
+                )
+        }
+    }
+}
+
+private struct NotificationManualLogoCommercePopupCard: View {
+    let logoURL: String?
+    let isUploadingNotificationIcon: Bool
+    @Binding var notificationIconPhotoItem: PhotosPickerItem?
+
+    private static let logoHintMessage = "👈 Votre logo apparaîtra ici dans la notification."
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            ManualRichNotificationReadOnlyPreview(
+                senderTitle: "",
+                messageBody: "",
+                appDisplayNameFallback: "",
+                logoURL: logoURL,
+                hidesSenderTitleRow: true,
+                messageCopyOverride: Self.logoHintMessage
+            )
+
+            if isUploadingNotificationIcon {
+                HStack(spacing: 10) {
+                    ProgressView()
+                    Text("Envoi en cours…")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(Color.black.opacity(0.7))
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 4)
+            }
+
+            PhotosPicker(selection: $notificationIconPhotoItem, matching: .images, photoLibrary: .shared()) {
+                HStack(spacing: 10) {
+                    Image(systemName: "photo.on.rectangle.angled")
+                        .font(.system(size: 17, weight: .semibold))
+                    Text("Mettre mon logo")
+                        .font(.system(size: 17, weight: .bold, design: .default))
+                }
+                .foregroundStyle(Color.black)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .background(Capsule().fill(Color.white))
+                .overlay(
+                    Capsule()
+                        .strokeBorder(Color.black.opacity(0.08), lineWidth: 1)
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(isUploadingNotificationIcon)
+            .opacity(isUploadingNotificationIcon ? 0.55 : 1)
+            .accessibilityLabel("Choisir une image pour le logo de notification")
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .background(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(Color.clear)
+        )
+        .modifier(NotificationLogoPopupGlassCardModifier())
+    }
+}
+
+/// Plan standard avec **relief / bâtiments 3D** (`.standard(elevation: .realistic)`), aligné sur `PerimeterMapView`.
+/// La `Map` n’est montée que lorsque la page « localisation » du carrousel est affichée : les autres pages n’affichent qu’un fond léger.
+private struct LocalAutomationReliefMapBackdrop: View {
+    let latitude: Double?
+    let longitude: Double?
+    let radiusMeters: Int?
+    let isLiveElevationMapActive: Bool
+
+    @State private var cameraPosition: MapCameraPosition = .automatic
+
+    var body: some View {
+        Group {
+            if let lat = latitude, let lng = longitude, isLiveElevationMapActive {
+                reliefMap(latitude: lat, longitude: lng)
+            } else {
+                placeholderBackdrop
+            }
+        }
+    }
+
+    private var placeholderBackdrop: some View {
+        ZStack {
+            LinearGradient(
+                colors: [Color.black.opacity(0.10), Color.black.opacity(0.04)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            Image(systemName: "map")
+                .font(.system(size: 42, weight: .semibold))
+                .foregroundStyle(Color.black.opacity(0.22))
+        }
+        .clipped()
+    }
+
+    private func reliefMap(latitude: Double, longitude: Double) -> some View {
+        let center = CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+        let radiusCL = CLLocationDistance(max(30, min(1000, radiusMeters ?? 100)))
+        let cameraTaskId = "\(latitude)-\(longitude)-\(radiusCL)-live3d"
+        return Map(position: $cameraPosition, interactionModes: []) {
+            MapCircle(center: center, radius: radiusCL)
+                .foregroundStyle(Color.blue.opacity(0.20))
+                .stroke(Color.blue.opacity(0.66), lineWidth: 2)
+        }
+        .mapStyle(.standard(elevation: .realistic))
+        .task(id: cameraTaskId) {
+            let distanceMeters = min(820, max(300, radiusCL * 5.0))
+            cameraPosition = .camera(
+                MapCamera(centerCoordinate: center, distance: distanceMeters, heading: 0, pitch: 52)
+            )
         }
     }
 }
@@ -2500,9 +2857,11 @@ private struct AutomationCarouselLiquidNotificationBanner: View {
     let logoURL: String?
     let pageIndex: Int
     let currentPage: Int
+    /// `false` pour le périmètre : retours à la ligne **interdits** (texte replié sur plusieurs lignes visuellement) ; la touche « OK » / ✓ ferme le clavier et peut appeler `onSubmitActivate` sans insérer `\n`.
+    var useMultilineMessageField: Bool = true
+    var onSubmitActivate: (() -> Void)? = nil
 
-    @Environment(\.colorScheme) private var colorScheme
-    @State private var entrance = false
+    @FocusState private var messageFieldFocused: Bool
 
     private let iconSide: CGFloat = 44
     private let iconCorner: CGFloat = 10
@@ -2523,19 +2882,36 @@ private struct AutomationCarouselLiquidNotificationBanner: View {
                         .foregroundStyle(Color.black.opacity(0.45))
                 }
                 if let binding = messageBinding {
-                    TextField(textFieldPlaceholder, text: binding, axis: .vertical)
-                        .textFieldStyle(.plain)
-                        .font(.subheadline.weight(.regular))
-                        .foregroundStyle(Color.black.opacity(0.88))
-                        .lineLimit(2 ... 5)
-                        .multilineTextAlignment(.leading)
-                        .accessibilityLabel("\(textFieldPlaceholder) Modifiable.")
+                    Group {
+                        if useMultilineMessageField {
+                            TextField(textFieldPlaceholder, text: binding, axis: .vertical)
+                                .textFieldStyle(.plain)
+                                .font(.subheadline.weight(.regular))
+                                .foregroundStyle(Color.black.opacity(0.88))
+                                .lineLimit(2 ... 5)
+                                .multilineTextAlignment(.leading)
+                        } else {
+                            TextField(textFieldPlaceholder, text: binding, axis: .vertical)
+                                .textFieldStyle(.plain)
+                                .font(.subheadline.weight(.regular))
+                                .foregroundStyle(Color.black.opacity(0.88))
+                                .lineLimit(2 ... 12)
+                                .multilineTextAlignment(.leading)
+                        }
+                    }
+                    .submitLabel(.done)
+                    .focused($messageFieldFocused)
+                    .onSubmit {
+                        messageFieldFocused = false
+                        onSubmitActivate?()
+                    }
+                    .accessibilityLabel("\(textFieldPlaceholder) Modifiable.")
                 } else {
                     Text(messageBody)
                         .font(.subheadline.weight(.regular))
                         .foregroundStyle(Color.black.opacity(0.88))
-                        .lineLimit(4)
                         .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -2543,19 +2919,8 @@ private struct AutomationCarouselLiquidNotificationBanner: View {
         .padding(.vertical, 12)
         .padding(.horizontal, 14)
         .glassEffect(.regular, cornerRadius: 22)
-        .shadow(color: .black.opacity(colorScheme == .dark ? 0.5 : 0.2), radius: 20, y: 12)
-        .opacity(entrance ? 1 : 0)
-        .offset(y: entrance ? 0 : -38)
-        .scaleEffect(entrance ? 1 : 0.93)
+        .shadow(color: .clear, radius: 0, y: 0)
         .preferredColorScheme(.light)
-        .onAppear { runEntranceIfActive() }
-        .onChange(of: currentPage) { _, new in
-            if new != pageIndex {
-                entrance = false
-            } else {
-                runEntranceIfActive()
-            }
-        }
     }
 
     private var automationIcon: some View {
@@ -2577,37 +2942,6 @@ private struct AutomationCarouselLiquidNotificationBanner: View {
         }
     }
 
-    private func runEntranceIfActive() {
-        guard currentPage == pageIndex else {
-            entrance = false
-            return
-        }
-        entrance = false
-        DispatchQueue.main.async {
-            guard currentPage == pageIndex else { return }
-            withAnimation(.spring(response: 0.55, dampingFraction: 0.76)) {
-                entrance = true
-            }
-            UIImpactFeedbackGenerator(style: .soft).impactOccurred()
-        }
-    }
-}
-
-/// Boutons catégories / envoi sous l’aperçu — iOS 26+ `.glass`, sinon bordure native.
-private struct CampaignGlassCapsuleButtonModifier: ViewModifier {
-    func body(content: Content) -> some View {
-        if #available(iOS 26.0, *) {
-            content
-                .buttonStyle(.glass(.regular))
-                .buttonBorderShape(.capsule)
-                .controlSize(.small)
-        } else {
-            content
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .tint(AppTheme.Colors.primary.opacity(0.55))
-        }
-    }
 }
 
 #if DEBUG
@@ -2615,6 +2949,8 @@ private struct CampaignGlassCapsuleButtonModifier: ViewModifier {
     NavigationStack {
         CampaignNotificationsView(context: PersistenceController.preview.container.viewContext)
             .environmentObject(SyncService(container: PersistenceController.preview.container))
+            .environmentObject(MainTabRouter())
+            .environmentObject(AuthService())
     }
 }
 #endif

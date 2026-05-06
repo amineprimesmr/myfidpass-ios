@@ -145,3 +145,39 @@ struct SocialMetricsManualPayload: Encodable {
     let reviewsCount: Int?
     let rating: Double?
 }
+
+// MARK: - Missions réseaux sociaux (config par pseudo)
+
+struct SocialMissionConfig: Codable {
+    var enabled: Bool
+    var username: String
+    var url: String
+    var points: Int
+}
+
+struct SocialMissionsResponse: Codable {
+    var instagram: SocialMissionConfig?
+    var tiktok: SocialMissionConfig?
+    var facebook: SocialMissionConfig?
+    var twitter: SocialMissionConfig?
+}
+
+struct SocialMissionsPatchItem: Encodable {
+    var username: String
+    var enabled: Bool
+    var points: Int
+}
+
+struct SocialMissionsPatchPayload: Encodable {
+    var instagram: SocialMissionsPatchItem?
+    var tiktok: SocialMissionsPatchItem?
+    var facebook: SocialMissionsPatchItem?
+    var twitter: SocialMissionsPatchItem?
+}
+
+struct SocialMissionsStatsResponse: Codable {
+    var instagram: Int?
+    var tiktok: Int?
+    var facebook: Int?
+    var twitter: Int?
+}

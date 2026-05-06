@@ -44,6 +44,10 @@ struct CafeDesArtsCardPreview: View {
     var stripDisplayMode: String? = nil
     var stripText: String? = nil
     var stampEmoji: String? = nil
+    /// Tampon importé (brouillon `data:image/…`) — prioritaire sur le catalogue pour l’aperçu.
+    var stampIconDataURL: String? = nil
+    /// Tampon enregistré côté API (`…/stamp-icon`) lorsqu’il n’y a pas de brouillon local.
+    var stampIconRemoteURL: URL? = nil
     var cardBackgroundImagePath: String? = nil
     var cardBackgroundRemoteURL: String? = nil
     var labelColorHex: String? = nil
@@ -61,6 +65,8 @@ struct CafeDesArtsCardPreview: View {
     var fidelityQRPayloadURL: String? = nil
     /// Pastilles « Configurer » (complétion Ma carte).
     var completionHighlightZones: Set<CardPreviewEditZone> = []
+    /// Mode scanner: n'affiche que la grille de tampons.
+    var stampsOnly: Bool = false
 
     private var primaryColor: Color { Color(hex: primaryColorHex) }
     private var bandeauColor: Color { stripColorHex.flatMap { Color(hex: $0) } ?? primaryColor }
@@ -192,19 +198,38 @@ struct CafeDesArtsCardPreview: View {
         .animation(.easeOut(duration: 0.2), value: completionHighlightZones.count)
     }
 
+    @ViewBuilder
     private func cardContent(cardWidth: CGFloat) -> some View {
-        VStack(spacing: 0) {
-            // zIndex : bandeau image au-dessus du corps si le layout chevauche (évite tampons / texte « par-dessus » la photo).
-            headerSection(cardWidth: cardWidth)
-                .zIndex(2)
-            cardBackgroundBannerSection(cardWidth: cardWidth)
-                .zIndex(1)
-            stampsBodySection(cardWidth: cardWidth)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                .zIndex(0)
-            qrSection(cardWidth: cardWidth)
-                .zIndex(0)
+        if stampsOnly {
+            stampsOnlySection(cardWidth: cardWidth)
+        } else {
+            VStack(spacing: 0) {
+                // zIndex : bandeau image au-dessus du corps si le layout chevauche (évite tampons / texte « par-dessus » la photo).
+                headerSection(cardWidth: cardWidth)
+                    .zIndex(2)
+                cardBackgroundBannerSection(cardWidth: cardWidth)
+                    .zIndex(1)
+                stampsBodySection(cardWidth: cardWidth)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .zIndex(0)
+                qrSection(cardWidth: cardWidth)
+                    .zIndex(0)
+            }
         }
+    }
+
+    private func stampsOnlySection(cardWidth: CGFloat) -> some View {
+        let fullHeight = max(1, cardWidth / walletCardAspectRatio)
+        // En scan "tampons only", on évite un grand aplat vide:
+        // la grille occupe une bande centrale plus compacte.
+        let compactGridHeight = max(110, min(fullHeight * (compact ? 0.56 : 0.62), compact ? 170 : 220))
+        let insetH: CGFloat = compact ? 14 : 18
+        return ZStack {
+            primaryColor
+            stampGridBannerFitted(cardWidth: cardWidth, bannerHeight: compactGridHeight, horizontalInset: insetH)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func cafeBannerHeight(cardWidth: CGFloat) -> CGFloat {
@@ -353,6 +378,7 @@ struct CafeDesArtsCardPreview: View {
     }
 
     private func rewardIconKey(for index: Int, total: Int) -> String? {
+        if stampsOnly { return nil }
         if total >= 10 && index == 9 { return "giftgold" }
         if total >= 5 && index == 4 { return "giftsilver" }
         return nil
@@ -376,18 +402,33 @@ struct CafeDesArtsCardPreview: View {
                 .grayscale(giftInColor ? 0 : 1)
                 .opacity(giftInColor ? 1 : 0.44)
         } else {
-            let trimmed = stampEmoji?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if !trimmed.isEmpty {
-                StampIconView(stampEmoji: trimmed, size: size, tint: tint)
-                    .frame(width: size, height: size)
-                    .grayscale(slotFilled ? 0 : 1)
-                    .opacity(slotFilled ? 1 : 0.44)
-            } else if slotFilled {
-                RoundedRectangle(cornerRadius: size * 0.12, style: .continuous)
-                    .fill(tint.opacity(0.95))
-                    .frame(width: size, height: size)
+            let dataTrim = stampIconDataURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let hasCustomVisual = !dataTrim.isEmpty || stampIconRemoteURL != nil
+            if hasCustomVisual {
+                StampIconDisplayView(
+                    dataURL: dataTrim.isEmpty ? nil : dataTrim,
+                    remoteURL: dataTrim.isEmpty ? stampIconRemoteURL : nil,
+                    catalogEmoji: stampEmoji,
+                    size: size,
+                    tint: tint
+                )
+                .frame(width: size, height: size)
+                .grayscale(slotFilled ? 0 : 1)
+                .opacity(slotFilled ? 1 : 0.44)
             } else {
-                emptyStampSquare(size: size)
+                let trimmed = stampEmoji?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                if !trimmed.isEmpty {
+                    StampIconView(stampEmoji: trimmed, size: size, tint: tint)
+                        .frame(width: size, height: size)
+                        .grayscale(slotFilled ? 0 : 1)
+                        .opacity(slotFilled ? 1 : 0.44)
+                } else if slotFilled {
+                    RoundedRectangle(cornerRadius: size * 0.12, style: .continuous)
+                        .fill(tint.opacity(0.95))
+                        .frame(width: size, height: size)
+                } else {
+                    emptyStampSquare(size: size)
+                }
             }
         }
     }

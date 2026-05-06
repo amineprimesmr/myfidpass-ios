@@ -302,11 +302,14 @@ private struct EngagementFormState: Equatable {
 /// Feuille unique pour les réseaux qui nécessitent une saisie manuelle.
 private enum MerchantEstablishmentActiveSheet: Identifiable {
     case socialEdit(SocialLinkMode, String)
+    case socialMissions
 
     var id: String {
         switch self {
         case .socialEdit(let mode, let label):
             return "social-\(label)-\(String(describing: mode))"
+        case .socialMissions:
+            return "social-missions"
         }
     }
 }
@@ -411,6 +414,7 @@ struct MerchantEstablishmentForm: View {
                     emptyStateHighlightsConfigureButton: true
                 )
                 googleCommerceConfigureButton
+                connectSocialNetworksButton
             } else {
                 socialGoogleRow()
             }
@@ -602,11 +606,6 @@ struct MerchantEstablishmentForm: View {
                 }
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .myfidpassRemoteSyncDidMerge)) { _ in
-            if !sections.useGoogleCommerceDashboard {
-                Task { await loadGoogleMetricsSnapshot() }
-            }
-        }
         .onReceive(NotificationCenter.default.publisher(for: .myfidpassOpenGoogleBusinessSetupSheet)) { _ in
             runEngagementOAuth(.googleBusiness)
         }
@@ -642,6 +641,12 @@ struct MerchantEstablishmentForm: View {
                                 .fontWeight(.semibold)
                         }
                     }
+                }
+            case .socialMissions:
+                if let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines), !slug.isEmpty {
+                    SocialMissionsSheet(slug: slug)
+                } else {
+                    Text("Commerce non chargé").padding()
                 }
             }
         }
@@ -1048,6 +1053,46 @@ struct MerchantEstablishmentForm: View {
             )
         }
         .padding(.top, 8)
+    }
+
+    /// Bouton "Connecter mes réseaux" — ouvre SocialMissionsSheet (Instagram, TikTok, Facebook, X).
+    private var connectSocialNetworksButton: some View {
+        Button {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            activeSheet = .socialMissions
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "person.2.wave.2.fill")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(AppTheme.Colors.primary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Connecter mes réseaux")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(AppTheme.Colors.textPrimary)
+                    Text("Instagram, TikTok, Facebook, X — missions & points clients")
+                        .font(.caption2)
+                        .foregroundStyle(AppTheme.Colors.textSecondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(AppTheme.Colors.textSecondary.opacity(0.9))
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(AppTheme.Colors.primary.opacity(0.07))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(AppTheme.Colors.primary.opacity(0.18), lineWidth: 1)
+        )
     }
 
     /// Ligne Google : logo seul à gauche, capsule note + avis à droite (pas de libellé « Google », pas de Place ID).

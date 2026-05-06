@@ -1,9 +1,7 @@
 //
 //  FlyerNativeUnderlayStack.swift
-//  myfidpass
 //
-//  Fond de flyer (dégradé + photo IA + voile) aligné sur `et()` dans
-//  `app-flyer-qr-draw` : sous WKWebView quand le canvas n’est pas rempli (skip) et qu’on affiche le PNG en UIImage natif.
+//  Fond de flyer (dégradé + photo IA + voile) — **sans** empilement d’ombres / lumières agressif.
 //
 
 import SwiftUI
@@ -12,35 +10,84 @@ struct FlyerNativeUnderlayStack: View {
     let state: FlyerStateDTO
     let image: UIImage
 
-    private var topOverlayOpacity: Double {
-        min(0.9, max(0, Double(state.flyerBgOverlayPct) / 100.0 * 0.88))
+    private var resolvedBaseColor: Color {
+        let p = state.colorPrimary.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !p.isEmpty { return Color(hex: p) }
+        return Color(hex: state.colorBgTop)
     }
 
-    private var bottomOverlayOpacity: Double {
-        min(0.95, max(0, Double(state.flyerBgOverlayPct) / 100.0 * 0.95))
+    private var resolvedTopColor: Color {
+        Color(hex: state.colorBgTop)
+    }
+
+    private var resolvedBottomColor: Color {
+        Color(hex: state.colorBgBottom)
     }
 
     var body: some View {
         ZStack {
-            LinearGradient(
-                colors: [Color(hex: state.colorBgTop), Color(hex: state.colorBgBottom)],
-                startPoint: .top,
-                endPoint: .bottom
+            RadialGradient(
+                colors: [
+                    resolvedTopColor,
+                    resolvedBaseColor,
+                    resolvedBottomColor
+                ],
+                center: UnitPoint(x: 0.5, y: 0.5),
+                startRadius: 0,
+                endRadius: 740
+            )
+            RadialGradient(
+                colors: [
+                    Color.white.opacity(0.18),
+                    Color.white.opacity(0.08),
+                    .clear
+                ],
+                center: UnitPoint(x: 0.5, y: 0.48),
+                startRadius: 0,
+                endRadius: 500
+            )
+            RadialGradient(
+                colors: [
+                    .clear,
+                    Color.black.opacity(0.22)
+                ],
+                center: UnitPoint(x: 0.5, y: 0.5),
+                startRadius: 120,
+                endRadius: 800
             )
             Image(uiImage: image)
                 .resizable()
-                .scaledToFit()
-            if state.flyerBgOverlayPct > 0.5 {
+                .scaledToFill()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
+                .overlay(
+                    Rectangle()
+                        .fill(.ultraThinMaterial)
+                        .opacity(0.07)
+                )
+            ZStack {
                 LinearGradient(
                     colors: [
-                        Color(hex: state.colorBgTop).opacity(topOverlayOpacity),
-                        Color(hex: state.colorBgBottom).opacity(bottomOverlayOpacity)
+                        Color.white.opacity(0.1),
+                        Color.white.opacity(0.02),
+                        Color.clear
+                    ],
+                    startPoint: .top,
+                    endPoint: UnitPoint(x: 0.5, y: 0.45)
+                )
+                .blendMode(.screen)
+                LinearGradient(
+                    colors: [
+                        Color.clear,
+                        Color.black.opacity(0.05)
                     ],
                     startPoint: .top,
                     endPoint: .bottom
                 )
-                .allowsHitTesting(false)
+                .blendMode(.multiply)
             }
+            .allowsHitTesting(false)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }

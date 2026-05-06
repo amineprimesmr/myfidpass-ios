@@ -8,10 +8,12 @@
 	</array>
 	<key>UIUserInterfaceStyle</key>
 	<string>Light</string>
-	<key>RevenueCatPublicAPIKey</key>
-	<string>appl_RFGGBrpEtFSSMMqeNCuTHAaliRU</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>MyFidpass utilise votre position lorsque vous appuyez sur « Utiliser ma position » sur la carte du périmètre : pour placer votre commerce et définir le rayon des notifications de proximité affichées sur la carte Wallet de vos clients. La position n’est pas collectée en arrière-plan pour d’autres usages.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Pour remplir le message par la voix lorsque vous appuyez sur le microphone (dictée).</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Le microphone sert à la dictée vocale du message de notification.</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>

@@ -114,7 +114,7 @@ extension View {
         liquidGlassButtonAppearance(.adaptive, cornerRadius: 20)
     }
 
-    /// Verre **sombre** via l’API native `Glass.regular.tint(...)` (onboarding clair : préférer `glassStyle()` adaptatif).
+    /// Verre **sombre** via l’API native `Glass.regular.tint(...)` — boutons sur fond **clair** (accueil auth, onboarding).
     @ViewBuilder
     func glassStyleDark(cornerRadius: CGFloat = 20) -> some View {
         liquidGlassButtonAppearance(.regularTint(LiquidGlassNativeTint.darkRegular), cornerRadius: cornerRadius)
@@ -382,5 +382,55 @@ private struct TopBarLiquidGlassPressableStyle: ButtonStyle {
             .scaleEffect(configuration.isPressed ? 0.985 : 1)
             .opacity(configuration.isPressed ? 0.92 : 1)
             .animation(.spring(response: 0.22, dampingFraction: 0.8), value: configuration.isPressed)
+    }
+}
+
+// MARK: - Teaser Pro (stats floutées, envoi notif)
+
+/// Bouton verre + cadenas : courte animation « déverrouillage » puis ouverture du paywall (callback).
+struct MerchantProUnlockTeaserButton: View {
+    /// `true` sur fond sombre / overlay Commerce : verre teinté sombre + texte clair.
+    var preferDarkGlassTint: Bool = false
+    let onUnlockRequested: () -> Void
+
+    @State private var lockOpen = false
+
+    var body: some View {
+        Button {
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            withAnimation(.spring(response: 0.34, dampingFraction: 0.78)) {
+                lockOpen = true
+            }
+            onUnlockRequested()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.58) {
+                withAnimation(.easeOut(duration: 0.22)) {
+                    lockOpen = false
+                }
+            }
+        } label: {
+            HStack(alignment: .center, spacing: 10) {
+                Image(systemName: lockOpen ? "lock.open.fill" : "lock.fill")
+                    .font(.system(size: 17, weight: .semibold))
+                    .symbolRenderingMode(.hierarchical)
+                    .contentTransition(.symbolEffect(.replace))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Déverrouiller avec Pro")
+                        .font(.system(size: 15, weight: .semibold))
+                    Text("Stats complètes & envois")
+                        .font(.system(size: 11, weight: .medium))
+                        .opacity(0.9)
+                }
+                .multilineTextAlignment(.leading)
+            }
+            .foregroundStyle(preferDarkGlassTint ? Color.white : Color.primary)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+        }
+        .buttonBorderShape(.roundedRectangle(radius: 20))
+        .controlSize(.large)
+        .liquidGlassButtonAppearance(
+            preferDarkGlassTint ? .regularTint(LiquidGlassNativeTint.darkRegular) : .adaptive,
+            cornerRadius: 20
+        )
     }
 }

@@ -55,9 +55,6 @@ struct ScansTodayView: View {
                 .listStyle(.insetGrouped)
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .myfidpassRemoteSyncDidMerge)) { _ in
-            dataService.bumpRefreshAfterRemoteMerge()
-        }
         .navigationTitle("Scans aujourd'hui")
         .navigationBarTitleDisplayMode(.inline)
         .refreshable {

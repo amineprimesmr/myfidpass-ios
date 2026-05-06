@@ -166,9 +166,6 @@ struct MerchantStatisticRevolutDetailScreen: View {
         .task(id: periodKey) {
             await vm.load(period: periodKey)
         }
-        .onReceive(NotificationCenter.default.publisher(for: .myfidpassRemoteSyncDidMerge)) { _ in
-            Task { await vm.load(period: periodKey) }
-        }
     }
 
     private var topToolbar: some View {
@@ -182,7 +179,7 @@ struct MerchantStatisticRevolutDetailScreen: View {
                 chartModeChip(.bar, systemImage: "chart.bar.fill")
                 Button {
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                    Task { await vm.load(period: periodKey) }
+                    Task { await vm.load(period: periodKey, forceRefresh: true) }
                 } label: {
                     Image(systemName: "arrow.clockwise")
                         .font(CommerceStatisticsTheme.statsText(size: 14, weight: .semibold))

@@ -47,7 +47,10 @@ enum SecureTokenStore {
             kSecValueData as String: data,
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
         ]
-        SecItemAdd(query as CFDictionary, nil)
+        let status = SecItemAdd(query as CFDictionary, nil)
+        if status != errSecSuccess {
+            assertionFailure("Keychain write failed: \(status)")
+        }
     }
 
     private static func readItem(account: String) -> String? {

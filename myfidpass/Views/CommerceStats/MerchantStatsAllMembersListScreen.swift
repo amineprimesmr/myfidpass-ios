@@ -155,9 +155,6 @@ struct MerchantStatsAllMembersListScreen: View {
             placement: .navigationBarDrawer(displayMode: .always),
             prompt: "Nom, e-mail, QR…"
         )
-        .onReceive(NotificationCenter.default.publisher(for: .myfidpassRemoteSyncDidMerge)) { _ in
-            dataService.bumpRefreshAfterRemoteMerge()
-        }
         .background(CommerceStatisticsTheme.newMembersSheetBackground)
         .sheet(isPresented: $showFiltersSheet) {
             filterSortSheet

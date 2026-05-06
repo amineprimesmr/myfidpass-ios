@@ -71,7 +71,13 @@ Récupère l’utilisateur connecté et la liste des commerces. Appelé à chaqu
     { "id": "string", "name": "string", "slug": "string", "organization_name": "string?", "created_at": "string?", "dashboard_token": "string?" }
   ],
   "subscription": { "status": "string?", "plan_id": "string?" },
-  "has_active_subscription": true
+  "has_active_subscription": true,
+  "entitlements": {
+    "allowed_businesses": 2,
+    "used_businesses": 1,
+    "can_create_business": true,
+    "billing_provider": "apple | stripe | null"
+  }
 }
 ```
 - L’app prend `businesses[0].slug` pour les appels suivants (dashboard, scan, wallet, notify). **Il faut au moins un commerce.**
@@ -80,6 +86,7 @@ Récupère l’utilisateur connecté et la liste des commerces. Appelé à chaqu
 
 - `user.workspace_role` (optionnel) : si `staff`, l’app **restreint** l’UI (2 onglets : accueil scan + compte) ; si absent, traiter comme `owner`. Pour un employé, **`has_active_subscription` doit être `true` lorsque l’abonnement du commerce est actif** (l’employé ne paie pas la souscription en propre).
 - Toute route sensible (`PATCH` settings, envoi de notifs, flyer, etc.) doit **vérifier le rôle côté serveur** ; l’app seule n’est pas une barrière de sécurité.
+- `entitlements.allowed_businesses` est la source de vérité quota commerces côté app (création / upgrade).
 
 ### 1.1. Équipe (owner / manager uniquement, pas `staff`)
 
@@ -311,6 +318,32 @@ Envoi d’un message par le commerçant à tous les clients qui ont le pass inst
 **Body** : `{ "message": "string" }`
 
 **Réponse** : **200** ou **204** (sans body). Le backend envoie le message aux appareils enregistrés (APNs / mise à jour du pass avec changeMessage).
+
+---
+
+## 7. Création d’un commerce (quota multi-commerce)
+
+### POST /api/businesses
+
+Si le quota est atteint, le backend renvoie:
+
+- `403`
+- `code: "business_quota_reached"`
+- `entitlements` (mêmes champs que dans `GET /api/auth/me`)
+
+Exemple:
+```json
+{
+  "error": "Abonnement requis ou limite de cartes atteinte",
+  "code": "business_quota_reached",
+  "entitlements": {
+    "allowed_businesses": 2,
+    "used_businesses": 2,
+    "can_create_business": false,
+    "billing_provider": "apple"
+  }
+}
+```
 
 ---
 

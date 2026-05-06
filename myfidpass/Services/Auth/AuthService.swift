@@ -16,6 +16,11 @@ enum AuthScreen: Equatable {
     case authenticated
 }
 
+enum AuthIntentMode: String {
+    case signIn = "sign_in"
+    case signUp = "sign_up"
+}
+
 private enum AuthLoadingBootstrapTimeout: Error {
     case exceeded
 }
@@ -44,6 +49,11 @@ final class AuthService: NSObject, ObservableObject {
     @Published private(set) var pendingHomeTutorialAfterSignup = false
     /// Dernière ligne d’abonnement renvoyée par `/me` (pour distinguer paiement Stripe de l’essai gratuit 24 h).
     @Published private(set) var merchantSubscription: SubscriptionDTO?
+    /// Quota multi-commerce calculé côté API (source de vérité entitlements).
+    @Published private(set) var allowedBusinesses: Int = 1
+    @Published private(set) var usedBusinesses: Int = 0
+    @Published private(set) var canCreateBusiness: Bool = true
+    @Published private(set) var entitlementBillingProvider: String?
     /// Fin de la fenêtre d’essai gratuit commerçant (sans abonnement Stripe payant), si applicable.
     @Published private(set) var merchantTrialEndsAt: Date?
     /// Compte `is_admin` : pilotage de tous les commerces via l’API (même slug hors liste « mes » commerces).
@@ -52,8 +62,13 @@ final class AuthService: NSObject, ObservableObject {
     @Published var adminShowsMerchantWorkspace = false
     /// Rôle dans le commerce actif (`user.workspace_role` sur login / `GET /me`). Défaut `owner` si absent.
     @Published private(set) var merchantWorkspaceRole: MerchantWorkspaceRole = .owner
+    /// Verrou global UI pendant un switch multi-commerce (évite les états visuels mélangés).
+    @Published private(set) var isBusinessSwitching = false
+    @Published private(set) var businessSwitchTargetSlug: String?
 
     private var cancellables = Set<AnyCancellable>()
+    private var refreshBusinessesTask: Task<Void, Never>?
+    private var lastAuthMeRefreshAt: Date?
 
     /// Employé (caisse) : interface réduite (pas d’onglet Commerce / Notifs marketing).
     /// S’appuie sur le rôle **et** sur `userStaffLogin` persistant (l’API omet parfois `workspace_role` / `staff_login`).
@@ -77,13 +92,21 @@ final class AuthService: NSObject, ObservableObject {
         return s == "active" || s == "trialing" || s == "past_due"
     }
 
+    /// Déblocage des onglets commerçant : admin, essai applicatif actif, ou abonnement Stripe qualifiant (`GET /me`).
+    func subscriptionAccessUnlocked() -> Bool {
+        if isPlatformAdmin { return true }
+        if mustOpenMandatoryPaywallAfterSignup { return false }
+        if isMerchantTrialPeriodActive { return true }
+        return hasPaidStripeSubscription
+    }
+
     /// Verrou post-inscription : tant que ce flag n’est pas consommé par le paywall,
     /// l’accès doit rester bloqué pour forcer l’étape paiement.
     var mustOpenMandatoryPaywallAfterSignup: Bool {
         pendingMandatoryPaywallAfterSignup
     }
 
-    /// Essai gratuit 3 j **en cours** : la source de vérité est `merchant_trial_ends_at` (non nul côté API tant que pas d’abo Stripe / IAP payant).
+    /// Essai gratuit 3 j **en cours** : la source de vérité est `merchant_trial_ends_at` (non nul côté API tant que pas d’abo Stripe payant).
     /// On ne combine pas avec `hasPaidStripeSubscription` : une ligne locale parasite pourrait masquer la pastille à tort.
     var isMerchantTrialPeriodActive: Bool {
         guard !isPlatformAdmin else { return false }
@@ -176,8 +199,30 @@ final class AuthService: NSObject, ObservableObject {
             merchantWorkspaceRole = .owner
             pendingMandatoryPaywallAfterSignup = false
             pendingHomeTutorialAfterSignup = false
+            isBusinessSwitching = false
+            businessSwitchTargetSlug = nil
+            allowedBusinesses = 1
+            usedBusinesses = 0
+            canCreateBusiness = true
+            entitlementBillingProvider = nil
             UserDefaults.standard.removeObject(forKey: merchantTrialEndIsoUserDefaultsKey)
+            refreshWelcomeSignupEstablishmentContext()
         }
+    }
+
+    /// Au retour sur l’accueil auth : réhydrate lieu depuis cache / sauvegarde ; si contexte d’inscription incohérent, renvoie à l’étape « votre commerce ».
+    func refreshWelcomeSignupEstablishmentContext() {
+        guard currentScreen == .welcome else { return }
+        FirstLaunchOnboarding.rehydratePendingEstablishmentFromAllSourcesIfNeeded()
+        if FirstLaunchOnboarding.shouldRewindToMerchantPremisesSelectionAfterRehydration() {
+            rewindWelcomeMerchantPremisesAfterLostEstablishmentContext()
+        }
+    }
+
+    /// Après erreur OAuth « commerce manquant » ou perte de contexte : première étape onboarding.
+    func rewindWelcomeMerchantPremisesAfterLostEstablishmentContext() {
+        FirstLaunchOnboarding.rewindToMerchantPremisesSelectionForFreshCommercePick()
+        firstLaunchOnboardingRestartEpoch += 1
     }
 
     func markMandatoryPaywallAfterSignupPending() {
@@ -190,6 +235,17 @@ final class AuthService: NSObject, ObservableObject {
     func clearMandatoryPaywallAfterSignupPending() {
         AuthStorage.pendingOpenMerchantSubscriptionSheetAfterSignup = false
         pendingMandatoryPaywallAfterSignup = false
+        // Certains providers OAuth (Google, email) ne renvoient pas merchant_trial_ends_at, ou la date est expirée.
+        // Sans essai actif, subscriptionAccessUnlocked reste false après clearing → paywall obligatoire se réaffiche en boucle.
+        if !isPlatformAdmin,
+           !hasPaidStripeSubscription,
+           merchantTrialEndsAt.map({ $0 < Date() }) ?? true,
+           let end = Calendar.current.date(byAdding: .day, value: 3, to: Date()) {
+            merchantTrialEndsAt = end
+            let f = ISO8601DateFormatter()
+            f.formatOptions = [.withInternetDateTime]
+            Self.persistMerchantTrialEndIsoFromServer(f.string(from: end))
+        }
     }
 
     func consumePendingHomeTutorialAfterSignup() -> Bool {
@@ -222,7 +278,24 @@ final class AuthService: NSObject, ObservableObject {
     /// Recharge la liste des commerces (ex. au retour de l’app).
     /// Important : si on ne peut pas appeler `/me`, il faut quand même marquer l’état abonnement comme « résolu »,
     /// sinon `RootView` reste bloquée sur « Chargement du compte… » (ex. `isLoggedIn` vrai mais JWT absent).
-    func refreshBusinessesIfNeeded() async {
+    func refreshBusinessesIfNeeded(force: Bool = false) async {
+        if !force, let last = lastAuthMeRefreshAt, Date().timeIntervalSince(last) < 2.5 {
+            return
+        }
+        if let inFlight = refreshBusinessesTask {
+            await inFlight.value
+            return
+        }
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.performRefreshBusinessesIfNeeded()
+        }
+        refreshBusinessesTask = task
+        await task.value
+        refreshBusinessesTask = nil
+    }
+
+    private func performRefreshBusinessesIfNeeded() async {
         guard AuthStorage.isLoggedIn else { return }
 
         let accessEmpty = APIClient.shared.authToken?.isEmpty != false
@@ -232,6 +305,7 @@ final class AuthService: NSObject, ObservableObject {
 
         guard APIClient.shared.authToken != nil, !(APIClient.shared.authToken ?? "").isEmpty else {
             applySubscriptionGateState(active: false, markResolved: true)
+            finishBusinessSwitch()
             return
         }
 
@@ -240,10 +314,13 @@ final class AuthService: NSObject, ObservableObject {
                 try await APIClient.shared.request(.authMe)
             }
             applyAuthMeResponse(me)
+            lastAuthMeRefreshAt = Date()
         } catch {
             // Ne pas remettre l’abonnement à « inactif » sur erreur réseau, timeout ou échec de décodage :
             // cela affichait la bannière « mode découverte » alors que l’utilisateur avait déjà payé.
             merchantSubscriptionEligibilityResolved = true
+            lastAuthMeRefreshAt = Date()
+            finishBusinessSwitch()
         }
     }
 
@@ -275,19 +352,6 @@ final class AuthService: NSObject, ObservableObject {
         } catch {
             // réseau / Stripe : on ne bloque pas l’UI
         }
-    }
-
-    /// Après achat / restore in-app (RevenueCat) : pousse l’état côté API pour que le JWT / `has_active_subscription` suive l’IAP, sans n’attendre que le webhook.
-    @MainActor
-    func syncRevenueCatSubscriptionWithServerAfterPurchase() async {
-        guard AuthStorage.isLoggedIn else { return }
-        guard APIClient.shared.authToken != nil, !(APIClient.shared.authToken ?? "").isEmpty else { return }
-        do {
-            let _: AuthRevenueCatSyncResponse = try await APIClient.shared.request(.authRevenueCatSync)
-        } catch {
-            // rétro-réseau : on tente quand même `/me`
-        }
-        await refreshBusinessesIfNeeded()
     }
 
     /// Évite un spinner infini si `GET /api/auth/me` reste suspendu (réseau / proxy).
@@ -338,6 +402,7 @@ final class AuthService: NSObject, ObservableObject {
         }
         hasActiveMerchantSubscription = Self.isMerchantSubscriptionActive(me)
         merchantSubscription = me.subscription
+        applyMerchantEntitlements(me.entitlements)
         merchantTrialEndsAt = Self.parseMerchantTrialEnd(me.merchantTrialEndsAt)
         Self.persistMerchantTrialEndIsoFromServer(me.merchantTrialEndsAt)
         merchantSubscriptionEligibilityResolved = true
@@ -348,6 +413,7 @@ final class AuthService: NSObject, ObservableObject {
         applyWorkspaceRole(from: me.user)
         alignMerchantRoleWithPersistedStaffSession()
         syncAccountDisplayLineForSession()
+        finishBusinessSwitch()
     }
 
     /// Aligné sur le backend : `has_active_subscription` ou statut Stripe `subscription.status`.
@@ -367,6 +433,16 @@ final class AuthService: NSObject, ObservableObject {
 
     private static func isMerchantSubscriptionActive(_ me: AuthMeResponse) -> Bool {
         isMerchantSubscriptionActive(hasExplicit: me.hasActiveSubscription, subscription: me.subscription)
+    }
+
+    private func applyMerchantEntitlements(_ ent: MerchantEntitlementsDTO?) {
+        let allowed = max(1, ent?.allowedBusinesses ?? 1)
+        let used = max(0, ent?.usedBusinesses ?? businesses.count)
+        allowedBusinesses = allowed
+        usedBusinesses = used
+        canCreateBusiness = ent?.canCreateBusiness ?? (used < allowed)
+        let provider = ent?.billingProvider?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        entitlementBillingProvider = provider.isEmpty ? nil : provider
     }
 
     private func applyWorkspaceRole(from user: AuthUser) {
@@ -452,8 +528,25 @@ final class AuthService: NSObject, ObservableObject {
             subscription: response.subscription
         )
         merchantSubscription = response.subscription
+        applyMerchantEntitlements(response.entitlements)
         merchantTrialEndsAt = Self.parseMerchantTrialEnd(response.merchantTrialEndsAt)
         Self.persistMerchantTrialEndIsoFromServer(response.merchantTrialEndsAt)
+        /// Si l’API n’envoie pas `merchant_trial_ends_at` au tout premier login (register / Google navigateur),
+        /// `isMerchantTrialPeriodActive` restait faux → paywall obligatoire sans croix + bandeau « Se déconnecter » incohérent.
+        /// Aligné sur l’essai 3 j. côté produit : date locale de repli uniquement tant que le verrou post-inscription est actif.
+        let staffLike = !(response.user.staffLogin?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "").isEmpty
+            || loginByIdentifierNotEmail
+        if pendingMandatoryPaywallAfterSignup,
+           !hasActiveMerchantSubscription,
+           merchantTrialEndsAt == nil,
+           response.user.isAdmin != true,
+           !staffLike,
+           let end = Calendar.current.date(byAdding: .day, value: 3, to: Date()) {
+            merchantTrialEndsAt = end
+            let f = ISO8601DateFormatter()
+            f.formatOptions = [.withInternetDateTime]
+            Self.persistMerchantTrialEndIsoFromServer(f.string(from: end))
+        }
         merchantSubscriptionEligibilityResolved = true
         isPlatformAdmin = response.user.isAdmin == true
         if !isPlatformAdmin {
@@ -467,36 +560,68 @@ final class AuthService: NSObject, ObservableObject {
     }
 
     /// Change le commerce actif (multi-cartes). En admin plateforme, tout slug valide côté API est accepté.
-    func selectBusiness(slug: String) {
+    /// - `showSwitchingOverlay`: `true` quand un écran enchaîne avec `Task { defer { finishBusinessSwitch() } }` (Accueil, Notifs, Commerce).
+    ///   `false` après création commerce / réglages sans ce `defer`, sinon `isBusinessSwitching` reste vrai et l’app **freeze** (overlay + hit testing coupé).
+    func selectBusiness(slug: String, showSwitchingOverlay: Bool = true) {
         let trimmed = slug.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         if !isPlatformAdmin {
             guard businesses.contains(where: { $0.slug == trimmed }) else { return }
         }
+        if showSwitchingOverlay, AuthStorage.currentBusinessSlug != trimmed {
+            beginBusinessSwitch(to: trimmed)
+        }
         ScanFlowSettingsCache.clearAll()
         AuthStorage.currentBusinessSlug = trimmed
     }
 
-    /// Indique si un compte existe : e-mail (`POST /api/auth/check-email`) ou identifiant employé (`POST /api/auth/check-identifier`).
+    /// Si `POST …/create-from-place` renvoie déjà la liste complète, on l’applique tout de suite (tokens + Core Data).
+    func applyImmediateBusinessesFromCreationIfNeeded(_ list: [BusinessDTO]?) {
+        guard let list, !list.isEmpty else { return }
+        AuthStorage.mergeDashboardTokens(from: list)
+        businesses = list
+        DataService.seedBusinessesFromAuth(list, context: PersistenceController.shared.container.viewContext)
+    }
+
+    /// Quand `/me` arrive en retard : garde le slug créé dans `businesses` pour que `selectBusiness` et la sync fonctionnent.
+    func ensurePendingCreatedBusinessVisibleLocally(slug: String, displayName: String, dashboardToken: String?) {
+        let trimmed = slug.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !isPlatformAdmin else { return }
+        if businesses.contains(where: { $0.slug == trimmed }) { return }
+        let stub = BusinessDTO.localPendingStub(slug: trimmed, displayName: displayName, dashboardToken: dashboardToken)
+        AuthStorage.mergeDashboardTokens(from: [stub])
+        businesses.append(stub)
+        DataService.seedBusinessesFromAuth([stub], context: PersistenceController.shared.container.viewContext)
+    }
+
+    @MainActor
+    func beginBusinessSwitch(to slug: String) {
+        let trimmed = slug.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        businessSwitchTargetSlug = trimmed
+        isBusinessSwitching = true
+    }
+
+    @MainActor
+    func finishBusinessSwitch() {
+        isBusinessSwitching = false
+        businessSwitchTargetSlug = nil
+    }
+
+    /// Indique si un compte existe : `check-email` puis `check-identifier` en secours ; lecture JSON souple côté `APIClient` (évite « Erreur réseau » si `Codable` échoue).
     func checkAccountExists(identifier: String) async throws -> Bool {
-        struct CheckEmailResponse: Decodable {
-            let accountExists: Bool
-        }
         let norm = identifier.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !norm.isEmpty else { throw AuthError.invalidCredentials }
         do {
-            if norm.contains("@") {
-                let r: CheckEmailResponse = try await APIClient.shared.request(
-                    .authCheckEmail(email: norm),
-                    responseType: CheckEmailResponse.self
+            return try await APIClient.shared.fetchAccountExistsProbe(identifier: norm)
+        } catch let e as APIError {
+            if case .server(let code, let msg) = e, code == 429 {
+                let cleaned = msg?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                throw AuthError.apiMessage(
+                    cleaned.isEmpty ? "Trop de vérifications. Réessayez dans quelques minutes." : cleaned
                 )
-                return r.accountExists
             }
-            let r: CheckEmailResponse = try await APIClient.shared.request(
-                .authCheckIdentifier(identifier: norm),
-                responseType: CheckEmailResponse.self
-            )
-            return r.accountExists
+            throw AuthError.networkError
         } catch {
             throw AuthError.networkError
         }
@@ -511,6 +636,7 @@ final class AuthService: NSObject, ObservableObject {
         establishmentName: String? = nil
     ) async throws {
         guard !email.isEmpty, password.count >= 8 else { throw AuthError.invalidCredentials }
+        FirstLaunchOnboarding.rehydratePendingEstablishmentFromAllSourcesIfNeeded()
         let pending = FirstLaunchOnboarding.readPendingEstablishment()
         let trimmedPlaceId = googlePlaceId?.trimmingCharacters(in: .whitespacesAndNewlines)
         var placeIdForAPI = (trimmedPlaceId?.isEmpty == false) ? trimmedPlaceId : nil
@@ -522,6 +648,12 @@ final class AuthService: NSObject, ObservableObject {
             guard let r = raw, !r.isEmpty else { return nil }
             return r.count > 100 ? String(r.prefix(100)) : r
         }()
+        let allPendingEstablishments = FirstLaunchOnboarding.readPendingEstablishments()
+        let establishmentsPayload = allPendingEstablishments.isEmpty
+            ? nil
+            : allPendingEstablishments.map {
+                AuthEstablishmentPayload(googlePlaceId: $0.placeId, establishmentName: $0.description)
+            }
         do {
             let response: AuthLoginResponse = try await APIClient.shared.request(
                 .authRegister(
@@ -529,13 +661,16 @@ final class AuthService: NSObject, ObservableObject {
                     password: password,
                     name: name,
                     googlePlaceId: placeIdForAPI,
-                    establishmentName: establishmentForAPI
+                    establishmentName: establishmentForAPI,
+                    establishments: establishmentsPayload
                 )
             )
             MerchantLinkedPlaceCache.snapshotFromPendingOnboarding()
             FirstLaunchOnboarding.clearPendingEstablishmentFromOnboarding()
             markMandatoryPaywallAfterSignupPending()
             applyAuthSuccess(response)
+        } catch APIError.businessPlaceAlreadyLinked(let message) {
+            throw AuthError.apiMessage(message)
         } catch let e as APIError {
             if case .server(let code, _) = e, code == 409 {
                 throw AuthError.emailAlreadyUsed
@@ -582,11 +717,23 @@ final class AuthService: NSObject, ObservableObject {
 
     /// Vérifie le code reçu par SMS et ouvre la session. Nouveau compte : même sélection d’établissement que pour Apple / Google.
     func verifyPhoneAndSignIn(phone: String, code: String) async throws {
+        FirstLaunchOnboarding.rehydratePendingEstablishmentFromAllSourcesIfNeeded()
         let pending = FirstLaunchOnboarding.readPendingEstablishment()
+        let allPendingEstablishments = FirstLaunchOnboarding.readPendingEstablishments()
         let placeId = pending.placeId
         let estName = pending.description?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? pending.description : nil
         let response: AuthLoginResponse = try await APIClient.shared.request(
-            .authPhoneVerify(phone: phone, code: code, googlePlaceId: placeId, establishmentName: estName)
+            .authPhoneVerify(
+                phone: phone,
+                code: code,
+                googlePlaceId: placeId,
+                establishmentName: estName,
+                establishments: allPendingEstablishments.isEmpty
+                    ? nil
+                    : allPendingEstablishments.map {
+                        AuthEstablishmentPayload(googlePlaceId: $0.placeId, establishmentName: $0.description)
+                    }
+            )
         )
         AuthStorage.authProvider = .phone
         let isNewPhoneSignup = (placeId != nil || estName != nil)
@@ -599,13 +746,33 @@ final class AuthService: NSObject, ObservableObject {
     }
 
     /// Connexion Apple. POST /api/auth/apple avec idToken (JWT). L’app envoie credential.identityToken.
-    func loginWithApple(idToken: String, name: String?, email: String?, appleUserIdentifier: String? = nil) async throws {
+    func loginWithApple(
+        idToken: String,
+        name: String?,
+        email: String?,
+        appleUserIdentifier: String? = nil,
+        intent: AuthIntentMode = .signIn
+    ) async throws {
+        FirstLaunchOnboarding.rehydratePendingEstablishmentFromAllSourcesIfNeeded()
         let pending = FirstLaunchOnboarding.readPendingEstablishment()
+        let allPendingEstablishments = FirstLaunchOnboarding.readPendingEstablishments()
         let placeId = pending.placeId
         let estName = pending.description?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? pending.description : nil
         do {
             let response: AuthLoginResponse = try await APIClient.shared.request(
-                .authApple(idToken: idToken, name: name, email: email, googlePlaceId: placeId, establishmentName: estName)
+                .authApple(
+                    idToken: idToken,
+                    name: name,
+                    email: email,
+                    googlePlaceId: placeId,
+                    establishmentName: estName,
+                    establishments: allPendingEstablishments.isEmpty
+                        ? nil
+                        : allPendingEstablishments.map {
+                            AuthEstablishmentPayload(googlePlaceId: $0.placeId, establishmentName: $0.description)
+                        },
+                    authIntent: intent.rawValue
+                )
             )
             AuthStorage.authProvider = .apple
             if let uid = appleUserIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines), !uid.isEmpty {
@@ -623,6 +790,8 @@ final class AuthService: NSObject, ObservableObject {
             switch e {
             case .noAccountInLogiciel:
                 throw AuthError.noAccountInLogiciel
+            case .missingEstablishment(let message):
+                throw AuthError.missingEstablishment(message)
             case .server(_, let message):
                 if let m = message?.trimmingCharacters(in: .whitespacesAndNewlines), !m.isEmpty {
                     throw AuthError.apiMessage(m)
@@ -640,11 +809,22 @@ final class AuthService: NSObject, ObservableObject {
 
     /// Connexion Google. POST /api/auth/google avec idToken.
     func loginWithGoogle(idToken: String) async throws {
+        FirstLaunchOnboarding.rehydratePendingEstablishmentFromAllSourcesIfNeeded()
         let pending = FirstLaunchOnboarding.readPendingEstablishment()
+        let allPendingEstablishments = FirstLaunchOnboarding.readPendingEstablishments()
         let placeId = pending.placeId
         let estName = pending.description?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? pending.description : nil
         let response: AuthLoginResponse = try await APIClient.shared.request(
-            .authGoogle(idToken: idToken, googlePlaceId: placeId, establishmentName: estName)
+            .authGoogle(
+                idToken: idToken,
+                googlePlaceId: placeId,
+                establishmentName: estName,
+                establishments: allPendingEstablishments.isEmpty
+                    ? nil
+                    : allPendingEstablishments.map {
+                        AuthEstablishmentPayload(googlePlaceId: $0.placeId, establishmentName: $0.description)
+                    }
+            )
         )
         AuthStorage.authProvider = .google
         let isNewGoogleSignup = (placeId != nil || estName != nil)
@@ -658,14 +838,18 @@ final class AuthService: NSObject, ObservableObject {
 
     /// Applique le JWT reçu après le redirect OAuth Google (myfidpass://auth?token=xxx&refreshToken=yyy), appelle /me puis met à jour la session.
     func applyTokenFromGoogleOAuthCallback(token: String, refreshToken: String?) async throws {
-        // Effacer d’abord toute session locale (ex. compte supprimé côté serveur) pour ne pas mélanger refresh / access avec les jetons OAuth neufs.
-        AuthStorage.authToken = nil
-        AuthStorage.refreshToken = nil
         AuthStorage.authToken = token
-        if let rt = refreshToken, !rt.isEmpty { AuthStorage.refreshToken = rt }
+        if let rt = refreshToken, !rt.isEmpty {
+            AuthStorage.refreshToken = rt
+        } else {
+            AuthStorage.refreshToken = nil
+        }
         AuthStorage.authProvider = .google
         let me: AuthMeResponse = try await APIClient.shared.request(.authMe)
         // L'établissement a été transmis via `state` dans l'URL OAuth et traité côté serveur — on nettoie le UserDefaults.
+        let pendingBeforeClear = FirstLaunchOnboarding.readPendingEstablishment()
+        let hadEstablishmentContext = pendingBeforeClear.placeId != nil
+            || !(pendingBeforeClear.description?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "").isEmpty
         MerchantLinkedPlaceCache.snapshotFromPendingOnboarding()
         FirstLaunchOnboarding.clearPendingEstablishmentFromOnboarding()
         let response = AuthLoginResponse(
@@ -677,12 +861,15 @@ final class AuthService: NSObject, ObservableObject {
             hasActiveSubscription: me.hasActiveSubscription,
             merchantTrialEndsAt: me.merchantTrialEndsAt
         )
-        markMandatoryPaywallAfterSignupPending()
+        if hadEstablishmentContext {
+            markMandatoryPaywallAfterSignupPending()
+        }
         applyAuthSuccess(response)
     }
 
     /// Lance le flux OAuth Google (ouverture navigateur → redirect myfidpass://auth?token=…). En cas d’erreur ou d’annulation, throw.
-    func startGoogleOAuthFlow() async throws {
+    func startGoogleOAuthFlow(intent: AuthIntentMode = .signIn) async throws {
+        FirstLaunchOnboarding.rehydratePendingEstablishmentFromAllSourcesIfNeeded()
         let config: AuthConfigResponse = try await APIClient.shared.request(.authConfig)
         guard let clientId = config.googleClientId, !clientId.isEmpty else {
             throw AuthError.notImplemented
@@ -696,13 +883,17 @@ final class AuthService: NSObject, ObservableObject {
         // `state` : établissement sélectionné dans l'onboarding, transmis au callback pour créer le 1er commerce.
         let pending = FirstLaunchOnboarding.readPendingEstablishment()
         var stateObj: [String: String] = [:]
+        stateObj["mode"] = intent.rawValue
         if let pid = pending.placeId { stateObj["place_id"] = pid }
         if let desc = pending.description?.trimmingCharacters(in: .whitespacesAndNewlines), !desc.isEmpty {
             stateObj["establishment_name"] = desc
         }
         let stateParam: String? = stateObj.isEmpty ? nil : {
-            let data = try? JSONSerialization.data(withJSONObject: stateObj)
-            return data?.base64EncodedString()
+            guard let data = try? JSONSerialization.data(withJSONObject: stateObj) else { return nil }
+            return data.base64EncodedString()
+                .replacingOccurrences(of: "+", with: "-")
+                .replacingOccurrences(of: "/", with: "_")
+                .replacingOccurrences(of: "=", with: "")
         }()
         var queryItems: [URLQueryItem] = [
             URLQueryItem(name: "client_id", value: clientId),
@@ -791,6 +982,16 @@ final class AuthService: NSObject, ObservableObject {
                 throw AuthError.apiMessage("Google n’a pas partagé votre e-mail. Réessayez en autorisant l’accès à l’e-mail.")
             case "no_code":
                 throw AuthError.apiMessage("Connexion Google interrompue. Réessayez.")
+            case "missing_establishment":
+                throw AuthError.missingEstablishment(
+                    "L’inscription Google nécessite un commerce : le contexte a été perdu. Nous vous renvoyons à l’étape de choix du commerce."
+                )
+            case "account_exists":
+                throw AuthError.apiMessage("Un compte existe déjà avec cet identifiant Google. Utilisez Se connecter.")
+            case "business_place_already_linked":
+                throw AuthError.apiMessage(
+                    "Ce commerce est déjà utilisé. Connectez-vous au compte existant ou choisissez un autre commerce."
+                )
             default:
                 throw AuthError.apiMessage("Connexion Google impossible (erreur \(err)).")
             }
@@ -815,7 +1016,7 @@ final class AuthService: NSObject, ObservableObject {
                     .adminBusinesses(q: nil, limit: 1, offset: 0)
                 )
                 if let first = r.businesses.first {
-                    selectBusiness(slug: first.slug)
+                    selectBusiness(slug: first.slug, showSwitchingOverlay: false)
                 }
             } catch {
                 // ignore — l’utilisateur pourra choisir un commerce dans l’onglet Commerces.
@@ -834,6 +1035,8 @@ final class AuthService: NSObject, ObservableObject {
         AuthenticatedMediaLoader.clearAllCaches()
         CardLogoStorage.removeAllLocalCardAssets()
         CardPreviewDisplaySnapshotStore.clearAllSnapshots()
+        CommerceFlyerRasterCache.clearAll()
+        CommerceFlyerStateCache.clearAll()
         // Conserver l’historique local d’envois (UserDefaults) + cache stats disque par slug : mêmes données
         // qu’avant reconnexion — la purge est réservée à `deleteAccount()`.
         // Vider le cache CoreData pour éviter qu'un ancien commerce réapparaisse sur un nouveau compte
@@ -848,6 +1051,10 @@ final class AuthService: NSObject, ObservableObject {
         merchantSubscriptionEligibilityResolved = false
         hasActiveMerchantSubscription = false
         merchantSubscription = nil
+        allowedBusinesses = 1
+        usedBusinesses = 0
+        canCreateBusiness = true
+        entitlementBillingProvider = nil
         merchantTrialEndsAt = nil
         UserDefaults.standard.removeObject(forKey: merchantTrialEndIsoUserDefaultsKey)
         isPlatformAdmin = false
@@ -855,12 +1062,47 @@ final class AuthService: NSObject, ObservableObject {
         merchantWorkspaceRole = .owner
         pendingMandatoryPaywallAfterSignup = false
         pendingHomeTutorialAfterSignup = false
+        isBusinessSwitching = false
+        businessSwitchTargetSlug = nil
         currentScreen = .welcome
     }
 
     /// Supprime définitivement le compte (appel API + déconnexion).
     func deleteAccount() async throws {
-        _ = try await APIClient.shared.request(APIEndpoint.authDeleteAccount) as EmptyResponse
+        var shouldFinalizeLocalReset = false
+        do {
+            _ = try await withLoadingBootstrapTimeout(seconds: 12) {
+                try await APIClient.shared.request(APIEndpoint.authDeleteAccount) as EmptyResponse
+            }
+            shouldFinalizeLocalReset = true
+        } catch APIError.unauthorized {
+            // Compte possiblement déjà invalide côté serveur : on force la purge locale pour débloquer l'utilisateur.
+            shouldFinalizeLocalReset = true
+        } catch APIError.notFound {
+            // Même stratégie si le compte n'existe déjà plus.
+            shouldFinalizeLocalReset = true
+        } catch APIError.server {
+            // Le backend a répondu mais l'état est potentiellement déjà partiellement supprimé :
+            // on force le reset local pour éviter de bloquer l'utilisateur sur l'accueil connecté.
+            shouldFinalizeLocalReset = true
+        } catch APIError.network {
+            // Anti-blocage UX : même sans confirmation serveur, on repart au tout début.
+            // Le backend reste la source de vérité; un échec réseau n'a plus le droit de laisser l'app coincée.
+            shouldFinalizeLocalReset = true
+        } catch AuthLoadingBootstrapTimeout.exceeded {
+            // Timeout suppression : on force aussi le reset local pour éviter l'écran figé.
+            shouldFinalizeLocalReset = true
+        } catch {
+            // Défensif : en cas d'erreur non typée (décodage, etc.), on préfère débloquer l'UX.
+            shouldFinalizeLocalReset = true
+        }
+        if shouldFinalizeLocalReset {
+            finalizeLocalStateAfterAccountDeletion()
+        }
+    }
+
+    @MainActor
+    private func finalizeLocalStateAfterAccountDeletion() {
         if let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines), !slug.isEmpty {
             MerchantStatisticsDiskCache.clear(slug: slug)
         }
@@ -894,9 +1136,8 @@ extension AuthService: ASWebAuthenticationPresentationContextProviding {
                     if let w = scene.windows.first(where: { !$0.isHidden && $0.alpha > 0.01 }) { return w }
                 }
                 if let w = ordered.first?.windows.first { return w }
-                assertionFailure("MyFidpass: aucune UIWindow pour ASWebAuthenticationSession")
                 if let w = scenes.flatMap(\.windows).first(where: { !$0.isHidden }) { return w }
-                preconditionFailure("MyFidpass: aucune fenêtre pour la connexion Google.")
+                fatalError("MyFidpass: aucune fenêtre disponible pour ASWebAuthenticationSession.")
             }
         }
         if Thread.isMainThread {
@@ -912,6 +1153,7 @@ enum AuthError: LocalizedError {
     case notImplemented
     case noAccountInLogiciel
     case emailAlreadyUsed
+    case missingEstablishment(String)
     /// Message renvoyé par l’API (ex. validation Apple JWT).
     case apiMessage(String)
 
@@ -924,6 +1166,7 @@ enum AuthError: LocalizedError {
         case .noAccountInLogiciel:
             return "Aucun compte associé à cet identifiant. Utilisez l’onglet « Inscription » dans l’app pour créer un compte."
         case .emailAlreadyUsed: return "Un compte existe déjà avec cet email."
+        case .missingEstablishment(let message): return message
         case .apiMessage(let s): return s
         }
     }

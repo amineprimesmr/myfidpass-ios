@@ -40,6 +40,8 @@ struct CardPreviewDisplaySnapshot: Codable, Equatable {
     var stampIconPendingBase64: String?
     /// `true` si l’utilisateur a choisi « retirer » l’icône avant enregistrement serveur.
     var stampIconWasRemoved: Bool?
+    /// Tampons : icône personnalisée déjà enregistrée côté API (`has_stamp_icon`) — pour l’accueil / exigences sans rouvrir « Ma carte ».
+    var hasServerStampIcon: Bool?
 }
 
 enum CardPreviewDisplaySnapshotStore {

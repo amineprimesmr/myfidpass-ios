@@ -38,6 +38,18 @@ struct MerchantStatsInsightCalloutModel: Identifiable, Hashable {
 
 @MainActor
 final class MerchantStatsIndicatorsViewModel: ObservableObject {
+    private static let isoWithFractional: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
+    private static let isoBasic: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
+
     @Published private(set) var stats: BusinessStatsResponse?
     @Published private(set) var evolution: [EvolutionWeekDTO] = []
     @Published private(set) var isLoading: Bool = false
@@ -59,8 +71,23 @@ final class MerchantStatsIndicatorsViewModel: ObservableObject {
         let evolution: [EvolutionWeekDTO]
     }
 
+    /// Cache navigation process-wide (évite refetch quand la vue stats est recréée rapidement).
+    private static let navigationCacheLock = NSLock()
+    private static var navigationSnapshotsBySlugPeriod: [String: MonthStatsSnapshot] = [:]
+    private static var navigationLastFetchAtBySlugPeriod: [String: Date] = [:]
+    private static var navigationFetchEpochBySlugPeriod: [String: Int] = [:]
+    /// Invalidation intelligente: incrémentée lors d’une mutation stats; force un refetch même dans le TTL.
+    private static var navigationInvalidationEpochBySlug: [String: Int] = [:]
+
     /// Données API déjà reçues par mois — alimente le carrousel KPI sans dupliquer l’état affiché.
     private var monthSnapshots: [String: MonthStatsSnapshot] = [:]
+    /// Évite les doubles fetch concurrents sur le même mois (task + notification sync).
+    private var inFlightPeriods: Set<String> = []
+    /// Date de dernier fetch API réussi par mois (throttle court).
+    private var lastSuccessfulFetchAtByPeriod: [String: Date] = [:]
+    private let fastReloadThrottle: TimeInterval = 18
+    /// Retour arrière rapide (ouvrir/fermer stats) : ne pas relancer le réseau si déjà frais.
+    private let navigationReuseTTL: TimeInterval = 55
 
     /// Campagnes issues de `GET .../notifications/stats` (souvent renseigné quand `.../dashboard/stats` n’expose pas encore `notification_campaigns`).
     @Published private(set) var notificationCampaignsFromStatsEndpoint: [NotificationCampaignInsightDTO] = []
@@ -114,11 +141,8 @@ final class MerchantStatsIndicatorsViewModel: ObservableObject {
 
     private static func parseISOToDate(_ s: String?) -> Date? {
         guard let s, !s.isEmpty else { return nil }
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let d = f.date(from: s) { return d }
-        f.formatOptions = [.withInternetDateTime]
-        return f.date(from: s)
+        if let d = isoWithFractional.date(from: s) { return d }
+        return isoBasic.date(from: s)
     }
 
     private static func filterMeaningfulNotificationCampaigns(
@@ -182,7 +206,7 @@ final class MerchantStatsIndicatorsViewModel: ObservableObject {
         _ = applyCachedMonthIfAvailable(period: focusPeriod)
     }
 
-    func load(period: String) async {
+    func load(period: String, forceRefresh: Bool = false) async {
         isDemoSixMonthPreviewActive = false
         demoPayloadsByMonth = [:]
 
@@ -198,6 +222,12 @@ final class MerchantStatsIndicatorsViewModel: ObservableObject {
             return
         }
 
+        // Cache mémoire partagé process (écran stats recréé) avant disque.
+        if monthSnapshots[period] == nil,
+           let shared = Self.navigationSharedSnapshot(slug: slug, period: period) {
+            monthSnapshots[period] = shared
+        }
+
         // Cache disque pour ce mois si le carrousel n’a pas déjà tout hydraté.
         if monthSnapshots[period] == nil,
            let c = MerchantStatisticsDiskCache.load(slug: slug, period: period) {
@@ -207,6 +237,27 @@ final class MerchantStatsIndicatorsViewModel: ObservableObject {
             )
         }
         _ = applyCachedMonthIfAvailable(period: period)
+
+        if inFlightPeriods.contains(period) {
+            return
+        }
+        if !forceRefresh,
+           let last = lastSuccessfulFetchAtByPeriod[period],
+           Date().timeIntervalSince(last) < fastReloadThrottle,
+           monthSnapshots[period] != nil {
+            return
+        }
+
+        let currentEpoch = Self.navigationInvalidationEpoch(slug: slug)
+        if !forceRefresh,
+           let lastSharedFetch = Self.navigationSharedLastFetch(slug: slug, period: period),
+           let fetchEpoch = Self.navigationSharedFetchEpoch(slug: slug, period: period),
+           Date().timeIntervalSince(lastSharedFetch) < navigationReuseTTL,
+           monthSnapshots[period] != nil,
+           fetchEpoch == currentEpoch {
+            lastSuccessfulFetchAtByPeriod[period] = lastSharedFetch
+            return
+        }
 
         let hasWarmUIForPeriod = monthSnapshots[period] != nil
             || (stats != nil && Self.monthKey(stats!, matches: period))
@@ -218,27 +269,40 @@ final class MerchantStatsIndicatorsViewModel: ObservableObject {
         }
         // Pas de spinner plein écran tant qu’on peut afficher des agrégés (mémoire ou disque).
         isLoading = !hasWarmUIForPeriod
-        defer { isLoading = false }
+        inFlightPeriods.insert(period)
+        defer {
+            isLoading = false
+            inFlightPeriods.remove(period)
+        }
 
         do {
             let weeks = Self.weeksToRequest(for: period)
+            let shouldRefreshNotificationPayload = forceRefresh || notificationCampaignsFromStatsEndpoint.isEmpty
             async let gotStats: BusinessStatsResponse = try await APIClient.shared.request(.businessStats(slug: slug, period: period))
             async let gotEv: DashboardEvolutionResponse = try await APIClient.shared.request(
                 .businessEvolution(slug: slug, weeks: weeks, period: period)
             )
-            async let notifPayload: NotificationStatsEndpointPayload? = fetchNotificationStatsPayload(slug: slug)
+            async let notifPayload: NotificationStatsEndpointPayload? = shouldRefreshNotificationPayload
+                ? fetchNotificationStatsPayload(slug: slug)
+                : nil
             if isDemoSixMonthPreviewActive { return }
             let (a, b, n) = try await (gotStats, gotEv, notifPayload)
             stats = a
             baselinePanierRepereEUR = a.baselineAvgBasketEur
             evolution = b.evolution
-            let notifCamps = n?.campaigns ?? []
-            notificationCampaignsFromStatsEndpoint = notifCamps
-            NotificationStatsEndpointCache.save(slug: slug, campaigns: notifCamps)
-            await refreshStatsNotificationIcon(slug: slug)
+            if let notifPayload = n {
+                let notifCamps = notifPayload.campaigns
+                notificationCampaignsFromStatsEndpoint = notifCamps
+                NotificationStatsEndpointCache.save(slug: slug, campaigns: notifCamps)
+            }
+            Task { @MainActor in
+                await refreshStatsNotificationIcon(slug: slug)
+            }
             let snap = MonthStatsSnapshot(stats: a, evolution: b.evolution)
             monthSnapshots[period] = snap
             lastSuccessfullyLoadedPeriod = period
+            lastSuccessfulFetchAtByPeriod[period] = Date()
+            Self.navigationStoreSnapshot(snap, slug: slug, period: period, fetchedAt: Date(), epoch: currentEpoch)
             MerchantStatisticsDiskCache.save(
                 slug: slug,
                 period: period,
@@ -257,6 +321,74 @@ final class MerchantStatsIndicatorsViewModel: ObservableObject {
             if stats == nil {
                 evolution = []
             }
+        }
+    }
+
+    /// Mutation métier (ex. repère panier, paramètres impactant stats): invalide le TTL navigation.
+    func markStatsMutation(slug: String, period: String? = nil) {
+        let cleanSlug = slug.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanSlug.isEmpty else { return }
+        Self.navigationInvalidate(slug: cleanSlug, period: period)
+        if let period {
+            lastSuccessfulFetchAtByPeriod.removeValue(forKey: period)
+            monthSnapshots.removeValue(forKey: period)
+        } else {
+            lastSuccessfulFetchAtByPeriod.removeAll(keepingCapacity: true)
+        }
+    }
+
+    private static func slugPeriodKey(slug: String, period: String) -> String {
+        "\(slug.lowercased())|\(period)"
+    }
+
+    private static func navigationSharedSnapshot(slug: String, period: String) -> MonthStatsSnapshot? {
+        navigationCacheLock.lock()
+        defer { navigationCacheLock.unlock() }
+        return navigationSnapshotsBySlugPeriod[slugPeriodKey(slug: slug, period: period)]
+    }
+
+    private static func navigationSharedLastFetch(slug: String, period: String) -> Date? {
+        navigationCacheLock.lock()
+        defer { navigationCacheLock.unlock() }
+        return navigationLastFetchAtBySlugPeriod[slugPeriodKey(slug: slug, period: period)]
+    }
+
+    private static func navigationStoreSnapshot(_ snap: MonthStatsSnapshot, slug: String, period: String, fetchedAt: Date, epoch: Int) {
+        navigationCacheLock.lock()
+        defer { navigationCacheLock.unlock() }
+        let key = slugPeriodKey(slug: slug, period: period)
+        navigationSnapshotsBySlugPeriod[key] = snap
+        navigationLastFetchAtBySlugPeriod[key] = fetchedAt
+        navigationFetchEpochBySlugPeriod[key] = epoch
+    }
+
+    private static func navigationSharedFetchEpoch(slug: String, period: String) -> Int? {
+        navigationCacheLock.lock()
+        defer { navigationCacheLock.unlock() }
+        return navigationFetchEpochBySlugPeriod[slugPeriodKey(slug: slug, period: period)]
+    }
+
+    private static func navigationInvalidationEpoch(slug: String) -> Int {
+        navigationCacheLock.lock()
+        defer { navigationCacheLock.unlock() }
+        return navigationInvalidationEpochBySlug[slug.lowercased()] ?? 0
+    }
+
+    private static func navigationInvalidate(slug: String, period: String?) {
+        navigationCacheLock.lock()
+        defer { navigationCacheLock.unlock() }
+        let s = slug.lowercased()
+        navigationInvalidationEpochBySlug[s] = (navigationInvalidationEpochBySlug[s] ?? 0) + 1
+        if let period {
+            let key = slugPeriodKey(slug: s, period: period)
+            navigationLastFetchAtBySlugPeriod.removeValue(forKey: key)
+            navigationSnapshotsBySlugPeriod.removeValue(forKey: key)
+            navigationFetchEpochBySlugPeriod.removeValue(forKey: key)
+        } else {
+            let prefix = "\(s)|"
+            navigationLastFetchAtBySlugPeriod.keys.filter { $0.hasPrefix(prefix) }.forEach { navigationLastFetchAtBySlugPeriod.removeValue(forKey: $0) }
+            navigationSnapshotsBySlugPeriod.keys.filter { $0.hasPrefix(prefix) }.forEach { navigationSnapshotsBySlugPeriod.removeValue(forKey: $0) }
+            navigationFetchEpochBySlugPeriod.keys.filter { $0.hasPrefix(prefix) }.forEach { navigationFetchEpochBySlugPeriod.removeValue(forKey: $0) }
         }
     }
 
@@ -610,6 +742,17 @@ extension MerchantStatsIndicatorsViewModel {
         demoPayloadsByMonth = CommerceStatisticsPreviewMock.payloadsByMonthKeys(monthKeys)
         isDemoSixMonthPreviewActive = true
         applyDemoPayload(forMonthKey: displayMonthKey)
+    }
+
+    /// Quitte le mode simulation et réinitialise l'état pour un rechargement réel.
+    func deactivateDemoPreview() {
+        isDemoSixMonthPreviewActive = false
+        demoPayloadsByMonth = [:]
+        monthSnapshots = [:]
+        stats = nil
+        evolution = []
+        errorMessage = nil
+        lastSuccessfullyLoadedPeriod = nil
     }
 
     /// Met à jour le repère panier (après saisie stats ou en attendant un `load`).

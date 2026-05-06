@@ -2,14 +2,13 @@
 //  AccountSettingsDetailView.swift
 //  myfidpass
 //
-//  Hub compte : identité, sécurité, appareil, lien fiche établissement — même DA que Réglages (cartes groupées).
+//  Hub compte : identité, sécurité, appareil — même DA que Réglages (cartes groupées).
 //
 
 import SwiftUI
 import UIKit
 
 struct AccountSettingsDetailView: View {
-    @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.colorScheme) private var colorScheme
     @EnvironmentObject private var authService: AuthService
     @EnvironmentObject private var syncService: SyncService
@@ -17,32 +16,19 @@ struct AccountSettingsDetailView: View {
     @ObservedObject private var notifications = NotificationsService.shared
 
     @State private var me: AuthMeResponse?
-    @State private var establishmentAddress: String?
     @State private var isLoading = true
+    @State private var didInitialLoad = false
+    @State private var lastRefreshAt: Date?
     @State private var loadError: String?
     @State private var isSendingPasswordReset = false
     @State private var passwordResetNotice: String?
     @State private var passwordResetError: String?
+    @State private var didRequestPushOnAccountAppear = false
 
     private var theme: SettingsVisualThemeAccount { SettingsVisualThemeAccount(colorScheme: colorScheme) }
 
     private var emailDisplay: String {
         (me?.user.email ?? AuthStorage.userEmail ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private var nameDisplay: String {
-        let n = (me?.user.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        return n.isEmpty ? "—" : n
-    }
-
-    private var subscriptionLine: String {
-        guard let s = me?.subscription?.status?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty else {
-            return me?.hasActiveSubscription == true ? "Actif" : "—"
-        }
-        if let plan = me?.subscription?.planId, !plan.isEmpty {
-            return "\(s) · \(plan)"
-        }
-        return s
     }
 
     private var pushStatusLabel: String {
@@ -79,13 +65,15 @@ struct AccountSettingsDetailView: View {
                 }
 
                 GroupedSettingsCard {
-                    GroupedSettingsInfoRow(icon: "envelope.fill", title: "E-mail", value: emailDisplay.isEmpty ? "—" : emailDisplay, valueMultiline: true)
-                    GroupedSettingsRowDivider()
-                    GroupedSettingsInfoRow(icon: "person.text.rectangle", title: "Nom", value: nameDisplay, valueMultiline: true)
+                    GroupedSettingsInfoRow(
+                        icon: "envelope.fill",
+                        title: "E-mail",
+                        value: emailDisplay.isEmpty ? "—" : emailDisplay,
+                        valueMultiline: true,
+                        valueLineLimit: 2
+                    )
                     GroupedSettingsRowDivider()
                     GroupedSettingsInfoRow(icon: "key.fill", title: "Connexion", value: authProviderLabel)
-                    GroupedSettingsRowDivider()
-                    GroupedSettingsInfoRow(icon: "creditcard.fill", title: "Abonnement", value: subscriptionLine, valueMultiline: true)
                     GroupedSettingsRowDivider()
                     GroupedSettingsInfoRow(icon: "building.2.fill", title: "Commerces", value: "\(authService.businesses.count)")
                 }
@@ -94,36 +82,6 @@ struct AccountSettingsDetailView: View {
                     GroupedSettingsCard {
                         commercePickerBlock
                     }
-                }
-
-                GroupedSettingsCard {
-                    GroupedSettingsInfoRow(
-                        icon: "mappin.circle.fill",
-                        title: "Adresse (établissement)",
-                        value: addressSnippet,
-                        valueMultiline: true
-                    )
-                    GroupedSettingsRowDivider()
-                    NavigationLink {
-                        ScrollView {
-                            MerchantEstablishmentForm(context: viewContext)
-                                .environmentObject(syncService)
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 12)
-                        }
-                        .background(GroupedSettingsMetrics.pageBackground)
-                        .navigationTitle("Fiche commerce")
-                        .navigationBarTitleDisplayMode(.inline)
-                    } label: {
-                        GroupedSettingsNavigationRow(
-                            icon: "building.columns.fill",
-                            title: "Modifier la fiche & l’adresse",
-                            subtitle: nil,
-                            value: nil,
-                            showsChevron: true
-                        )
-                    }
-                    .buttonStyle(.plain)
                 }
 
                 GroupedSettingsCard {
@@ -157,30 +115,6 @@ struct AccountSettingsDetailView: View {
                     GroupedSettingsInfoRow(icon: "iphone", title: "Cet appareil", value: deviceLine, valueMultiline: true)
                     GroupedSettingsRowDivider()
                     GroupedSettingsInfoRow(icon: "bell.badge.fill", title: "Notifications push", value: pushStatusLabel)
-                    GroupedSettingsRowDivider()
-                    GroupedSettingsInfoRow(
-                        icon: "info.circle.fill",
-                        title: "Sessions",
-                        value: "—",
-                        valueMultiline: false
-                    )
-                }
-
-                GroupedSettingsCard {
-                    NavigationLink {
-                        SubscriptionBusinessView()
-                            .environmentObject(authService)
-                            .environmentObject(syncService)
-                    } label: {
-                        GroupedSettingsNavigationRow(
-                            icon: "sparkles.rectangle.stack.fill",
-                            title: "Abonnement & nouveau commerce",
-                            subtitle: nil,
-                            value: nil,
-                            showsChevron: true
-                        )
-                    }
-                    .buttonStyle(.plain)
                 }
 
             }
@@ -189,15 +123,23 @@ struct AccountSettingsDetailView: View {
             .padding(.bottom, 32)
         }
         .scrollIndicators(.hidden)
-        .scrollContentEdgeFade(edgeHeight: 36)
         .background(GroupedSettingsMetrics.pageBackground.ignoresSafeArea())
         .navigationTitle("Compte")
         .navigationBarTitleDisplayMode(.large)
+        .onAppear {
+            notifications.refreshAuthorizationStatus()
+            if !didRequestPushOnAccountAppear {
+                didRequestPushOnAccountAppear = true
+                notifications.requestPermissionAndRegister()
+            }
+        }
         .task {
-            await refreshAccount()
+            guard !didInitialLoad else { return }
+            didInitialLoad = true
+            await refreshAccount(force: true)
         }
         .refreshable {
-            await refreshAccount()
+            await refreshAccount(force: true)
         }
         .alert("Réinitialisation", isPresented: .init(get: { passwordResetError != nil }, set: { if !$0 { passwordResetError = nil } })) {
             Button("OK", role: .cancel) {}
@@ -213,11 +155,6 @@ struct AccountSettingsDetailView: View {
                     .background(Color(UIColor.systemGroupedBackground).opacity(0.35))
             }
         }
-    }
-
-    private var addressSnippet: String {
-        let a = (establishmentAddress ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        return a.isEmpty ? "Non renseignée" : a
     }
 
     private var authProviderLabel: String {
@@ -239,43 +176,69 @@ struct AccountSettingsDetailView: View {
         }
     }
 
+    private var activeCommerceDisplayName: String {
+        if let s = AuthStorage.currentBusinessSlug,
+           let b = authService.businesses.first(where: { $0.slug == s }) {
+            let n = b.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            return n.isEmpty ? b.slug : n
+        }
+        if let first = authService.businesses.first {
+            let n = first.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            return n.isEmpty ? first.slug : n
+        }
+        return "—"
+    }
+
     private var commercePickerBlock: some View {
-        HStack(alignment: .center, spacing: 12) {
+        HStack(alignment: .top, spacing: 12) {
             GroupedSettingsIconBox(systemName: "building.2")
             Text("Commerce actif")
                 .font(.body.weight(.medium))
                 .foregroundStyle(Color(UIColor.label))
-                .frame(maxWidth: .infinity, alignment: .leading)
-            Picker("Commerce", selection: Binding(
-                get: {
-                    if let s = AuthStorage.currentBusinessSlug,
-                       authService.businesses.contains(where: { $0.slug == s }) {
-                        return s
-                    }
-                    return authService.businesses.first?.slug ?? ""
-                },
-                set: { newSlug in
-                    guard !newSlug.isEmpty else { return }
-                    authService.selectBusiness(slug: newSlug)
-                    Task {
-                        await syncService.syncAfterServerMutation()
-                        await refreshAddressOnly()
-                    }
-                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                }
-            )) {
+                .fixedSize(horizontal: true, vertical: false)
+            // `Menu` plutôt que `Picker` : sur les SDK récents, certaines surcharges de `Picker` exigent `sources:` / collections typées différemment.
+            Menu {
                 ForEach(authService.businesses, id: \.slug) { b in
-                    Text(b.name.isEmpty ? b.slug : b.name).tag(b.slug)
+                    Button {
+                        guard b.slug != AuthStorage.currentBusinessSlug else { return }
+                        authService.selectBusiness(slug: b.slug, showSwitchingOverlay: false)
+                        Task {
+                            await syncService.syncAfterServerMutation()
+                            await seedWalletLocationDefaultsIfNeeded()
+                        }
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    } label: {
+                        HStack {
+                            Text(b.name.isEmpty ? b.slug : b.name)
+                            if b.slug == AuthStorage.currentBusinessSlug {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                }
+            } label: {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(activeCommerceDisplayName)
+                        .font(.body)
+                        .foregroundStyle(Color(UIColor.secondaryLabel))
+                        .multilineTextAlignment(.trailing)
+                        .lineLimit(2)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color(UIColor.tertiaryLabel))
+                        .imageScale(.small)
                 }
             }
-            .pickerStyle(.menu)
-            .labelsHidden()
         }
         .padding(.horizontal, GroupedSettingsMetrics.horizontalPadding)
         .padding(.vertical, GroupedSettingsMetrics.rowVerticalPadding)
     }
 
-    private func refreshAccount() async {
+    private func refreshAccount(force: Bool = false) async {
+        if !force, let lastRefreshAt, Date().timeIntervalSince(lastRefreshAt) < 30 {
+            return
+        }
         loadError = nil
         isLoading = true
         defer { isLoading = false }
@@ -285,7 +248,10 @@ struct AccountSettingsDetailView: View {
                 me = r
                 authService.applyAuthMeResponse(r)
             }
-            await refreshAddressOnly()
+            await seedWalletLocationDefaultsIfNeeded()
+            await MainActor.run {
+                lastRefreshAt = Date()
+            }
         } catch {
             await MainActor.run {
                 loadError = (error as? APIError)?.errorDescription ?? error.localizedDescription
@@ -293,16 +259,38 @@ struct AccountSettingsDetailView: View {
         }
     }
 
-    private func refreshAddressOnly() async {
-        guard let slug = AuthStorage.currentBusinessSlug ?? authService.businesses.first?.slug else {
-            await MainActor.run { establishmentAddress = nil }
-            return
-        }
+    /// Active une fois par commerce les notifications Wallet à proximité + texte périmètre par défaut (sans écran dédié).
+    private func seedWalletLocationDefaultsIfNeeded() async {
+        guard let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines), !slug.isEmpty else { return }
+        let flagKey = "myfidpass.account.walletLocationDefaultsSeeded." + slug
+        guard !UserDefaults.standard.bool(forKey: flagKey) else { return }
+        let defaultPerimeterMessage =
+            "Vous êtes à proximité de notre commerce. Passez nous voir, votre carte Wallet est prête."
         do {
-            let s: BusinessSettingsResponse = try await APIClient.shared.request(.businessSettings(slug: slug))
-            await MainActor.run { establishmentAddress = s.locationAddress }
+            let settings: BusinessSettingsResponse = try await APIClient.shared.request(.businessSettings(slug: slug))
+            let include = settings.walletPassIncludeLocations ?? 0
+            let msg = settings.locationRelevantText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let needsWallet = include != 1
+            let needsMsg = msg.isEmpty
+            guard needsWallet || needsMsg else {
+                UserDefaults.standard.set(true, forKey: flagKey)
+                return
+            }
+            _ = try await APIClient.shared.request(
+                APIEndpoint.updateLocationSettings(
+                    slug: slug,
+                    locationLat: nil,
+                    locationLng: nil,
+                    locationRadiusMeters: nil,
+                    locationRelevantText: needsMsg ? defaultPerimeterMessage : nil,
+                    locationAddress: nil,
+                    walletPassIncludeLocations: needsWallet ? true : nil
+                )
+            ) as EmptyResponse
+            await syncService.syncAfterServerMutation()
+            UserDefaults.standard.set(true, forKey: flagKey)
         } catch {
-            await MainActor.run { establishmentAddress = nil }
+            // Silencieux : le commerce reste utilisable sans Wallet géolocalisé.
         }
     }
 

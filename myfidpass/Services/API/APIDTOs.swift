@@ -30,6 +30,7 @@ struct AuthLoginResponse: Decodable {
     let hasActiveSubscription: Bool?
     /// Fin d’essai gratuit commerçant (ISO 8601), si compte sans abonnement Stripe payant.
     let merchantTrialEndsAt: String?
+    let entitlements: MerchantEntitlementsDTO?
 
     enum CodingKeys: String, CodingKey {
         case user
@@ -39,6 +40,7 @@ struct AuthLoginResponse: Decodable {
         case subscription
         case hasActiveSubscription
         case merchantTrialEndsAt
+        case entitlements
     }
 
     init(from decoder: Decoder) throws {
@@ -50,6 +52,7 @@ struct AuthLoginResponse: Decodable {
         subscription = try c.decodeIfPresent(SubscriptionDTO.self, forKey: .subscription)
         hasActiveSubscription = decodeFlexibleOptionalBool(container: c, key: .hasActiveSubscription)
         merchantTrialEndsAt = try c.decodeIfPresent(String.self, forKey: .merchantTrialEndsAt)
+        entitlements = try c.decodeIfPresent(MerchantEntitlementsDTO.self, forKey: .entitlements)
     }
 
     /// Assemblage après OAuth Google (callback) quand `/me` a déjà été décodé.
@@ -60,7 +63,8 @@ struct AuthLoginResponse: Decodable {
         businesses: [BusinessDTO],
         subscription: SubscriptionDTO? = nil,
         hasActiveSubscription: Bool? = nil,
-        merchantTrialEndsAt: String? = nil
+        merchantTrialEndsAt: String? = nil,
+        entitlements: MerchantEntitlementsDTO? = nil
     ) {
         self.user = user
         self.token = token
@@ -69,6 +73,21 @@ struct AuthLoginResponse: Decodable {
         self.subscription = subscription
         self.hasActiveSubscription = hasActiveSubscription
         self.merchantTrialEndsAt = merchantTrialEndsAt
+        self.entitlements = entitlements
+    }
+}
+
+struct MerchantEntitlementsDTO: Decodable {
+    let allowedBusinesses: Int?
+    let usedBusinesses: Int?
+    let canCreateBusiness: Bool?
+    let billingProvider: String?
+
+    enum CodingKeys: String, CodingKey {
+        case allowedBusinesses = "allowed_businesses"
+        case usedBusinesses = "used_businesses"
+        case canCreateBusiness = "can_create_business"
+        case billingProvider = "billing_provider"
     }
 }
 
@@ -141,6 +160,33 @@ struct BusinessDTO: Decodable {
         createdAt = try c.decodeIfPresent(String.self, forKey: .createdAt)
         dashboardToken = try c.decodeIfPresent(String.self, forKey: .dashboardToken)
     }
+
+    init(id: String, name: String, slug: String, organizationName: String? = nil, createdAt: String? = nil, dashboardToken: String? = nil) {
+        self.id = id
+        self.name = name
+        self.slug = slug
+        self.organizationName = organizationName
+        self.createdAt = createdAt
+        self.dashboardToken = dashboardToken
+    }
+
+    /// Entrée minimale quand `GET /me` n’a pas encore le commerce créé : permet `selectBusiness` + synchro sans redémarrage.
+    static func localPendingStub(slug: String, displayName: String, dashboardToken: String?) -> BusinessDTO {
+        let s = slug.trimmingCharacters(in: .whitespacesAndNewlines)
+        let n = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let tokenTrimmed: String? = {
+            guard let raw = dashboardToken?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return nil }
+            return raw
+        }()
+        return BusinessDTO(
+            id: "pending-\(s)",
+            name: n.isEmpty ? "Commerce" : n,
+            slug: s,
+            organizationName: nil,
+            createdAt: nil,
+            dashboardToken: tokenTrimmed
+        )
+    }
 }
 
 // MARK: - GET /api/auth/config
@@ -157,6 +203,7 @@ struct AuthRefreshResponse: Decodable {
     let subscription: SubscriptionDTO?
     let hasActiveSubscription: Bool?
     let merchantTrialEndsAt: String?
+    let entitlements: MerchantEntitlementsDTO?
 
     enum CodingKeys: String, CodingKey {
         case token
@@ -164,6 +211,7 @@ struct AuthRefreshResponse: Decodable {
         case subscription
         case hasActiveSubscription
         case merchantTrialEndsAt
+        case entitlements
     }
 
     init(from decoder: Decoder) throws {
@@ -173,6 +221,7 @@ struct AuthRefreshResponse: Decodable {
         subscription = try c.decodeIfPresent(SubscriptionDTO.self, forKey: .subscription)
         hasActiveSubscription = decodeFlexibleOptionalBool(container: c, key: .hasActiveSubscription)
         merchantTrialEndsAt = try c.decodeIfPresent(String.self, forKey: .merchantTrialEndsAt)
+        entitlements = try c.decodeIfPresent(MerchantEntitlementsDTO.self, forKey: .entitlements)
     }
 }
 
@@ -184,6 +233,7 @@ struct AuthMeResponse: Decodable {
     let subscription: SubscriptionDTO?
     let hasActiveSubscription: Bool?
     let merchantTrialEndsAt: String?
+    let entitlements: MerchantEntitlementsDTO?
 
     enum CodingKeys: String, CodingKey {
         case user
@@ -191,6 +241,7 @@ struct AuthMeResponse: Decodable {
         case subscription
         case hasActiveSubscription
         case merchantTrialEndsAt
+        case entitlements
     }
 
     init(from decoder: Decoder) throws {
@@ -200,20 +251,13 @@ struct AuthMeResponse: Decodable {
         subscription = try c.decodeIfPresent(SubscriptionDTO.self, forKey: .subscription)
         hasActiveSubscription = decodeFlexibleOptionalBool(container: c, key: .hasActiveSubscription)
         merchantTrialEndsAt = try c.decodeIfPresent(String.self, forKey: .merchantTrialEndsAt)
+        entitlements = try c.decodeIfPresent(MerchantEntitlementsDTO.self, forKey: .entitlements)
     }
 }
 
 struct SubscriptionDTO: Decodable {
     let status: String?
     let planId: String?
-}
-
-/// POST /api/auth/revenuecat-sync (alignement BDD abonnement après achat in-app)
-struct AuthRevenueCatSyncResponse: Decodable {
-    let ok: Bool?
-    let subscription: SubscriptionDTO?
-    let hasActiveSubscription: Bool?
-    let merchantTrialEndsAt: String?
 }
 
 // MARK: - GET .../dashboard/settings
@@ -284,6 +328,10 @@ struct BusinessSettingsResponse: Decodable {
     let receiptQrToleranceCents: Int?
     /// Hypothèses pour exports bilan (valorisation, montants nominatifs indicatifs).
     let accountingPrefs: MerchantAccountingPrefsDTO?
+    /// 1 = bonus d'inscription activé (points ou tampon accordé au 1er ajout Wallet).
+    let welcomeBonusEnabled: Int?
+    /// Nombre de points (ou tampons) offerts à l'inscription. Défaut 10.
+    let welcomeBonusAmount: Int?
 }
 
 /// Préférences comptables persistées (`PATCH …/dashboard/settings` → `accounting_prefs_json`).
@@ -747,13 +795,20 @@ private struct LastBatchStatsDecodable: Decodable {
     }
 
     func asCampaignInsight() -> NotificationCampaignInsightDTO? {
-        let mergedMessage = [message, body]
-            .compactMap { $0 }
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .first { !$0.isEmpty }
-        let mergedTitle = title
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .flatMap { $0.isEmpty ? nil : $0 }
+        let mergedMessage: String? = {
+            let candidates: [String?] = [self.message, self.body]
+            for raw in candidates {
+                guard let raw else { continue }
+                let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !t.isEmpty { return t }
+            }
+            return nil
+        }()
+        let mergedTitle: String? = {
+            guard let t = self.title else { return nil }
+            let trimmed = t.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }()
         // N’invente pas une « campagne » si le JSON n’a qu’une date (compteurs & texte vides) — sinon une ligne 0/0/0 inutile.
         let hasSignal = (batchId?.isEmpty == false)
             || (triggerName?.isEmpty == false)
@@ -853,8 +908,20 @@ struct BusinessStatsResponse: Codable, Sendable {
     let rewardsRedeemedBreakdown: [RewardRedeemedBreakdownRowDTO]?
     let pointsRedeemedInPeriod: Int?
     let googleReviewsNewInPeriod: Int?
+    let socialFollowsClaimed: SocialFollowsClaimedDTO?
     let notificationCampaigns: [NotificationCampaignInsightDTO]?
     let businessName: String?
+}
+
+struct SocialFollowsClaimedDTO: Codable, Sendable {
+    let instagram: Int?
+    let tiktok: Int?
+    let facebook: Int?
+    let twitter: Int?
+
+    var total: Int {
+        (instagram ?? 0) + (tiktok ?? 0) + (facebook ?? 0) + (twitter ?? 0)
+    }
 }
 
 // MARK: - GET .../dashboard/stats/traffic
@@ -1083,6 +1150,22 @@ struct FlyerPutAPIResponse: Decodable {
     let updatedAt: String?
 }
 
+struct FlyerRemoveLogoBgRequestBody: Encodable {
+    let imageDataUrl: String
+
+    enum CodingKeys: String, CodingKey {
+        case imageDataUrl = "image_data_url"
+    }
+}
+
+/// Réponse `POST …/dashboard/flyer/remove-logo-background` (rembg / secours remove.bg — `ok` peut être false sans erreur HTTP).
+struct FlyerRemoveLogoBgResponse: Decodable {
+    let ok: Bool
+    let pngDataUrl: String?
+    let code: String?
+    let message: String?
+}
+
 /// État canvas flyer (mêmes clés que `app-flyer-qr-presets.js` / mergeFlyerState).
 struct FlyerStateDTO: Codable, Equatable {
     var templateId: String
@@ -1159,7 +1242,7 @@ struct FlyerStateDTO: Codable, Equatable {
             /// `png` = texture web `spinflyer` ; `segments` = secteurs aplats (sans image).
             wheelRenderMode: "png",
             wheelColorOdd: "#fbbf24",
-            wheelColorEven: "#f97316",
+            wheelColorEven: "#ffffff",
             wheelSegmentOffsetDeg: 0,
             headlineFontId: "fraunces",
             headlineTextColor: "#0f172a",
@@ -1759,4 +1842,11 @@ struct WorkspaceTeamStaffAccountResponse: Decodable {
         case userId = "user_id"
         case staffLogin = "staff_login"
     }
+}
+
+
+struct DevSimulatePaymentResponse: Decodable {
+    let simulated: Bool
+    let active: Bool?
+    let status: String?
 }

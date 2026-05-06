@@ -52,6 +52,8 @@ struct FullDashboardSettingsPatch: Encodable {
     var headerRightText: String?
     var notificationTitleOverride: String?
     var notificationChangeMessage: String?
+    /// Si true, envoie `notification_change_message: null` pour effacer le champ côté serveur (après envoi campagne).
+    var clearNotificationChangeMessage: Bool = false
     /// Règles campagnes automatiques (remplace l’objet côté serveur).
     var campaignAutomation: CampaignAutomationConfigDTO?
     /// À n’envoyer que si vous avez chargé l’état complet depuis le GET (sinon risque d’écraser la config web).
@@ -64,6 +66,10 @@ struct FullDashboardSettingsPatch: Encodable {
     var receiptQrToleranceCents: Int?
     /// Hypothèses bilan (persistées `accounting_prefs_json`). N’envoyer que les champs à enregistrer.
     var accountingPrefs: MerchantAccountingPrefsDTO?
+    /// 1 = bonus d’inscription activé (points/tampon accordé au 1er ajout Wallet).
+    var welcomeBonusEnabled: Int?
+    /// Nombre de points ou de tampons offerts à l’inscription (défaut 10).
+    var welcomeBonusAmount: Int?
 
     private enum CK: String, CodingKey {
         case organizationName = "organization_name"
@@ -111,6 +117,8 @@ struct FullDashboardSettingsPatch: Encodable {
         case requireReceiptQrValidation = "require_receipt_qr_validation"
         case receiptQrToleranceCents = "receipt_qr_tolerance_cents"
         case accountingPrefs = "accounting_prefs"
+        case welcomeBonusEnabled = "welcome_bonus_enabled"
+        case welcomeBonusAmount = "welcome_bonus_amount"
     }
 
     func encode(to encoder: Encoder) throws {
@@ -160,7 +168,11 @@ struct FullDashboardSettingsPatch: Encodable {
         if let v = labelMember { try c.encode(v, forKey: .labelMember) }
         if let v = headerRightText { try c.encode(v, forKey: .headerRightText) }
         if let v = notificationTitleOverride { try c.encode(v, forKey: .notificationTitleOverride) }
-        if let v = notificationChangeMessage { try c.encode(v, forKey: .notificationChangeMessage) }
+        if clearNotificationChangeMessage {
+            try c.encodeNil(forKey: .notificationChangeMessage)
+        } else if let v = notificationChangeMessage {
+            try c.encode(v, forKey: .notificationChangeMessage)
+        }
         if let v = campaignAutomation { try c.encode(v, forKey: .campaignAutomation) }
         if let v = engagementRewards { try c.encode(v, forKey: .engagementRewards) }
         if let v = scanMaxPassesPerMemberPerDay { try c.encode(v, forKey: .scanMaxPassesPerMemberPerDay) }
@@ -168,6 +180,8 @@ struct FullDashboardSettingsPatch: Encodable {
         if let v = requireReceiptQrValidation { try c.encode(v ? 1 : 0, forKey: .requireReceiptQrValidation) }
         if let v = receiptQrToleranceCents { try c.encode(v, forKey: .receiptQrToleranceCents) }
         if let v = accountingPrefs { try c.encode(v, forKey: .accountingPrefs) }
+        if let v = welcomeBonusEnabled { try c.encode(v, forKey: .welcomeBonusEnabled) }
+        if let v = welcomeBonusAmount { try c.encode(v, forKey: .welcomeBonusAmount) }
     }
 }
 

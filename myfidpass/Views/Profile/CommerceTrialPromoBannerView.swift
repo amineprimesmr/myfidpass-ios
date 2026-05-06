@@ -52,7 +52,7 @@ struct CommerceTrialPromoBannerView: View {
     private func banner(now: Date) -> some View {
         let remaining = MerchantTrialSubscribePillView.remainingLabel(until: trialEndsAt, now: now)
         return VStack(alignment: .leading, spacing: 8) {
-            Text("3 j d’accès Pro sans abonnement — à la souscription : 1,00 € le 1er mois ou 399,00 €/an")
+            Text("Profitez du premier mois à 1€")
                 .font(Self.bannerFont(17, weight: .semibold))
                 .foregroundStyle(.white)
                 .fixedSize(horizontal: false, vertical: true)
@@ -117,7 +117,7 @@ struct CommerceTrialPromoBannerView: View {
         )
         .shadow(color: .black.opacity(0.28), radius: 10, y: 4)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Trois jours offerts, puis offre mensuelle ou annuelle. Plus que \(remaining). Sélectionner un forfait.")
+        .accessibilityLabel("Profitez du premier mois à 1 euro. Plus que \(remaining). Sélectionner un forfait.")
     }
 }
 

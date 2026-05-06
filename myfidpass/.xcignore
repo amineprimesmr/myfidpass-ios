@@ -1,0 +1,4 @@
+# Réduit ce que Xcode indexe avec le groupe synchronisé (hors bundle).
+# Réf. : PBXFileSystemSynchronizedRootGroup + .xcignore (Xcode 16+).
+
+Docs/

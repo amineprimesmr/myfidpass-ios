@@ -4,38 +4,43 @@
 //
 
 import SwiftUI
+import Foundation
 
 // MARK: - Liquid glass tuiles KPI (déclaré ici pour rester dans la cible Xcode si l’app n’inclut pas tous les fichiers du dossier)
 
 enum CommerceStatsIndicatorLiquidGlass {
-    static let kpiCornerRadius: CGFloat = 22
+    static let kpiCornerRadius: CGFloat = 26
 }
 
-// MARK: - Liquid Glass indicateurs (même chaîne que le reste de l’app / Process : `glassStyle` + forme)
+// MARK: - Tuiles KPI (relief 3D, noir profond — `CommerceStatsSculpted3DTileStyle`)
 
 extension View {
-    /// Boutons-tuiles KPI / listes : verre sombre natif `glassStyleDark` + forme (API `Glass.regular.tint`).
+    /// Tuiles **Membres / Panier / Fréquence** et listes : relief sculpté, ombre, liseré.
+    /// - `useStatic3DSurface` : conteneur non-`Button` (ex. `ZStack` avec plusieurs `Button` internes).
     func commerceStatsLiquidGlassTileButton(
         cornerRadius: CGFloat,
         controlSize: ControlSize = .large,
-        backgroundFillOpacity: CGFloat = 0.92
+        useStatic3DSurface: Bool = false
     ) -> some View {
-        self
-            .buttonStyle(.plain)
-            .background(
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(CommerceStatisticsTheme.cardElevated.opacity(backgroundFillOpacity))
-            )
-            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-            .buttonBorderShape(.roundedRectangle(radius: cornerRadius))
-            .controlSize(controlSize)
+        Group {
+            if #available(iOS 26.0, *) {
+                self
+                    .glassEffect(.clear, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            } else {
+                self
+                    .background(
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .fill(Color.white.opacity(0.94))
+                    )
+            }
+        }
+        .controlSize(controlSize)
     }
 
     func commerceStatsKpiLiquidGlassButton(
         action: @escaping () -> Void = {},
         cornerRadius: CGFloat = CommerceStatsIndicatorLiquidGlass.kpiCornerRadius,
-        controlSize: ControlSize = .large,
-        backgroundFillOpacity: CGFloat = CommerceStatisticsTheme.kpiClusterTileBackgroundOpacity
+        controlSize: ControlSize = .large
     ) -> some View {
         Button(action: action) {
             self
@@ -43,7 +48,7 @@ extension View {
         .commerceStatsLiquidGlassTileButton(
             cornerRadius: cornerRadius,
             controlSize: controlSize,
-            backgroundFillOpacity: backgroundFillOpacity
+            useStatic3DSurface: false
         )
     }
 
@@ -163,11 +168,12 @@ struct CommerceStatsLargeMetricCard: View {
     var zoomTransitionNamespace: Namespace.ID? = nil
     /// Animation néon + tracé à l’ouverture (carte Membres).
     var playNeonLineIntro: Bool = true
+    /// Couleur principale de la courbe/zone.
+    var chartLineColor: Color = Color(red: 0, green: 1, blue: 133.0 / 255.0) // #00ff85
 
     @State private var membersLineTrim: CGFloat = 0
     @State private var membersNeonWeight: CGFloat = 1
     @State private var membersAreaReveal: CGFloat = 0
-    @State private var membersHeadScale: CGFloat = 0.01
 
     var body: some View {
         Group {
@@ -179,8 +185,7 @@ struct CommerceStatsLargeMetricCard: View {
                     }
                     .commerceStatsLiquidGlassTileButton(
                         cornerRadius: CommerceStatsIndicatorLiquidGlass.kpiCornerRadius,
-                        controlSize: .large,
-                        backgroundFillOpacity: CommerceStatisticsTheme.kpiClusterTileBackgroundOpacity
+                        controlSize: .large
                     )
                 } else {
                     Button(action: onTap) {
@@ -188,27 +193,39 @@ struct CommerceStatsLargeMetricCard: View {
                     }
                     .commerceStatsLiquidGlassTileButton(
                         cornerRadius: CommerceStatsIndicatorLiquidGlass.kpiCornerRadius,
-                        controlSize: .large,
-                        backgroundFillOpacity: CommerceStatisticsTheme.kpiClusterTileBackgroundOpacity
+                        controlSize: .large
                     )
                 }
             } else {
                 membersMetricCardLabel
-                    .commerceStatsKpiLiquidGlassButton(controlSize: .large)
             }
+        }
+        .task(id: chartSignature) {
+            // Évite les mutations d'état pendant le cycle de rendu SwiftUI.
+            await scheduleMembersChartIntroAnimation()
         }
     }
 
     private var membersMetricCardLabel: some View {
-        let lineColor = Color(red: 0.33, green: 0.94, blue: 0.66)
+        let lineColor = chartLineColor
         return VStack(spacing: 0) {
             cardHeader(lineColor: lineColor)
-                .padding(.top, 12)
-                .padding(.horizontal, 14)
+                .padding(.top, 16)
+                .padding(.leading, 18)
+                .padding(.trailing, 16)
 
             membersAreaChart(lineColor: lineColor)
                 .frame(height: 104)
                 .frame(maxWidth: .infinity)
+                .clipShape(
+                    UnevenRoundedRectangle(
+                        topLeadingRadius: 0,
+                        bottomLeadingRadius: 22,
+                        bottomTrailingRadius: 22,
+                        topTrailingRadius: 0,
+                        style: .continuous
+                    )
+                )
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -219,10 +236,10 @@ struct CommerceStatsLargeMetricCard: View {
         return VStack(alignment: .leading, spacing: 6) {
             Text(title)
                 .font(CommerceStatisticsTheme.kpiTileTitleFont())
-                .foregroundStyle(CommerceStatisticsTheme.kpiTileTitleForeground(forGlassOverlay: g))
+                .foregroundStyle(CommerceStatisticsTheme.kpiTileTitleGradient(forGlassOverlay: g))
 
             Text(value)
-                .font(CommerceStatisticsTheme.statisticNumbers(size: 22, weight: .bold))
+                .font(CommerceStatisticsTheme.statisticNumbers(size: 30, weight: .bold))
                 .foregroundStyle(primary)
                 .minimumScaleFactor(0.72)
                 .lineLimit(1)
@@ -230,14 +247,14 @@ struct CommerceStatsLargeMetricCard: View {
             HStack(spacing: 6) {
                 if let subtitle, !subtitle.isEmpty {
                     Text(subtitle)
-                        .font(CommerceStatisticsTheme.statsText(size: 12, weight: .semibold))
+                        .font(CommerceStatisticsTheme.statsText(size: 13, weight: .semibold))
                         .foregroundStyle(lineColor)
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
                 }
                 if let valueCaption, !valueCaption.isEmpty {
                     Text(valueCaption)
-                        .font(CommerceStatisticsTheme.statsText(size: 15, weight: .semibold))
+                        .font(CommerceStatisticsTheme.statsText(size: 16, weight: .semibold))
                         .foregroundStyle(lineColor)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 5)
@@ -258,13 +275,6 @@ struct CommerceStatsLargeMetricCard: View {
         return GeometryReader { geo in
             let w = max(1, geo.size.width)
             let hTotal = max(1, geo.size.height)
-            let topInset: CGFloat = 2
-            let bottomInset = lineWidth * 0.5 + 2
-            let h = max(1, hTotal - topInset - bottomInset)
-            let yForPoint: (CGFloat) -> CGFloat = { p in topInset + h - (p * h * 0.92) }
-            let lastIdx = max(0, points.count - 1)
-            let headX = CGFloat(lastIdx) / CGFloat(max(1, lastIdx)) * w
-            let headY = points.isEmpty ? hTotal * 0.5 : yForPoint(points[lastIdx])
 
             ZStack(alignment: .topLeading) {
                 MembersSparklineAreaShape(points: points)
@@ -275,35 +285,30 @@ struct CommerceStatsLargeMetricCard: View {
                             endPoint: .bottom
                         )
                     )
-                    .mask(
-                        HStack(spacing: 0) {
-                            Rectangle()
-                                .frame(width: w * max(0, min(1, membersAreaReveal)))
-                            Spacer(minLength: 0)
-                        }
-                        .frame(width: w, height: hTotal, alignment: .leading)
-                    )
+                    .opacity(membersAreaReveal)
 
-                MembersSparklineLineShape(points: points, trimEnd: membersLineTrim)
-                    .stroke(
-                        lineColor.opacity(0.28 + 0.35 * neon),
-                        style: StrokeStyle(lineWidth: lineWidth + 12 * neon, lineCap: .round, lineJoin: .round)
-                    )
-                    .blur(radius: 9 * neon)
+                if neon > 0.01 {
+                    MembersSparklineLineShape(points: points, trimEnd: membersLineTrim)
+                        .stroke(
+                            lineColor.opacity(0.28 + 0.35 * neon),
+                            style: StrokeStyle(lineWidth: lineWidth + 12 * neon, lineCap: .round, lineJoin: .round)
+                        )
+                        .blur(radius: 9 * neon)
 
-                MembersSparklineLineShape(points: points, trimEnd: membersLineTrim)
-                    .stroke(
-                        lineColor.opacity(0.55 + 0.25 * neon),
-                        style: StrokeStyle(lineWidth: lineWidth + 5 * neon, lineCap: .round, lineJoin: .round)
-                    )
-                    .blur(radius: 4.5 * neon)
+                    MembersSparklineLineShape(points: points, trimEnd: membersLineTrim)
+                        .stroke(
+                            lineColor.opacity(0.55 + 0.25 * neon),
+                            style: StrokeStyle(lineWidth: lineWidth + 5 * neon, lineCap: .round, lineJoin: .round)
+                        )
+                        .blur(radius: 4.5 * neon)
 
-                MembersSparklineLineShape(points: points, trimEnd: membersLineTrim)
-                    .stroke(
-                        Color.white.opacity(0.55 * neon),
-                        style: StrokeStyle(lineWidth: max(1, lineWidth * 0.35 * neon), lineCap: .round, lineJoin: .round)
-                    )
-                    .blur(radius: 2 * neon)
+                    MembersSparklineLineShape(points: points, trimEnd: membersLineTrim)
+                        .stroke(
+                            Color.white.opacity(0.55 * neon),
+                            style: StrokeStyle(lineWidth: max(1, lineWidth * 0.35 * neon), lineCap: .round, lineJoin: .round)
+                        )
+                        .blur(radius: 2 * neon)
+                }
 
                 MembersSparklineLineShape(points: points, trimEnd: membersLineTrim)
                     .stroke(
@@ -311,58 +316,48 @@ struct CommerceStatsLargeMetricCard: View {
                         style: StrokeStyle(lineWidth: lineWidth, lineCap: .round, lineJoin: .round)
                     )
 
-                if !points.isEmpty, membersLineTrim > 0.94 {
-                    ZStack {
-                        Circle()
-                            .fill(lineColor.opacity(0.45 * neon))
-                            .frame(width: 22 + 10 * neon, height: 22 + 10 * neon)
-                            .blur(radius: 6 * neon)
-                        Circle()
-                            .fill(
-                                RadialGradient(
-                                    colors: [lineColor, lineColor.opacity(0.15)],
-                                    center: .center,
-                                    startRadius: 0,
-                                    endRadius: 10
-                                )
-                            )
-                            .frame(width: 9, height: 9)
-                            .overlay(
-                                Circle()
-                                    .strokeBorder(Color.white.opacity(0.35 + 0.4 * neon), lineWidth: 1)
-                            )
-                    }
-                    .position(x: headX, y: headY)
-                    .scaleEffect(membersHeadScale)
-                }
             }
+            .drawingGroup()
             .frame(width: w, height: hTotal, alignment: .topLeading)
-            .onAppear {
-                runMembersChartIntroAnimation()
-            }
         }
     }
 
+    @MainActor
+    private func scheduleMembersChartIntroAnimation() async {
+        await Task.yield()
+        runMembersChartIntroAnimation()
+    }
+
     private func runMembersChartIntroAnimation() {
-        guard playNeonLineIntro else {
-            membersLineTrim = 1
+        guard playNeonLineIntro, !CommerceStatsRuntimeSession.hasPlayedMembersLineIntro else {
+            // Replay léger à chaque arrivée / mise à jour données (sans néon), clairement visible.
+            membersLineTrim = 0
             membersNeonWeight = 0
-            membersAreaReveal = 1
-            membersHeadScale = 1
+            membersAreaReveal = 0.22
+            if accessibilityReduceMotion {
+                membersLineTrim = 1
+                membersAreaReveal = 1
+                return
+            }
+            withAnimation(.timingCurve(0.22, 0.08, 0.2, 1.0, duration: 0.62)) {
+                membersLineTrim = 1
+            }
+            withAnimation(.easeOut(duration: 0.42).delay(0.06)) {
+                membersAreaReveal = 1
+            }
             return
         }
         if accessibilityReduceMotion {
             membersLineTrim = 1
             membersNeonWeight = 0
             membersAreaReveal = 1
-            membersHeadScale = 1
+            CommerceStatsRuntimeSession.hasPlayedMembersLineIntro = true
             return
         }
 
         membersLineTrim = 0
         membersNeonWeight = 1
         membersAreaReveal = 0
-        membersHeadScale = 0.15
 
         withAnimation(.timingCurve(0.22, 0.08, 0.2, 1.0, duration: 1.45)) {
             membersLineTrim = 1
@@ -373,15 +368,19 @@ struct CommerceStatsLargeMetricCard: View {
         withAnimation(.easeInOut(duration: 1.52).delay(0.62)) {
             membersNeonWeight = 0
         }
-        withAnimation(.spring(response: 0.72, dampingFraction: 0.74).delay(1.05)) {
-            membersHeadScale = 1
-        }
+        CommerceStatsRuntimeSession.hasPlayedMembersLineIntro = true
     }
 
     private var chartPoints: [CGFloat] {
         if !membersWeeklySparkline.isEmpty { return membersWeeklySparkline }
         // Pas de donnée d’évolution : ligne neutre (évite une fausse « forme » toujours identique).
         return [0.5, 0.5, 0.5, 0.5, 0.5]
+    }
+
+    private var chartSignature: String {
+        chartPoints
+            .map { String(format: "%.4f", Double($0)) }
+            .joined(separator: "|")
     }
 }
 
@@ -390,6 +389,9 @@ struct CommerceStatsCompactMetricCard: View {
 
     let title: String
     let value: String
+    var valueFontSize: CGFloat = 30
+    var valueSubline: String? = nil
+    var valueSublineFontSize: CGFloat = 13
     let trendText: String?
     var trendPositive: Bool?
     var footnote: String?
@@ -400,6 +402,9 @@ struct CommerceStatsCompactMetricCard: View {
     init(
         title: String,
         value: String,
+        valueFontSize: CGFloat = 30,
+        valueSubline: String? = nil,
+        valueSublineFontSize: CGFloat = 13,
         trendText: String?,
         trendPositive: Bool? = nil,
         footnote: String? = nil,
@@ -408,6 +413,9 @@ struct CommerceStatsCompactMetricCard: View {
     ) {
         self.title = title
         self.value = value
+        self.valueFontSize = valueFontSize
+        self.valueSubline = valueSubline
+        self.valueSublineFontSize = valueSublineFontSize
         self.trendText = trendText
         self.trendPositive = trendPositive
         self.footnote = footnote
@@ -417,35 +425,35 @@ struct CommerceStatsCompactMetricCard: View {
 
     var body: some View {
         let g = commerceStatsGlassOverlay
-        let stack = VStack(alignment: .leading, spacing: 8) {
+        let stack = VStack(alignment: .leading, spacing: 6) {
             Text(title)
                 .font(CommerceStatisticsTheme.kpiTileTitleFont())
-                .foregroundStyle(CommerceStatisticsTheme.kpiTileTitleForeground(forGlassOverlay: g))
+                .foregroundStyle(CommerceStatisticsTheme.kpiTileTitleGradient(forGlassOverlay: g))
                 .lineLimit(2)
                 .minimumScaleFactor(0.88)
             Text(value)
-                .font(CommerceStatisticsTheme.statisticNumbers(size: 22, weight: .bold))
+                .font(CommerceStatisticsTheme.statisticNumbers(size: valueFontSize, weight: .bold))
                 .foregroundStyle(CommerceStatisticsTheme.onCardPrimary(forGlassOverlay: g))
                 .minimumScaleFactor(0.62)
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
+            if let valueSubline, !valueSubline.isEmpty {
+                Text(valueSubline)
+                    .font(CommerceStatisticsTheme.statsText(size: valueSublineFontSize, weight: .semibold))
+                    .foregroundStyle(CommerceStatisticsTheme.onCardSecondary(forGlassOverlay: g).opacity(0.98))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.9)
+            }
             if let trendText, !trendText.isEmpty {
-                HStack(spacing: 4) {
-                    if let trendPositive {
-                        Image(systemName: trendPositive ? "arrowtriangle.up.fill" : "arrowtriangle.down.fill")
-                            .font(CommerceStatisticsTheme.statsText(size: 9, weight: .bold))
-                            .foregroundStyle(trendPositive ? CommerceStatisticsTheme.positive : CommerceStatisticsTheme.negative)
-                    }
-                    Text(trendText)
-                        .font(CommerceStatisticsTheme.statisticNumbers(size: 12, weight: .semibold))
-                        .foregroundStyle(trendColor(glass: g))
-                        .lineLimit(2)
-                        .minimumScaleFactor(0.85)
-                }
+                Text(trendText)
+                    .font(CommerceStatisticsTheme.statisticNumbers(size: 17, weight: .semibold))
+                    .foregroundStyle(CommerceStatisticsTheme.kpiTrendPositiveGreen)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.85)
             }
             if let footnote, !footnote.isEmpty {
                 Text(footnote)
-                    .font(CommerceStatisticsTheme.statsText(size: 11, weight: .medium))
+                    .font(CommerceStatisticsTheme.statsText(size: 12, weight: .medium))
                     .foregroundStyle(CommerceStatisticsTheme.onCardSecondary(forGlassOverlay: g).opacity(0.95))
                     .multilineTextAlignment(.leading)
                     .lineLimit(3)
@@ -455,7 +463,10 @@ struct CommerceStatsCompactMetricCard: View {
             Spacer(minLength: 0)
             bottom
         }
-        .padding(12)
+        .padding(.top, 16)
+        .padding(.leading, 18)
+        .padding(.trailing, 12)
+        .padding(.bottom, 12)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
         return Group {
@@ -467,10 +478,7 @@ struct CommerceStatsCompactMetricCard: View {
         }
     }
 
-    private func trendColor(glass: Bool) -> Color {
-        guard let trendPositive else { return CommerceStatisticsTheme.onCardSecondary(forGlassOverlay: glass) }
-        return trendPositive ? CommerceStatisticsTheme.positive : CommerceStatisticsTheme.negative
-    }
+    private func trendColor(glass _: Bool) -> Color { CommerceStatisticsTheme.kpiTrendPositiveGreen }
 }
 
 struct CommerceStatsOverviewCard: View {
@@ -488,8 +496,7 @@ struct CommerceStatsOverviewCard: View {
                 Button(action: onTap) { overviewCardLabel }
                     .commerceStatsLiquidGlassTileButton(
                         cornerRadius: CommerceStatsIndicatorLiquidGlass.kpiCornerRadius,
-                        controlSize: .large,
-                        backgroundFillOpacity: CommerceStatisticsTheme.kpiClusterTileBackgroundOpacity
+                        controlSize: .large
                     )
             } else {
                 overviewCardLabel
@@ -539,10 +546,15 @@ struct CommerceStatsBackCircleButton: View {
         Button(action: action) {
             Image(systemName: "chevron.left")
                 .font(CommerceStatisticsTheme.statsText(size: 15, weight: .semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(.black)
                 .frame(width: 34, height: 34)
         }
-        .modifier(TopBarLiquidGlassButtonModifier())
+        .background(Circle().fill(Color.white))
+        .overlay(
+            Circle()
+                .strokeBorder(Color.black.opacity(0.08), lineWidth: 1)
+        )
+        .buttonStyle(.plain)
         .accessibilityLabel("Retour")
     }
 }

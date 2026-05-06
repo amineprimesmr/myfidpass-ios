@@ -1,0 +1,10 @@
+# Artefacts locaux lourds / temporaires (ne pas versionner — clones plus légers).
+.venv_motion/
+.tmp_motion_frames/
+.agents/
+
+.DS_Store
+
+# Xcode utilisateur (évite conflits Git / bruit).
+**/xcuserdata/
+*.xcuserstate

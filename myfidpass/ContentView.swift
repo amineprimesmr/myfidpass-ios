@@ -10,19 +10,12 @@ import CoreData
 import UIKit
 
 struct ContentView: View {
-    /// Temporaire : `true` = pas de feuille « mise à jour disponible » au lancement. Repasser à `false` pour réactiver.
-    private static let suppressAppUpdateAvailableSheet = true
     @Environment(\.managedObjectContext) private var viewContext
-    @Environment(\.scenePhase) private var scenePhase
     @EnvironmentObject private var syncService: SyncService
     @EnvironmentObject private var authService: AuthService
-    @EnvironmentObject private var revenueCatSubscriptionState: RevenueCatSubscriptionState
     @StateObject private var tabRouter = MainTabRouter()
-    @State private var updateAppInfo: VersionCheckManager.ReturnResult?
-    @State private var forcedAppUpdate = false
     @State private var showMerchantSubscriptionSheet = false
-    /// Évite les sync forcées en rafale (retour app, multitâche). Intervalle large = bandeau moins « nerveux ».
-    @State private var lastForegroundFullSyncAt: Date = .distantPast
+    @State private var showGlobalSettingsSheet = false
     /// Pastille « Synchronisé » après une sync réussie (masquée si une nouvelle sync démarre).
     @State private var showSyncSuccessChip = false
     @State private var syncSuccessHideTask: Task<Void, Never>?
@@ -32,10 +25,12 @@ struct ContentView: View {
     @State private var syncRunStartedAt: Date?
     @State private var syncBannerDismissedUntil: Date = .distantPast
     @State private var syncBannerDragOffset: CGFloat = 0
-    @State private var didScheduleStartupVersionCheck = false
     /// Bandeau d’erreur sync : l’utilisateur peut masquer sans effacer `lastError` (détail dans Réglages).
     @State private var dismissedSyncErrorBanner = false
     @State private var isSoftwareKeyboardVisible = false
+    @State private var softwareKeyboardHeight: CGFloat = 0
+    /// Anti-flash: garde la pastille cachée un court instant après un événement clavier.
+    @State private var suppressTrialPillUntil: Date = .distantPast
     /// Masque le bandeau sync pendant le tutoriel (le snapshot du tutoriel ne doit pas capturer ce bandeau).
     @AppStorage("myfidpass.homeTutorial.v1") private var homeTutorialCompleted = false
 
@@ -44,7 +39,6 @@ struct ContentView: View {
             if merchantMustCompleteSubscriptionPaywall {
                 MerchantSubscriptionGateView(isMandatory: true)
                     .environmentObject(authService)
-                    .environmentObject(revenueCatSubscriptionState)
                     .environment(\.managedObjectContext, viewContext)
             } else {
                 mainMerchantTabStack
@@ -61,86 +55,57 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .myfidpassSubscriptionPaymentCompleted)) { _ in
             showMerchantSubscriptionSheet = false
-            syncService.invalidateSyncThrottle()
-            Task(priority: .userInitiated) {
-                await authService.reconcileStripeSubscriptionFromServer(force: true)
-                await authService.refreshBusinessesIfNeeded()
-                await syncService.syncAfterServerMutation()
-            }
+            Task { await runPostPaywallRefreshPipeline() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .myfidpassOpenGlobalSettingsSheet)) { _ in
+            showGlobalSettingsSheet = true
         }
         /// Paywall depuis la pastille d’essai / Réglages / notif : **feuille** (sheet). Le flux post-création de compte reste une **page pleine** (`merchantMustCompleteSubscriptionPaywall` → `isMandatory: true` ci-dessus).
         .sheet(isPresented: $showMerchantSubscriptionSheet) {
             MerchantSubscriptionGateView(isMandatory: false)
                 .environmentObject(authService)
-                .environmentObject(revenueCatSubscriptionState)
                 .presentationDetents([.large])
                 .presentationDragIndicator(.hidden)
         }
+        .sheet(isPresented: $showGlobalSettingsSheet) {
+            NavigationStack {
+                SettingsView()
+                    .environmentObject(authService)
+                    .environmentObject(syncService)
+                    .environment(\.managedObjectContext, viewContext)
+            }
+        }
         .onChange(of: showMerchantSubscriptionSheet) { _, isShowing in
             if !isShowing {
-                syncService.invalidateSyncThrottle()
-                Task(priority: .utility) {
-                    await authService.reconcileStripeSubscriptionFromServer(force: true)
-                    await authService.refreshBusinessesIfNeeded()
-                    await syncService.syncAfterServerMutation()
-                }
+                Task { await runPostPaywallRefreshPipeline() }
             }
         }
         .onChange(of: merchantMustCompleteSubscriptionPaywall) { wasBlocking, isBlocking in
             guard wasBlocking && !isBlocking else { return }
-            guard authService.consumePendingHomeTutorialAfterSignup() else { return }
-            DispatchQueue.main.async {
-                NotificationCenter.default.post(name: .myfidpassResetTutorial, object: nil)
-            }
-        }
-        .sheet(item: $updateAppInfo) { info in
-            AppUpdateView(appInfo: info, forcedUpdate: $forcedAppUpdate)
+            processPendingPostSignupHomeTutorial()
         }
         .task {
             await authService.reconcileStripeSubscriptionFromServer(force: true)
-            await authService.refreshBusinessesIfNeeded()
-            await scheduleStartupVersionCheckIfNeeded()
-        }
-        .onChange(of: scenePhase) { _, phase in
-            guard phase == .active else { return }
-            guard authService.currentScreen == .authenticated else { return }
-            guard merchantMustCompleteSubscriptionPaywall else { return }
-            Task(priority: .utility) {
-                await authService.reconcileStripeSubscriptionFromServer(force: true)
-                await authService.refreshBusinessesIfNeeded()
-                syncService.invalidateSyncThrottle()
-                await syncService.syncAfterServerMutation()
-            }
         }
     }
 
-    /// Commerçant : accès aux onglets **uniquement** avec abonnement actif (IAP RevenueCat ou statut aligné API, ex. historique Stripe côté serveur).
+    /// Commerçant : accès aux onglets **uniquement** avec essai actif ou abonnement Stripe reflété par l’API.
     private var merchantMustCompleteSubscriptionPaywall: Bool {
         authService.merchantSubscriptionEligibilityResolved
             && !authService.isPlatformAdmin
-            && !authService.subscriptionAccessUnlocked(revenueCatPremium: revenueCatSubscriptionState.hasPremiumEntitlement)
+            && !authService.subscriptionAccessUnlocked()
     }
 
+    /// Après inscription : marqueur « lancer le tutoriel une fois l’écran débloqué » (paywall ou accès direct).
+    /// N’envoie `myfidpassResetTutorial` que si le tutoriel était déjà enregistré comme terminé : sinon le
+    /// premier `OneTimeOnBoarding` tourne déjà, et une notif forçait un second montage = flashs et saccades.
     @MainActor
-    private func scheduleStartupVersionCheckIfNeeded() async {
-        guard !Self.suppressAppUpdateAvailableSheet else { return }
-        guard !didScheduleStartupVersionCheck else { return }
-        didScheduleStartupVersionCheck = true
-
-        // Ne pas présenter la feuille de mise à jour pendant la phase critique de lancement:
-        // l’écran fait déjà auth/bootstrap/sync et la feuille pouvait apparaître par-dessus
-        // "Synchronisation...", ce qui compliquait le diagnostic et surchargeait le démarrage.
-        for _ in 0..<20 {
-            if !syncService.isSyncing { break }
-            try? await Task.sleep(for: .milliseconds(250))
-        }
-        try? await Task.sleep(for: .seconds(1))
-
-        guard authService.currentScreen == .authenticated else { return }
-        guard updateAppInfo == nil else { return }
-
-        if let result = await VersionCheckManager.shared.checkIfAppUpdateAvailable() {
-            updateAppInfo = result
+    private func processPendingPostSignupHomeTutorial() {
+        guard authService.pendingHomeTutorialAfterSignup else { return }
+        _ = authService.consumePendingHomeTutorialAfterSignup()
+        guard !HomeTutorialTemporaryDisable.isOn else { return }
+        if homeTutorialCompleted {
+            NotificationCenter.default.post(name: .myfidpassResetTutorial, object: nil)
         }
     }
 
@@ -148,19 +113,27 @@ struct ContentView: View {
     @ViewBuilder
     private var mainMerchantTabStack: some View {
         MainTabView()
+            .onAppear { processPendingPostSignupHomeTutorial() }
             .safeAreaInset(edge: .top, spacing: 0) {
                 if authService.isPlatformAdmin && authService.adminShowsMerchantWorkspace {
                     adminMerchantPilotBanner
                 }
             }
             .environment(\.isSoftwareKeyboardVisible, isSoftwareKeyboardVisible)
-            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
-                withAnimation(.easeInOut(duration: 0.2)) { isSoftwareKeyboardVisible = true }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { note in
+                suppressTrialPillUntil = Date().addingTimeInterval(0.7)
+                applyKeyboardState(from: note)
             }
             .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
-                withAnimation(.easeInOut(duration: 0.2)) { isSoftwareKeyboardVisible = false }
+                suppressTrialPillUntil = Date().addingTimeInterval(0.35)
+                softwareKeyboardHeight = 0
+                isSoftwareKeyboardVisible = false
             }
-            .overlay(alignment: .top) { if homeTutorialCompleted { topSyncAndErrorOverlay } }
+            .overlay(alignment: .top) {
+                if (homeTutorialCompleted || HomeTutorialTemporaryDisable.isOn) && !floatingOverlaysSuppressed {
+                    topSyncAndErrorOverlay
+                }
+            }
             .onChange(of: syncService.lastError) { _, new in
                 if new == nil { dismissedSyncErrorBanner = false }
             }
@@ -178,7 +151,8 @@ struct ContentView: View {
                     syncBannerShowDelayTask?.cancel()
                     if Date() >= syncBannerDismissedUntil {
                         syncBannerShowDelayTask = Task { @MainActor in
-                            try? await Task.sleep(for: .seconds(1.2))
+                            // N'afficher la bannière que pour une sync réellement longue.
+                            try? await Task.sleep(for: .seconds(3.2))
                             guard !Task.isCancelled else { return }
                             guard syncService.isSyncing else { return }
                             guard Date() >= syncBannerDismissedUntil else { return }
@@ -191,7 +165,8 @@ struct ContentView: View {
                     syncBannerShowDelayTask?.cancel()
                     syncBannerShowDelayTask = nil
                     let runDuration = Date().timeIntervalSince(syncRunStartedAt ?? Date())
-                    let shouldShowSuccess = syncBannerVisibleForCurrentRun || runDuration >= 2.4
+                    // Plus de pastille "Synchronisé" sur les sync courtes/moyennes : c'est visuellement trop bruyant.
+                    let shouldShowSuccess = syncBannerVisibleForCurrentRun && runDuration >= 7.0
                     syncBannerVisibleForCurrentRun = false
                     guard syncService.lastError == nil else { return }
                     guard Date() >= syncBannerDismissedUntil, shouldShowSuccess else {
@@ -201,16 +176,13 @@ struct ContentView: View {
                     showSyncSuccessChip = true
                     syncSuccessHideTask?.cancel()
                     syncSuccessHideTask = Task { @MainActor in
-                        try? await Task.sleep(for: .seconds(1.8))
+                        try? await Task.sleep(for: .seconds(1.1))
                         guard !Task.isCancelled else { return }
                         showSyncSuccessChip = false
                     }
                 }
             }
             .onChange(of: authService.currentScreen) { _, screen in
-                if screen == .authenticated {
-                    tabRouter.applyInitialCommerceTabIfFlyerMissing()
-                }
                 guard screen != .authenticated else { return }
                 showSyncSuccessChip = false
                 syncSuccessHideTask?.cancel()
@@ -219,36 +191,24 @@ struct ContentView: View {
             .environmentObject(tabRouter)
             .environment(\.managedObjectContext, viewContext)
             .onAppear {
-                tabRouter.applyInitialCommerceTabIfFlyerMissing()
-                NotificationsService.shared.requestPermissionAndRegister()
-                Task(priority: .utility) {
-                    try? await Task.sleep(nanoseconds: 280_000_000)
-                    await syncService.syncIfNeeded()
-                }
+                Task { await NotificationsService.shared.refreshMerchantCardSetupReminder() }
             }
-            .onChange(of: scenePhase) { _, phase in
-                guard phase == .active else { return }
-                guard authService.currentScreen == .authenticated else { return }
-                let now = Date()
-                Task(priority: .utility) { @MainActor in
-                    guard now.timeIntervalSince(lastForegroundFullSyncAt) > 90 else { return }
-                    if let lastSync = syncService.lastSyncDate, now.timeIntervalSince(lastSync) < 60 {
-                        return
-                    }
-                    lastForegroundFullSyncAt = now
-                    if !authService.subscriptionAccessUnlocked(revenueCatPremium: revenueCatSubscriptionState.hasPremiumEntitlement) {
-                        await authService.reconcileStripeSubscriptionFromServer()
-                        await authService.refreshBusinessesIfNeeded()
-                    }
-                    await syncService.syncAfterServerMutation()
-                }
+            .onReceive(NotificationCenter.default.publisher(for: .myfidpassCardPreviewDisplayDidChange)) { _ in
+                Task { await NotificationsService.shared.refreshMerchantCardSetupReminder() }
             }
             .onOpenURL { url in
                 if relayOAuthUniversalLinkIfNeeded(url: url) { return }
                 handleScanDeepLink(url: url)
             }
             .overlay(alignment: .bottom) {
-                if shouldShowTrialSubscribePillInCurrentTab, !isSoftwareKeyboardVisible, let trialEnd = authService.merchantTrialEndsAt {
+                // Pendant le tutoriel d’accueil, la pastille est **au-dessus** de MainTabView : elle
+                // recevait les touchers (ou la fenêtre 2) → ouverture paywall. Masquée tant que le
+                // tutoriel n’est pas terminé.
+                if homeTutorialCompleted || HomeTutorialTemporaryDisable.isOn,
+                   shouldShowTrialSubscribePillInCurrentTab,
+                   !showMerchantSubscriptionSheet,
+                   !showGlobalSettingsSheet,
+                   let trialEnd = authService.merchantTrialEndsAt {
                     MerchantTrialSubscribePillView(trialEndsAt: trialEnd) {
                         showMerchantSubscriptionSheet = true
                     }
@@ -257,6 +217,16 @@ struct ContentView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
+    }
+
+    /// Attend la fin de l'animation de fermeture du paywall avant de déclencher la charge réseau,
+    /// sinon l'animation peut sembler "cassée" ou saccadée.
+    @MainActor
+    private func runPostPaywallRefreshPipeline() async {
+        syncService.invalidateSyncThrottle()
+        try? await Task.sleep(nanoseconds: 450_000_000)
+        await authService.reconcileStripeSubscriptionFromServer(force: true)
+        await syncService.syncAfterServerMutation()
     }
 
     /// Au-dessus de la tab bar. `gap` négatif = pastille plus basse (plus proche des onglets).
@@ -278,6 +248,15 @@ struct ContentView: View {
     private var shouldShowTrialSubscribePillInCurrentTab: Bool {
         guard !authService.isMerchantStaffUser else { return false }
         guard authService.isMerchantTrialPeriodActive, authService.merchantTrialEndsAt != nil else { return false }
+        guard !floatingOverlaysSuppressed else { return false }
+        if tabRouter.selectedTab == 0 {
+            // Ne jamais afficher tant que l'accueil n'a pas publié explicitement son mode setup.
+            guard tabRouter.hasResolvedDashboardSetupMode else { return false }
+            // Mode configuration accueil : ne jamais afficher la pastille paiement.
+            if tabRouter.isDashboardSetupMode { return false }
+            // Filet de sécurité pour éviter un flash pendant le tout premier montage.
+            if !tabRouter.isDashboardAtRoot { return false }
+        }
         return tabRouter.selectedTab == 0 || tabRouter.selectedTab == 1
     }
 
@@ -347,51 +326,62 @@ struct ContentView: View {
 
     /// Affiche le bandeau (sync en cours ou succès).
     private var syncBannerShown: Bool {
-        Date() >= syncBannerDismissedUntil && (syncBannerVisibleForCurrentRun || showSyncSuccessChip)
+        !floatingOverlaysSuppressed
+            && Date() >= syncBannerDismissedUntil
+            && (syncBannerVisibleForCurrentRun || showSyncSuccessChip)
+    }
+
+    /// Même logique de suppression temporaire pour toutes les surcouches flottantes.
+    private var floatingOverlaysSuppressed: Bool {
+        isSoftwareKeyboardVisible || softwareKeyboardHeight > 0 || Date() < suppressTrialPillUntil
     }
 
     /// Bandeau sync : **même gabarit** chargement / succès, transitions spring + crossfade (plus de rétrécissement brutal).
     private var syncIndicatorOverlay: some View {
-        Group {
+        let isBannerInProgress = syncService.isSyncing
+        return Group {
             if syncBannerShown {
-                HStack(alignment: .center, spacing: 12) {
+                HStack(alignment: .center, spacing: 10) {
                     ZStack {
-                        if syncService.isSyncing {
+                        if isBannerInProgress {
                             ProgressView()
-                                .scaleEffect(1.08)
+                                .scaleEffect(0.95)
                                 .tint(.primary)
                                 .transition(.opacity.combined(with: .scale(scale: 0.88, anchor: .center)))
                         } else {
                             Image(systemName: "checkmark.circle.fill")
-                                .font(.system(size: 22, weight: .semibold))
+                                .font(.system(size: 19, weight: .semibold))
                                 .foregroundStyle(Color.green)
                                 .symbolEffect(.bounce, options: .nonRepeating, value: showSyncSuccessChip && !syncService.isSyncing)
                                 .transition(.opacity.combined(with: .scale(scale: 0.88, anchor: .center)))
                         }
                     }
-                    .frame(width: 28, height: 28)
+                    .frame(width: 24, height: 24)
                     .accessibilityHidden(true)
 
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(syncService.isSyncing ? "Synchronisation en cours" : "Synchronisé")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(syncService.isSyncing ? Color.primary : Color.green)
+                        Text(isBannerInProgress
+                             ? "Synchronisation en cours"
+                             : "Synchronisé")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(isBannerInProgress ? Color.primary : Color.green)
                             .lineLimit(1)
                             .minimumScaleFactor(0.85)
                             .contentTransition(.interpolate)
-                        if syncService.isSyncing {
+                        if isBannerInProgress {
                             Text("Glissez vers le haut pour masquer")
-                                .font(.system(size: 12, weight: .medium))
+                                .font(.system(size: 11, weight: .medium))
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
                         }
                     }
-                    .frame(minWidth: 220, alignment: .leading)
+                    .frame(minWidth: 250, alignment: .leading)
                 }
-                .padding(.horizontal, 18)
-                .padding(.vertical, 14)
-                .frame(minHeight: 64)
-                .glassEffect(.regular, cornerRadius: 24)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 9)
+                .frame(minHeight: 50)
+                .frame(maxWidth: 360)
+                .glassEffect(.regular, cornerRadius: 999)
                 .offset(y: syncBannerDragOffset)
                 .gesture(
                     DragGesture(minimumDistance: 8)
@@ -405,7 +395,8 @@ struct ContentView: View {
                                     syncBannerVisibleForCurrentRun = false
                                     syncBannerDragOffset = -60
                                 }
-                                syncBannerDismissedUntil = Date().addingTimeInterval(35)
+                                // Si l'utilisateur la masque, ne pas la remontrer immédiatement.
+                                syncBannerDismissedUntil = Date().addingTimeInterval(120)
                                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
                                     withAnimation(.spring(response: 0.35, dampingFraction: 0.88)) {
                                         syncBannerDragOffset = 0
@@ -497,12 +488,34 @@ struct ContentView: View {
         withAnimation(MerchantMotion.tabSwitch) {
             tabRouter.selectedTab = 0
         }
-        DispatchQueue.main.async {
-            NotificationCenter.default.post(name: .myfidpassOpenHomeScanner, object: nil)
-        }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
             NotificationCenter.default.post(name: .myfidpassOpenHomeScanner, object: nil)
         }
+    }
+
+    /// Détermine si le clavier logiciel est réellement visible à partir de la frame finale iOS.
+    private func keyboardOverlapHeight(from note: Notification) -> CGFloat {
+        guard let value = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue else {
+            return 0
+        }
+        let keyboardFrame = value.cgRectValue
+        guard let scene = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .first(where: { $0.activationState == .foregroundActive || $0.activationState == .foregroundInactive }),
+              let window = scene.windows.first(where: { $0.isKeyWindow }) ?? scene.windows.first else {
+            let screen = UIScreen.main.bounds
+            return max(0, screen.maxY - keyboardFrame.minY)
+        }
+        let overlap = window.bounds.intersection(keyboardFrame).height
+        return max(0, overlap)
+    }
+
+    private func applyKeyboardState(from note: Notification) {
+        let overlap = keyboardOverlapHeight(from: note)
+        let visible = overlap > 0
+        guard softwareKeyboardHeight != overlap || isSoftwareKeyboardVisible != visible else { return }
+        softwareKeyboardHeight = overlap
+        isSoftwareKeyboardVisible = visible
     }
 }
 

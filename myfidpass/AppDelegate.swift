@@ -129,11 +129,6 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
                     object: nil,
                     userInfo: info
                 )
-                NotificationCenter.default.post(
-                    name: Notification.Name("myfidpass.openGoogleBusinessHub"),
-                    object: nil,
-                    userInfo: info
-                )
             default:
                 break
             }

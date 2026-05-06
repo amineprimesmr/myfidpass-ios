@@ -5,8 +5,98 @@
 //  Recherche d’établissement via l’API Places du backend (aligné SaaS / landing myfidpass.fr).
 //
 
+import Combine
 import SwiftUI
 import UIKit
+
+// MARK: - Overlay onboarding (liste au-dessus des boutons du bas)
+
+@MainActor
+final class EstablishmentAutocompleteLiftCoordinator: ObservableObject {
+    @Published var displayedPredictions: [PlaceAutocompletePrediction] = []
+    @Published private(set) var pickSequence: Int = 0
+    private var pickerPendingPick: PlaceAutocompletePrediction?
+
+    func syncFromPicker(_ items: [PlaceAutocompletePrediction]) {
+        displayedPredictions = items
+    }
+
+    func userSelected(_ p: PlaceAutocompletePrediction) {
+        displayedPredictions = []
+        pickerPendingPick = p
+        pickSequence += 1
+    }
+
+    func takePendingPickForPicker() -> PlaceAutocompletePrediction? {
+        let p = pickerPendingPick
+        pickerPendingPick = nil
+        return p
+    }
+}
+
+private enum EstablishmentPredictionRowText {
+    static func title(for p: PlaceAutocompletePrediction) -> String {
+        if let m = p.mainText, !m.isEmpty { return m }
+        return p.description
+    }
+
+    static func subtitle(for p: PlaceAutocompletePrediction) -> String? {
+        let s = p.secondaryText?.trimmingCharacters(in: .whitespaces) ?? ""
+        if !s.isEmpty { return s }
+        return nil
+    }
+
+    static func secondaryLine(for p: PlaceAutocompletePrediction) -> String? {
+        if let s = p.secondaryText {
+            let t = s.trimmingCharacters(in: .whitespaces)
+            if !t.isEmpty { return t }
+        }
+        let full = p.description
+        let main = title(for: p)
+        if full.hasPrefix(main) {
+            let rest = full.dropFirst(main.count).trimmingCharacters(in: CharacterSet(charactersIn: " ,"))
+            return rest.isEmpty ? nil : String(rest)
+        }
+        return nil
+    }
+}
+
+/// Liste des propositions Google (même style que le picker), pour overlay plein écran.
+struct EstablishmentAutocompletePredictionsOverlayCard: View {
+    let predictions: [PlaceAutocompletePrediction]
+    let onSelect: (PlaceAutocompletePrediction) -> Void
+
+    var body: some View {
+        ScrollView(showsIndicators: false) {
+            GroupedSettingsCard {
+                ForEach(Array(predictions.enumerated()), id: \.element.placeId) { index, p in
+                    if index > 0 { GroupedSettingsRowDivider() }
+                    Button {
+                        onSelect(p)
+                    } label: {
+                        GroupedSettingsNavigationRow(
+                            icon: "mappin.and.ellipse",
+                            title: EstablishmentPredictionRowText.title(for: p),
+                            subtitle: EstablishmentPredictionRowText.subtitle(for: p),
+                            value: nil,
+                            showsChevron: false
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .background(
+                Color.white,
+                in: RoundedRectangle(cornerRadius: GroupedSettingsMetrics.cardCornerRadius, style: .continuous)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: GroupedSettingsMetrics.cardCornerRadius, style: .continuous)
+                    .strokeBorder(Color.black.opacity(0.06), lineWidth: 1)
+            )
+        }
+        .frame(maxHeight: min(CGFloat(predictions.count) * 76 + 24, 280))
+    }
+}
 
 struct GoogleEstablishmentPicker: View {
     @Binding var selectedPlaceId: String?
@@ -17,6 +107,16 @@ struct GoogleEstablishmentPicker: View {
     var compactIntro: Bool = false
     /// UX type Process « Comment devons-nous t’appeler ? » : champ centré, placeholder question, saisie en grand.
     var processEstablishmentStyle: Bool = false
+    /// Si non nil (onboarding commerçant), la liste des propositions est affichée par le parent au-dessus des CTA.
+    var autocompleteLiftCoordinator: EstablishmentAutocompleteLiftCoordinator? = nil
+    /// Ajout dans la liste des commerces choisis pendant l’onboarding.
+    var onAddSelectedCommerce: ((_ placeId: String, _ description: String, _ mainText: String, _ secondaryText: String?) -> Bool)? = nil
+    /// Place IDs déjà ajoutés, pour empêcher les doublons.
+    var alreadyAddedPlaceIds: Set<String> = []
+    /// Déclencheur externe pour ajouter la sélection courante (bouton rendu par le parent).
+    var addCommerceRequestToken: Int = 0
+    /// Notifie le parent quand la liste de résultats devient visible/invisible.
+    var onPredictionsVisibilityChanged: ((Bool) -> Void)? = nil
 
     @State private var query = ""
     @State private var predictions: [PlaceAutocompletePrediction] = []
@@ -28,6 +128,12 @@ struct GoogleEstablishmentPicker: View {
     @State private var selectedMainText: String?
     @State private var selectedSecondaryText: String?
 
+    private var liftsProcessPredictionsToHost: Bool {
+        // Sur iPad, la liste doit rester juste sous le champ (pas remontée en overlay bas d’écran).
+        if UIDevice.current.userInterfaceIdiom == .pad { return false }
+        return autocompleteLiftCoordinator != nil && processEstablishmentStyle
+    }
+
     var body: some View {
         Group {
             if processEstablishmentStyle {
@@ -35,6 +141,20 @@ struct GoogleEstablishmentPicker: View {
             } else {
                 formStyleBody
             }
+        }
+        .overlay(alignment: .topLeading) {
+            if let coordinator = autocompleteLiftCoordinator, processEstablishmentStyle {
+                Color.clear
+                    .frame(width: 1, height: 1)
+                    .onReceive(coordinator.$pickSequence) { _ in
+                        guard let p = coordinator.takePendingPickForPicker() else { return }
+                        select(p)
+                    }
+            }
+        }
+        .onReceive(Just(predictions)) { _ in
+            syncLiftCoordinatorFromPredictions()
+            notifyPredictionsVisibilityIfNeeded()
         }
         .onChange(of: query) { _, new in
             debounceTask?.cancel()
@@ -52,12 +172,19 @@ struct GoogleEstablishmentPicker: View {
         }
         .onAppear {
             syncLabelsFromBindingsIfNeeded()
+            syncLiftCoordinatorFromPredictions()
+            notifyPredictionsVisibilityIfNeeded()
         }
         .onChange(of: selectedPlaceId) { _, _ in
             syncLabelsFromBindingsIfNeeded()
+            notifyPredictionsVisibilityIfNeeded()
         }
         .onChange(of: selectedDescription) { _, _ in
             syncLabelsFromBindingsIfNeeded()
+        }
+        .onChange(of: addCommerceRequestToken) { _, _ in
+            guard addCommerceRequestToken > 0 else { return }
+            addCommerceTapped()
         }
     }
 
@@ -104,7 +231,7 @@ struct GoogleEstablishmentPicker: View {
                     .transition(.opacity.combined(with: .scale(scale: 0.9)))
             }
 
-            if selectedPlaceId == nil, !predictions.isEmpty {
+            if selectedPlaceId == nil, !predictions.isEmpty, !liftsProcessPredictionsToHost {
                 predictionsProcessScroll()
                     .transition(
                         .asymmetric(
@@ -112,6 +239,11 @@ struct GoogleEstablishmentPicker: View {
                             removal: .opacity
                         )
                     )
+            }
+
+            if selectedPlaceId == nil, !isSearching {
+                unresolvedEstablishmentHelp
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
 
             if let hint {
@@ -129,49 +261,36 @@ struct GoogleEstablishmentPicker: View {
     }
 
     private var questionFieldBlock: some View {
-        ZStack {
-            TextField("", text: $query)
-                .font(.system(size: query.isEmpty ? 22 : 36, weight: .medium))
-                .foregroundStyle(Color.clear)
-                .tint(Color.clear)
-                .multilineTextAlignment(.center)
-                .textFieldStyle(.plain)
-                .focused($processFieldFocused)
-                .submitLabel(.search)
-
-            Group {
-                if query.isEmpty {
-                    Text(processPlaceholderQuestion)
-                        .font(.system(size: 22, weight: .medium))
-                        .foregroundStyle(AppTheme.Colors.textSecondary.opacity(0.65))
-                        .multilineTextAlignment(.center)
-                        .allowsHitTesting(false)
-                } else {
-                    Text(query)
-                        .font(.system(size: 36, weight: .medium))
-                        .foregroundStyle(AppTheme.Colors.textPrimary)
-                        .multilineTextAlignment(.center)
-                        .allowsHitTesting(false)
-                }
+        TextField(
+            "",
+            text: $query,
+            prompt: Text(processPlaceholderQuestion)
+                .foregroundStyle(AppTheme.Colors.textSecondary.opacity(0.65))
+        )
+        .font(.system(size: 22, weight: .medium))
+        .foregroundStyle(AppTheme.Colors.textPrimary)
+        .tint(AppTheme.Colors.textPrimary)
+        .multilineTextAlignment(.center)
+        .textFieldStyle(.plain)
+        .focused($processFieldFocused)
+        .submitLabel(.search)
+        .padding(.horizontal, 32)
+        .onAppear {
+            // Auto-focus pour ouvrir le clavier immédiatement à l'arrivée sur l'étape.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                processFieldFocused = (selectedPlaceId == nil)
             }
         }
-        .padding(.horizontal, 32)
     }
 
     /// Carte unique type Réglages : nom + adresse, sans répétition ni « Effacer ».
     private var selectedEstablishmentProcessBlock: some View {
-        VStack(spacing: 14) {
+        Button {
+            modifySearchTapped()
+        } label: {
             GroupedSettingsCard {
                 HStack(alignment: .top, spacing: 12) {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: GroupedSettingsMetrics.iconBoxCorner, style: .continuous)
-                            .fill(AppTheme.Colors.success.opacity(0.18))
-                            .frame(width: GroupedSettingsMetrics.iconBoxSize, height: GroupedSettingsMetrics.iconBoxSize)
-                        Image(systemName: "mappin.and.ellipse")
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(AppTheme.Colors.success)
-                    }
-                    .accessibilityHidden(true)
+                    GroupedSettingsIconBox(systemName: "building.2")
 
                     VStack(alignment: .leading, spacing: 4) {
                         Text(selectedMainText ?? fallbackTitleFromBinding)
@@ -190,9 +309,9 @@ struct GoogleEstablishmentPicker: View {
                 .padding(.horizontal, GroupedSettingsMetrics.horizontalPadding)
                 .padding(.vertical, GroupedSettingsMetrics.rowVerticalPadding)
             }
-
-            modifierSearchButton
         }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Modifier la recherche de commerce")
         .padding(.horizontal, 4)
     }
 
@@ -202,34 +321,6 @@ struct GoogleEstablishmentPicker: View {
         return parts.first.map(String.init)?.trimmingCharacters(in: .whitespaces) ?? d
     }
 
-    private var modifierSearchButton: some View {
-        Group {
-            if #available(iOS 26.0, *) {
-                Button {
-                    modifySearchTapped()
-                } label: {
-                    Text("Modifier la recherche")
-                        .font(.subheadline.weight(.semibold))
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.glass(.regular))
-                .buttonBorderShape(.capsule)
-                .controlSize(.large)
-            } else {
-                Button(action: modifySearchTapped) {
-                    Text("Modifier la recherche")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(AppTheme.Colors.primary)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                        .background(.ultraThinMaterial, in: Capsule())
-                        .overlay(Capsule().strokeBorder(Color.white.opacity(0.28), lineWidth: 1))
-                }
-                .buttonStyle(.plain)
-            }
-        }
-    }
-
     private func modifySearchTapped() {
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         withAnimation(.spring(response: 0.5, dampingFraction: 0.88)) {
@@ -237,6 +328,35 @@ struct GoogleEstablishmentPicker: View {
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
             processFieldFocused = true
+        }
+    }
+
+    private func addCommerceTapped() {
+        let pid = selectedPlaceId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let desc = selectedDescription?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if pid.isEmpty || desc.isEmpty {
+            modifySearchTapped()
+            return
+        }
+        if alreadyAddedPlaceIds.contains(pid) {
+            hint = "Ce commerce est deja dans votre liste."
+            return
+        }
+        guard let onAddSelectedCommerce else {
+            modifySearchTapped()
+            return
+        }
+        let didAdd = onAddSelectedCommerce(
+            pid,
+            desc,
+            selectedMainText ?? fallbackTitleFromBinding,
+            selectedSecondaryText
+        )
+        if didAdd {
+            hint = nil
+            modifySearchTapped()
+        } else {
+            hint = "Impossible d’ajouter ce commerce (deja present)."
         }
     }
 
@@ -260,8 +380,8 @@ struct GoogleEstablishmentPicker: View {
                 } label: {
                     GroupedSettingsNavigationRow(
                         icon: "mappin.and.ellipse",
-                        title: title(for: p),
-                        subtitle: subtitleForRow(p),
+                        title: EstablishmentPredictionRowText.title(for: p),
+                        subtitle: EstablishmentPredictionRowText.subtitle(for: p),
                         value: nil,
                         showsChevron: false
                     )
@@ -269,15 +389,19 @@ struct GoogleEstablishmentPicker: View {
                 .buttonStyle(.plain)
             }
         }
-    }
-
-    private func subtitleForRow(_ p: PlaceAutocompletePrediction) -> String? {
-        let s = p.secondaryText?.trimmingCharacters(in: .whitespaces) ?? ""
-        return s.isEmpty ? nil : s
+        // Propositions Google: fond 100% opaque (pas de transparence).
+        .background(
+            Color.white,
+            in: RoundedRectangle(cornerRadius: GroupedSettingsMetrics.cardCornerRadius, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: GroupedSettingsMetrics.cardCornerRadius, style: .continuous)
+                .strokeBorder(Color.black.opacity(0.06), lineWidth: 1)
+        )
     }
 
     private var processPlaceholderQuestion: String {
-        "Comment s’appelle votre établissement ?"
+        "Quel est votre commerce ?"
     }
 
     // MARK: - Style formulaire (inscription classique)
@@ -354,6 +478,10 @@ struct GoogleEstablishmentPicker: View {
                 predictionsGroupedList(predictions: predictions)
             }
 
+            if selectedPlaceId == nil, !isSearching {
+                unresolvedEstablishmentHelp
+            }
+
             if let hint {
                 Text(hint)
                     .font(AppTheme.Fonts.caption2())
@@ -371,23 +499,16 @@ struct GoogleEstablishmentPicker: View {
 
     // MARK: - Logique
 
-    private func title(for p: PlaceAutocompletePrediction) -> String {
-        if let m = p.mainText, !m.isEmpty { return m }
-        return p.description
+    private func syncLiftCoordinatorFromPredictions() {
+        guard liftsProcessPredictionsToHost else { return }
+        autocompleteLiftCoordinator?.syncFromPicker(predictions)
     }
 
-    private func secondaryLine(for p: PlaceAutocompletePrediction) -> String? {
-        if let s = p.secondaryText {
-            let t = s.trimmingCharacters(in: .whitespaces)
-            if !t.isEmpty { return t }
-        }
-        let full = p.description
-        let main = title(for: p)
-        if full.hasPrefix(main) {
-            let rest = full.dropFirst(main.count).trimmingCharacters(in: CharacterSet(charactersIn: " ,"))
-            return rest.isEmpty ? nil : String(rest)
-        }
-        return nil
+    private func notifyPredictionsVisibilityIfNeeded() {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let isSearchingPhase = selectedPlaceId == nil && (!trimmed.isEmpty || isSearching || !predictions.isEmpty)
+        let isVisible = isSearchingPhase
+        onPredictionsVisibilityChanged?(isVisible)
     }
 
     private func clearSelection() {
@@ -401,25 +522,48 @@ struct GoogleEstablishmentPicker: View {
     }
 
     private func select(_ p: PlaceAutocompletePrediction) {
-        let main = title(for: p)
+        let main = EstablishmentPredictionRowText.title(for: p)
         selectedPlaceId = p.placeId
         selectedDescription = p.description
         selectedMainText = main
-        selectedSecondaryText = secondaryLine(for: p)
+        selectedSecondaryText = EstablishmentPredictionRowText.secondaryLine(for: p)
         predictions = []
         query = main
         hint = nil
         relaxRequirement = false
         processFieldFocused = false
+        notifyPredictionsVisibilityIfNeeded()
+    }
+
+    @ViewBuilder
+    private var unresolvedEstablishmentHelp: some View {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.count >= 2 {
+            Text("Vous ne trouvez pas votre commerce ? Essayez plutôt avec le code postal.")
+                .font(AppTheme.Fonts.caption2())
+                .foregroundStyle(AppTheme.Colors.textSecondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 2)
+        }
     }
 
     private func search(_ input: String) async {
         await MainActor.run { isSearching = true }
         do {
             let res: PlacesAutocompleteResponse = try await APIClient.shared.request(.placesAutocomplete(input: input))
+            let filtered = res.predictions.filter { p in
+                let id = p.placeId.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !id.isEmpty else { return true }
+                if alreadyAddedPlaceIds.contains(id) { return false }
+                if let selected = selectedPlaceId?.trimmingCharacters(in: .whitespacesAndNewlines), !selected.isEmpty, selected == id {
+                    return false
+                }
+                return true
+            }
             await MainActor.run {
-                predictions = res.predictions
-                hint = predictions.isEmpty ? "Aucun résultat. Essayez un autre libellé ou la ville." : nil
+                predictions = filtered
+                hint = nil
             }
         } catch {
             await MainActor.run {
@@ -433,5 +577,6 @@ struct GoogleEstablishmentPicker: View {
             }
         }
         await MainActor.run { isSearching = false }
+        await MainActor.run { notifyPredictionsVisibilityIfNeeded() }
     }
 }

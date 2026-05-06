@@ -79,6 +79,8 @@ struct ImageCropEditorView: View {
         switch spec {
         case .squareIcon:
             notificationIconInstructionCard
+        case .flyerCustomBackground:
+            EmptyView()
         default:
             Text(spec.hint)
                 .font(.subheadline)
@@ -138,6 +140,21 @@ struct ImageCropEditorView: View {
                 .strokeBorder(Color.orange.opacity(0.35), lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.06), radius: 8, y: 2)
+    }
+
+    private func flyerCropFrame(in size: CGSize) -> CGRect {
+        let w = size.width
+        let h = size.height
+        guard w > 8, h > 8 else { return .zero }
+        let aspect = spec.aspectWidthOverHeight
+        guard aspect > 0.01 else { return .zero }
+
+        let widthFactor: CGFloat = aspect < 0.9 ? 0.92 : 0.82
+        let cropW = w * widthFactor
+        let cropH = cropW / aspect
+        let x = (w - cropW) * 0.5
+        let y = max(0, (h - cropH) * 0.5)
+        return CGRect(x: x, y: y, width: cropW, height: cropH)
     }
 
     private func validateCrop() {

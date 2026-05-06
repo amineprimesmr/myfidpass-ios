@@ -66,8 +66,8 @@ struct LanguageSelectorView: View {
                 .font(.system(size: 18))
                 .frame(width: 34, height: 34)
         }
-        .glassStyle()
         .buttonBorderShape(.circle)
+        .liquidGlassButtonAppearance(.regularTint(LiquidGlassNativeTint.darkRegular), cornerRadius: 17)
         .onAppear {
             if let saved = UserDefaults.standard.string(forKey: Self.udKey) {
                 currentLanguage = saved

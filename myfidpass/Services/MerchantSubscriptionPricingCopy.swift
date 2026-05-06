@@ -2,34 +2,51 @@
 //  MerchantSubscriptionPricingCopy.swift
 //  myfidpass
 //
-//  Texte marketing des forfaits commerçant — aligné site (Stripe) + App Store / RevenueCat.
-//  L’exécution des montants côté App Store = App Store Connect (une offre intro par produit : voir Docs).
+//  Textes marketing du paywall commerçant — **même discours que pour un seul commerce** (un seul tarif affiché,
+//  pas de paliers 2 / 3+ dans la frise). Les montants définitifs sont sur Stripe Checkout.
 //
 
 import Foundation
 
 enum MerchantSubscriptionPricingCopy {
-    // MARK: Frise & paywall (coordonné avec myfidpass.fr /abonnement)
-    //
-    // Les « 3 j » = accès Pro géré sur le compte (API), **sans** essai d’abonnement Apple.
-    // Le prélèvement App Store n’intervient qu’à la souscription (1,00 € 1er mois ou 399,00 € / an selon le forfait).
+    // MARK: En-tête paywall (`CustomMerchantProPaywallView`)
 
-    /// Ligne 1 + ligne 2 marketing par défaut (l’écran `CustomMerchantProPaywallView` remplace la ligne 2 par `MerchantIAPProductTimeline.paywallSecondHeadlineLine` dès que StoreKit a chargé l’abonnement).
-    static let paywallTitle = "3 j d’utilisation de l’app en accès Pro, sans abonnement.\nPuis, à la souscription : 1,00 € le 1er mois ou 399,00 € / an."
+    static let paywallTitle = "MyFidpass Pro"
 
-    static let paywallTitleLine1 = "3 j d’utilisation de l’app en accès Pro, sans abonnement."
+    static let paywallTitleLine1 = "COMMENCEZ À FIDÉLISER POUR 1 €"
 
-    static let appAccessStepTitle = "Dès l’inscription – 3 j d’accès Pro (hors abonnement App Store)"
+    /// Vide = pas de sous-titre sous le titre du paywall.
+    static let paywallUnderTitleLine = ""
 
-    static let appAccessStepDetail = "C’est géré sur ton compte : pas de prélèvement Apple pendant ces 3 j."
+    // MARK: Anciennes clés (non utilisées par le paywall actuel ; conservées pour recherche / cohérence éventuelle)
 
-    static let monthlyAfterTrialTitle = "À l’abonnement – 1,00 € le 1er mois, puis 49,99 €/mois (sans engagement)"
+    static let appAccessStepTitle = "Pilotez votre commerce"
 
-    static let annualAfterTrialTitle = "À l’abonnement – 399,00 € / an (≈ 33,25 €/mois) — payé en une fois"
+    static let appAccessStepDetail = "Carte fidélité, campagnes et statistiques depuis l’app."
 
-    static let monthlySubscriptionStepDetail = "C’est ici qu’intervient l’App Store dès la validation (1,00 € le 1er mois si offre appliquée, puis 49,99 €/mois)."
+    static let monthlyAfterTrialTitle = "Abonnement mensuel"
 
-    static let annualSubscriptionStepDetail = "C’est ici qu’intervient l’App Store dès la validation (montant annuel d’un coup, selon la feuille de commande)."
+    static let annualAfterTrialTitle = "Abonnement annuel"
 
-    static let purchaseCta = "S’abonner"
+    static let monthlySubscriptionStepDetail = "Renouvellement mensuel sur l’App Store."
+
+    static let annualSubscriptionStepDetail = "Renouvellement annuel sur l’App Store."
+
+    static let purchaseCta = "Commencer pour 1 €"
+
+    // MARK: - Frise verticale (paywall, ton « 1 commerce »)
+
+    static let paywallTimelineCompletedTitle = "Inscription terminée"
+    static let paywallTimelineCompletedDetail = "Votre compte commerçant est prêt."
+
+    /// Titre unique de l’étape 2 (frise) : contexte + montant sur une seule ligne. Sous-titre + date : `CustomMerchantProPaywallView`.
+    static let paywallTimelineTodayStepTitle = "Aujourd’hui : Payez 1 €"
+
+    static let paywallTimelineReminderTitle = "Boostez votre commerce"
+    /// Sous-titre étape 3 de la frise (1 phrase).
+    static let paywallTimelineReminderDetail = "Récompenses et notifications illimitées pour fidéliser vos clients."
+
+    static let paywallTimelineEndTitle = "Toujours sans engagement"
+    /// Repli si aucun prix StoreKit n’est encore résolu (`CustomMerchantProPaywallView` préfère une ligne dynamique).
+    static let paywallTimelineEndDetailFallback = "Sans engagement, annulable à tout moment depuis Réglages ou l’App Store."
 }

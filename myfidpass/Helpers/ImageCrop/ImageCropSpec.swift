@@ -45,6 +45,10 @@ enum ImageCropSpec: Equatable {
     /// `FlyerStateDTO` par défaut : bandeau logo ≈ 62 % × largeur, 15 % × hauteur.
     private static let flyerLogoDefaultWFrac: CGFloat = 0.62
     private static let flyerDefaultLogoHFrac: CGFloat = 0.15
+    /// Cadrage logo dans l’éditeur flyer : fenêtre volontairement plus verticale et moins panoramique
+    /// que le slot final pour faciliter le placement des logos hauts.
+    private static let flyerLogoCropWFrac: CGFloat = 0.56
+    private static let flyerLogoCropHFrac: CGFloat = 0.18
 
     /// Largeur / hauteur de la fenêtre de cadrage (identique au ratio d’export).
     var aspectWidthOverHeight: CGFloat {
@@ -56,8 +60,8 @@ enum ImageCropSpec: Equatable {
         case .squareIcon, .stampIcon:
             return 1.0
         case .flyerPromoLogo:
-            return (Self.flyerEmbedWidth * Self.flyerLogoDefaultWFrac)
-                / (Self.flyerEmbedHeight * Self.flyerDefaultLogoHFrac)
+            return (Self.flyerEmbedWidth * Self.flyerLogoCropWFrac)
+                / (Self.flyerEmbedHeight * Self.flyerLogoCropHFrac)
         case .flyerCustomBackground:
             return Self.flyerEmbedWidth / Self.flyerEmbedHeight
         }
@@ -75,7 +79,7 @@ enum ImageCropSpec: Equatable {
             return CGSize(width: 512, height: 512)
         case .flyerPromoLogo:
             let w: CGFloat = 2000
-            let a = (Self.flyerEmbedWidth * Self.flyerLogoDefaultWFrac) / (Self.flyerEmbedHeight * Self.flyerDefaultLogoHFrac)
+            let a = (Self.flyerEmbedWidth * Self.flyerLogoCropWFrac) / (Self.flyerEmbedHeight * Self.flyerLogoCropHFrac)
             return CGSize(width: w, height: w / a)
         case .flyerCustomBackground:
             let w: CGFloat = 2000
@@ -113,9 +117,9 @@ enum ImageCropSpec: Equatable {
         case .stampIcon:
             return "Cadre carré pour l’icône dans chaque case tampon. Pincez pour cadrer le détail, puis validez. Vous pourrez changer d’image plus tard depuis Ma carte."
         case .flyerPromoLogo:
-            return "Cadrage aligné sur le bandeau logo du flyer (zone en haut). Pincez pour zoomer et déplacez l’image ; le cadre est plus haut qu’avant pour mieux cadrer votre logo."
+            return ""
         case .flyerCustomBackground:
-            return "Cadrage plein format du flyer (portrait, comme l’affichage final). Ajustez la zone visible derrière le dégradé et la roue : pincez, puis déplacez."
+            return ""
         }
     }
 }

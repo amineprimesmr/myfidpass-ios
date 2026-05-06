@@ -24,6 +24,8 @@ final class MerchantTeamManagementViewModel: ObservableObject {
     @Published var staffCreateInFlight = false
     /// Erreurs affichées dans le formulaire inline « Ajouter un employé ».
     @Published var staffFormError: String?
+    /// Champ popup : identifiant employé (simple).
+    @Published var staffCreateLogin = ""
 
     private var slug: String? {
         let s = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -59,20 +61,20 @@ final class MerchantTeamManagementViewModel: ObservableObject {
         showRevokeConfirmation = true
     }
 
-    func createStaffAccount() async {
+    func createStaffAccount(loginRaw: String) async {
         staffFormError = nil
-        let nameTrim = staffCreateName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !nameTrim.isEmpty else {
-            staffFormError = "Saisissez le nom de l’employé (il sert d’identifiant de connexion, après normalisation)."
+        let loginInput = loginRaw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !loginInput.isEmpty else {
+            staffFormError = "Saisissez l’identifiant employé."
             return
         }
-        let login = normalizedStaffLogin(from: nameTrim)
+        let login = normalizedStaffLogin(from: loginInput)
         guard !login.isEmpty else {
             staffFormError = "Identifiant invalide après normalisation. Utilisez des lettres ou chiffres (3–32 caractères une fois formaté)."
             return
         }
         guard login.range(of: "^[a-z0-9][a-z0-9_-]{1,30}[a-z0-9]$", options: .regularExpression) != nil else {
-            staffFormError = "L’identifiant dérivé du nom ne respecte pas 3–32 caractères (a-z, 0-9, _ et -). Ajustez le nom."
+            staffFormError = "L’identifiant doit respecter 3–32 caractères (a-z, 0-9, _ et -)."
             return
         }
         let pw = staffCreatePassword
@@ -89,7 +91,7 @@ final class MerchantTeamManagementViewModel: ObservableObject {
         staffCreateInFlight = true
         defer { staffCreateInFlight = false }
         do {
-            let body = WorkspaceTeamStaffAccountBody(staffLogin: login, password: pw, name: nameTrim, role: "staff")
+            let body = WorkspaceTeamStaffAccountBody(staffLogin: login, password: pw, name: loginInput, role: "staff")
             let r: WorkspaceTeamStaffAccountResponse = try await APIClient.shared.request(
                 .businessTeamStaffAccount(slug: slug, body: body)
             )
@@ -99,8 +101,7 @@ final class MerchantTeamManagementViewModel: ObservableObject {
                 staffFormError = nil
                 successMessage = r.message
                     ?? "Compte employé créé. L’employé se connecte avec l’identifiant affiché sous le nom (identifiant normalisé) et le mot de passe choisi."
-                staffCreateName = ""
-                staffCreatePassword = ""
+                staffCreateLogin = ""
             }
             await load()
         } catch let e as APIError {
@@ -108,6 +109,11 @@ final class MerchantTeamManagementViewModel: ObservableObject {
         } catch {
             staffFormError = error.localizedDescription
         }
+    }
+
+    func isValidStaffLogin(_ raw: String) -> Bool {
+        let login = normalizedStaffLogin(from: raw)
+        return login.range(of: "^[a-z0-9][a-z0-9_-]{1,30}[a-z0-9]$", options: .regularExpression) != nil
     }
 
     /// Dérive le `staff_login` attendu par l’API (même règles que l’ancien `suggestedStaffLogin`).
@@ -176,7 +182,7 @@ final class MerchantTeamManagementViewModel: ObservableObject {
 struct MerchantTeamManagementView: View {
     @EnvironmentObject private var authService: AuthService
     @StateObject private var model = MerchantTeamManagementViewModel()
-    @State private var showAddEmployeeForm = false
+    @State private var showAddEmployeePopup = false
 
     var body: some View {
         ZStack {
@@ -215,6 +221,12 @@ struct MerchantTeamManagementView: View {
                                 .foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
                                 .multilineTextAlignment(.leading)
+                            if let err = model.staffFormError, !err.isEmpty {
+                                Text(err)
+                                    .font(.footnote)
+                                    .foregroundStyle(Color(UIColor.systemRed))
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, GroupedSettingsMetrics.horizontalPadding)
@@ -225,72 +237,19 @@ struct MerchantTeamManagementView: View {
                         VStack(alignment: .leading, spacing: 12) {
                             Button {
                                 model.staffFormError = nil
-                                withAnimation(.easeInOut(duration: 0.2)) { showAddEmployeeForm.toggle() }
+                                model.staffCreateLogin = ""
+                                model.staffCreatePassword = ""
+                                showAddEmployeePopup = true
                             } label: {
                                 HStack {
                                     GroupedSettingsIconBox(systemName: "person.crop.circle.badge.plus")
                                     Text("+ Ajouter un employé")
                                         .font(.body.weight(.semibold))
                                     Spacer()
-                                    Image(systemName: showAddEmployeeForm ? "chevron.up" : "chevron.down")
-                                        .font(.caption.weight(.semibold))
-                                        .foregroundStyle(.tertiary)
                                 }
                             }
                             .buttonStyle(.plain)
                             .disabled(model.staffCreateInFlight || model.isLoading)
-
-                            if showAddEmployeeForm {
-                                VStack(alignment: .leading, spacing: 10) {
-                                    if let err = model.staffFormError, !err.isEmpty {
-                                        Text(err)
-                                            .font(.footnote)
-                                            .foregroundStyle(Color(UIColor.systemRed))
-                                            .fixedSize(horizontal: false, vertical: true)
-                                    }
-
-                                    TextField("Nom (identifiant de connexion)", text: $model.staffCreateName)
-                                        .textInputAutocapitalization(.never)
-                                        .autocorrectionDisabled()
-
-                                    if let derivedId = derivedStaffLoginPreview() {
-                                        Text("Identifiant de connexion : \(derivedId)")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                            .fixedSize(horizontal: false, vertical: true)
-                                    }
-
-                                    TextField("Mot de passe", text: $model.staffCreatePassword)
-                                        .textInputAutocapitalization(.never)
-                                        .autocorrectionDisabled()
-                                    Text("Le mot de passe n’est jamais choisi par l’app : saisissez celui que vous communiquez à l’employé.")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                        .fixedSize(horizontal: false, vertical: true)
-
-                                    Button {
-                                        Task { @MainActor in
-                                            await model.createStaffAccount()
-                                        }
-                                    } label: {
-                                        HStack {
-                                            if model.staffCreateInFlight {
-                                                ProgressView()
-                                            } else {
-                                                Image(systemName: "person.badge.plus")
-                                            }
-                                            Text("Créer l’employé")
-                                                .font(.body.weight(.semibold))
-                                        }
-                                        .frame(maxWidth: .infinity)
-                                    }
-                                    .buttonStyle(.borderedProminent)
-                                    .disabled(model.staffCreateInFlight
-                                        || model.staffCreateName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                        || model.staffCreatePassword.count < 3)
-                                }
-                                .padding(.top, 4)
-                            }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, GroupedSettingsMetrics.horizontalPadding)
@@ -357,6 +316,28 @@ struct MerchantTeamManagementView: View {
             Button("Annuler", role: .cancel) {
                 model.pendingRevokeId = nil
             }
+        }
+        .alert("Ajouter un employé", isPresented: $showAddEmployeePopup) {
+            TextField("Identifiant employé", text: $model.staffCreateLogin)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+            SecureField("Mot de passe employé", text: $model.staffCreatePassword)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+            Button("Annuler", role: .cancel) {}
+            Button("Créer") {
+                Task { @MainActor in
+                    await model.createStaffAccount(loginRaw: model.staffCreateLogin)
+                }
+            }
+            .disabled(
+                model.staffCreateInFlight
+                    || model.staffCreateLogin.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    || !model.isValidStaffLogin(model.staffCreateLogin)
+                    || model.staffCreatePassword.count < 3
+            )
+        } message: {
+            Text("Utilisez 3 à 32 caractères pour l’identifiant (a-z, 0-9, _ et -), puis un mot de passe d’au moins 3 caractères.")
         }
     }
 
@@ -456,13 +437,6 @@ struct MerchantTeamManagementView: View {
         }
         guard !parts.isEmpty else { return nil }
         return "Fidélité : " + parts.joined(separator: " · ")
-    }
-
-    private func derivedStaffLoginPreview() -> String? {
-        let t = model.staffCreateName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !t.isEmpty else { return nil }
-        let d = model.normalizedStaffLogin(from: t)
-        return d.isEmpty ? nil : d
     }
 
     private func teamMemberRoleLine(_ role: String?) -> String? {
