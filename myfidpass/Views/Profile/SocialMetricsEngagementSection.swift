@@ -43,9 +43,6 @@ struct SocialMetricsEngagementSection: View {
             }
         }
         .task { await load() }
-        .onReceive(NotificationCenter.default.publisher(for: .myfidpassRemoteSyncDidMerge)) { _ in
-            Task { await load() }
-        }
         .onReceive(NotificationCenter.default.publisher(for: .myfidpassOAuthUniversalLinkRelay)) { note in
             guard let url = note.object as? URL else { return }
             Task {

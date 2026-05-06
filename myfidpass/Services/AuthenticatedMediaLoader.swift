@@ -32,7 +32,7 @@ enum AuthenticatedMediaLoader {
         )
         config.requestCachePolicy = .returnCacheDataElseLoad
         config.httpMaximumConnectionsPerHost = 10
-        config.timeoutIntervalForResource = 90
+        config.timeoutIntervalForResource = 30
         return URLSession(configuration: config)
     }()
 
@@ -171,7 +171,7 @@ enum AuthenticatedMediaLoader {
         case 200 ... 299:
             payload = data
         case 304:
-            if let cached = URLCache.shared.cachedResponse(for: req), !cached.data.isEmpty {
+            if let cached = Self.session.configuration.urlCache?.cachedResponse(for: req), !cached.data.isEmpty {
                 payload = cached.data
             } else {
                 throw URLError(.badServerResponse)

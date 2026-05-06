@@ -78,13 +78,25 @@ enum CardLogoStorage {
     /// Enregistre l'image de fond de carte (strip Wallet) et retourne le chemin relatif.
     static func saveCardBackground(_ image: UIImage) -> String? {
         let url = directoryURL.appendingPathComponent(cardBackgroundFilename)
-        guard let data = image.pngData() else { return nil }
+        let flat = image.imageOrientation == .up ? image : flattenOrientation(image)
+        guard let data = flat.pngData() else { return nil }
         do {
             try data.write(to: url)
             notifyLocalFileChanged()
             return relativeCardBackgroundPath
         } catch {
             return nil
+        }
+    }
+
+    /// Aplatit la rotation EXIF dans un nouveau bitmap `.up` — `pngData()` ne bake pas l’orientation.
+    private static func flattenOrientation(_ image: UIImage) -> UIImage {
+        guard image.size.width > 0, image.size.height > 0 else { return image }
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = image.scale
+        format.opaque = false
+        return UIGraphicsImageRenderer(size: image.size, format: format).image { _ in
+            image.draw(in: CGRect(origin: .zero, size: image.size))
         }
     }
 
@@ -133,11 +145,12 @@ enum CardLogoStorage {
         let size = image.size
         let scale = min(maxSide / max(size.width, size.height), 1)
         let newSize = CGSize(width: size.width * scale, height: size.height * scale)
-        UIGraphicsBeginImageContextWithOptions(newSize, false, 1)
-        image.draw(in: CGRect(origin: .zero, size: newSize))
-        let resized = UIGraphicsGetImageFromCurrentImageContext()
-        UIGraphicsEndImageContext()
-        guard let img = resized, let data = img.jpegData(compressionQuality: 0.85) else { return nil }
+        let format = UIGraphicsImageRendererFormat()
+        format.opaque = true
+        format.scale = 1
+        let renderer = UIGraphicsImageRenderer(size: newSize, format: format)
+        let resized = renderer.image { _ in image.draw(in: CGRect(origin: .zero, size: newSize)) }
+        guard let data = resized.jpegData(compressionQuality: 0.85) else { return nil }
         return "data:image/jpeg;base64," + data.base64EncodedString()
     }
 
@@ -169,18 +182,18 @@ enum CardLogoStorage {
     static func compressedBase64ForLogoIconAPI(image: UIImage) -> String? {
         let maxBytes = 500 * 1024
         var maxSide: CGFloat = 512
+        let format = UIGraphicsImageRendererFormat()
+        format.opaque = true
+        format.scale = 1
         while maxSide >= 200 {
             let size = image.size
             let scale = min(maxSide / max(size.width, size.height), 1)
             let newSize = CGSize(width: size.width * scale, height: size.height * scale)
-            UIGraphicsBeginImageContextWithOptions(newSize, false, 1)
-            image.draw(in: CGRect(origin: .zero, size: newSize))
-            let resized = UIGraphicsGetImageFromCurrentImageContext()
-            UIGraphicsEndImageContext()
-            guard let img = resized else { break }
+            let renderer = UIGraphicsImageRenderer(size: newSize, format: format)
+            let resized = renderer.image { _ in image.draw(in: CGRect(origin: .zero, size: newSize)) }
             var q: CGFloat = 0.82
             while q >= 0.38 {
-                if let data = img.jpegData(compressionQuality: q), data.count <= maxBytes {
+                if let data = resized.jpegData(compressionQuality: q), data.count <= maxBytes {
                     return "data:image/jpeg;base64," + data.base64EncodedString()
                 }
                 q -= 0.07

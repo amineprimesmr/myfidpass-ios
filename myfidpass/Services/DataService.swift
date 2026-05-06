@@ -93,11 +93,6 @@ final class DataService: ObservableObject {
         self.viewContext = context
     }
 
-    /// Après une sync serveur (contexte en arrière-plan fusionné dans le viewContext) : forcer le recalcul des feeds.
-    func bumpRefreshAfterRemoteMerge() {
-        updateTrigger += 1
-    }
-
     // MARK: - Business
 
     func currentBusiness() -> Business? {
@@ -423,7 +418,7 @@ final class DataService: ObservableObject {
         var items: [DashboardActivityEntry] = []
 
         var seenScanKeys = Set<String>()
-        for s in recentStamps(for: template, limit: 400) {
+        for s in recentStamps(for: template, limit: 180) {
             guard let card = s.clientCard, card.template == template else { continue }
             if WalletPreviewMember.shouldExcludeFromMerchantActivity(clientEmail: card.clientEmail) { continue }
             let name = card.clientDisplayName ?? "Client"
@@ -482,7 +477,7 @@ final class DataService: ObservableObject {
         guard !dayStarts.isEmpty else { return [:] }
         var buckets: [Date: [DashboardActivityEntry]] = [:]
         /// Limite élevée : le regroupement par jour ne garde qu’une semaine, mais le fil global est récent d’abord.
-        let feed = dashboardActivityFeed(limit: 2000)
+        let feed = dashboardActivityFeed(limit: 500)
         for e in feed {
             let sd = cal.startOfDay(for: e.date)
             guard dayStarts.contains(sd) else { continue }
@@ -514,6 +509,7 @@ final class DataService: ObservableObject {
         let request = Stamp.fetchRequest()
         request.predicate = NSPredicate(format: "clientCard.template == %@", template)
         request.sortDescriptors = [NSSortDescriptor(keyPath: \Stamp.createdAt, ascending: false)]
+        request.fetchLimit = 1500
         let stamps = (try? viewContext.fetch(request)) ?? []
         var best: [String: Date] = [:]
         for s in stamps {

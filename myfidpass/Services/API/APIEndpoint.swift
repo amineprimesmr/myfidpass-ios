@@ -2,7 +2,8 @@
 //  APIEndpoint.swift
 //  myfidpass
 //
-//  Endpoints alignés sur l’API MyFidpass / fidelity (dashboard, membres, jeux, engagement).
+//  Contrat HTTP unique avec le backend SaaS (`fidelity/backend`, prod https://api.myfidpass.fr).
+//  Toute nouvelle route : ajouter ici + implémenter côté `fidelity/backend/src/routes/`.
 //
 
 import Foundation
@@ -20,32 +21,64 @@ enum APIEndpoint {
     case authCheckEmail(email: String)
     /// E-mail **ou** identifiant employé (sans @) — POST /api/auth/check-identifier
     case authCheckIdentifier(identifier: String)
-    case authRegister(email: String, password: String, name: String?, googlePlaceId: String?, establishmentName: String?)
+    case authRegister(
+        email: String,
+        password: String,
+        name: String?,
+        googlePlaceId: String?,
+        establishmentName: String?,
+        establishments: [AuthEstablishmentPayload]?
+    )
     /// Recherche d'établissements Google (même logique que le SaaS) — sans JWT.
     case placesAutocomplete(input: String)
     /// Détails lieu (nom, adresse) — sans JWT.
     case placesPlaceDetails(placeId: String)
     case authForgotPassword(email: String)
     case authResetPassword(token: String, newPassword: String)
-    case authGoogle(idToken: String, googlePlaceId: String?, establishmentName: String?)
-    case authApple(idToken: String, name: String?, email: String?, googlePlaceId: String?, establishmentName: String?)
+    case authGoogle(
+        idToken: String,
+        googlePlaceId: String?,
+        establishmentName: String?,
+        establishments: [AuthEstablishmentPayload]?,
+        authIntent: String? = nil
+    )
+    case authApple(
+        idToken: String,
+        name: String?,
+        email: String?,
+        googlePlaceId: String?,
+        establishmentName: String?,
+        establishments: [AuthEstablishmentPayload]?,
+        authIntent: String? = nil
+    )
     case authPhoneSendCode(phone: String)
-    case authPhoneVerify(phone: String, code: String, googlePlaceId: String?, establishmentName: String?)
+    case authPhoneVerify(
+        phone: String,
+        code: String,
+        googlePlaceId: String?,
+        establishmentName: String?,
+        establishments: [AuthEstablishmentPayload]?
+    )
     case authMe
     case authConfig
     case authDeleteAccount
     case authRefresh(refreshToken: String)
     case authLogout(refreshToken: String)
-    /// Synchronise l’abonnement App Store côté API après achat (RevenueCat).
-    case authRevenueCatSync
 
     // MARK: - Commerce (JWT)
     case createBusiness(payload: CreateBusinessPayload)
-    case paymentCheckout(planId: String?)
+    case createBusinessFromPlace(establishmentName: String, googlePlaceId: String)
+    case paymentCheckout(plan: String)
     /// Réparation : abonnement payé sur Stripe mais pas reflété en base (webhook manquant).
     case paymentReconcileSubscription
     /// Facturation / moyen de paiement (Stripe Customer Portal).
     case paymentPortalSession
+    /// Paiement Stripe dédié au commerce actif (mode carte séparée par commerce).
+    case paymentBusinessCheckoutSession(businessSlug: String, interval: String?)
+    /// Dev uniquement : simule un abonnement actif sans Stripe (POST=activer, DELETE=désactiver).
+    case devSimulatePayment(slug: String, activate: Bool)
+    /// Dev uniquement : statut de la simulation (GET).
+    case devSimulatePaymentStatus(slug: String)
 
     // MARK: - Sync (dashboard / slug)
     case businessSettings(slug: String)
@@ -111,12 +144,20 @@ enum APIEndpoint {
     case dashboardFlyerAIGenerate(slug: String, body: FlyerAIGenerateRequestDTO)
     /// Statut d’un job de génération flyer (après 202 + `job_id`).
     case dashboardFlyerAIGenerateJobStatus(slug: String, jobId: String)
+    /// Détourage logo (rembg côté serveur ; repli heuristique local si `ok: false`).
+    case dashboardFlyerRemoveLogoBackground(slug: String, imageDataUrl: String)
+    /// Logo sans fond (remove.bg) persisté côté serveur — réutilisable pour la carte.
+    case dashboardLogoNobg(slug: String)
     /// IA: transforme du texte libre en règle d’automatisation campagne.
     case dashboardCampaignAutomationParse(slug: String, body: CampaignAutomationAIParseRequestDTO)
     /// Métriques avis & réseaux (historique, deltas).
     case dashboardSocialMetrics(slug: String)
     case dashboardSocialMetricsRefresh(slug: String)
     case dashboardSocialMetricsManual(slug: String, payload: SocialMetricsManualPayload)
+    /// Missions réseaux sociaux (Instagram, TikTok, Facebook, X) — config par pseudo.
+    case dashboardSocialMissions(slug: String)
+    case dashboardSocialMissionsPatch(slug: String, payload: SocialMissionsPatchPayload)
+    case dashboardSocialMissionsStats(slug: String)
     /// OAuth Meta (Instagram + Page Facebook).
     case dashboardSocialOAuthMetaStart(slug: String)
     case dashboardSocialOAuthGoogleYoutubeStart(slug: String)
@@ -182,11 +223,14 @@ enum APIEndpoint {
         case .authDeleteAccount: return "/api/auth/account"
         case .authRefresh: return "/api/auth/refresh"
         case .authLogout: return "/api/auth/logout"
-        case .authRevenueCatSync: return "/api/auth/revenuecat-sync"
         case .createBusiness: return "/api/businesses"
+        case .createBusinessFromPlace: return "/api/businesses/create-from-place"
         case .paymentCheckout: return "/api/payment/create-checkout-session"
         case .paymentReconcileSubscription: return "/api/payment/reconcile-subscription"
         case .paymentPortalSession: return "/api/payment/create-portal-session"
+        case .paymentBusinessCheckoutSession: return "/api/payment/create-business-checkout-session"
+        case .devSimulatePayment(let slug, _): return "/api/businesses/\(pathSegment(slug))/dashboard/dev-simulate-payment"
+        case .devSimulatePaymentStatus(let slug): return "/api/businesses/\(pathSegment(slug))/dashboard/dev-simulate-payment"
         case .businessSettings(let slug): return "/api/businesses/\(pathSegment(slug))/dashboard/settings"
         case .businessStats(let slug, _): return "/api/businesses/\(pathSegment(slug))/dashboard/stats"
         case .businessStatsTraffic(let slug, _): return "/api/businesses/\(pathSegment(slug))/dashboard/stats/traffic"
@@ -225,10 +269,17 @@ enum APIEndpoint {
         case .dashboardFlyerAIGenerate(let slug, _): return "/api/businesses/\(pathSegment(slug))/dashboard/flyer/ai-generate"
         case .dashboardFlyerAIGenerateJobStatus(let slug, let jobId):
             return "/api/businesses/\(pathSegment(slug))/dashboard/flyer/ai-generate/jobs/\(pathSegment(jobId))"
+        case .dashboardFlyerRemoveLogoBackground(let slug, _):
+            return "/api/businesses/\(pathSegment(slug))/dashboard/flyer/remove-logo-background"
+        case .dashboardLogoNobg(let slug):
+            return "/api/businesses/\(pathSegment(slug))/logo-nobg"
         case .dashboardCampaignAutomationParse(let slug, _): return "/api/businesses/\(pathSegment(slug))/dashboard/campaign-automation/parse"
         case .dashboardSocialMetrics(let slug): return "/api/businesses/\(pathSegment(slug))/dashboard/social-metrics"
         case .dashboardSocialMetricsRefresh(let slug): return "/api/businesses/\(pathSegment(slug))/dashboard/social-metrics/refresh"
         case .dashboardSocialMetricsManual(let slug, _): return "/api/businesses/\(pathSegment(slug))/dashboard/social-metrics/manual"
+        case .dashboardSocialMissions(let slug): return "/api/businesses/\(pathSegment(slug))/dashboard/social-missions"
+        case .dashboardSocialMissionsPatch(let slug, _): return "/api/businesses/\(pathSegment(slug))/dashboard/social-missions"
+        case .dashboardSocialMissionsStats(let slug): return "/api/businesses/\(pathSegment(slug))/dashboard/social-missions/stats"
         case .dashboardSocialOAuthMetaStart(let slug): return "/api/businesses/\(pathSegment(slug))/dashboard/social-oauth/meta/start"
         case .dashboardSocialOAuthGoogleYoutubeStart(let slug): return "/api/businesses/\(pathSegment(slug))/dashboard/social-oauth/google-youtube/start"
         case .dashboardSocialOAuthGoogleBusinessStart(let slug): return "/api/businesses/\(pathSegment(slug))/dashboard/social-oauth/google-business/start"
@@ -268,11 +319,12 @@ enum APIEndpoint {
     }
 
     /// Pas de `ensureValidAccessToken` ni d’en-tête `Authorization` : évite d’envoyer d’anciens JWT (compte supprimé / reset BDD) sur `/api/auth/config` ou login, ce qui provoquait un refresh en échec et « Session expirée » au moment de Continuer avec Google.
+    /// `placesAutocomplete` suit le `default` (false) : avec Bearer, le backend retire les lieux Google déjà liés au compte (comme le SaaS).
     var skipsClientSessionBootstrap: Bool {
         switch self {
         case .authConfig, .authLogin, .authCheckEmail, .authCheckIdentifier, .authRegister, .authForgotPassword, .authResetPassword,
              .authGoogle, .authApple, .authPhoneSendCode, .authPhoneVerify,
-             .authRefresh, .authLogout, .placesAutocomplete, .placesPlaceDetails:
+             .authRefresh, .authLogout, .placesPlaceDetails:
             return true
         default:
             return false
@@ -294,18 +346,21 @@ enum APIEndpoint {
         switch self {
         case .authLogin, .authCheckEmail, .authCheckIdentifier, .authRegister, .authForgotPassword, .authResetPassword, .authGoogle, .authApple,
              .authPhoneSendCode, .authPhoneVerify,
-             .authRefresh, .authLogout, .authRevenueCatSync,
+             .authRefresh, .authLogout,
              .scan, .deviceRegister, .notifyClients, .createCategory, .updateMemberCategories, .creditMember,
              .dashboardReceiptChallenge,
-             .removeMemberPoints, .redeemReward, .createBusiness, .paymentCheckout, .paymentReconcileSubscription, .paymentPortalSession, .dashboardNotificationSend, .dashboardRemoveTestDevice,
+             .removeMemberPoints, .redeemReward, .createBusiness, .createBusinessFromPlace, .paymentCheckout, .paymentReconcileSubscription, .paymentPortalSession, .dashboardNotificationSend, .dashboardRemoveTestDevice,
+             .paymentBusinessCheckoutSession,
              .membersImport, .createMember, .memberTicketsConvert, .claimMemberReward, .deleteAllDashboardMembers,
-             .dashboardFlyerAIGenerate, .dashboardCampaignAutomationParse,
+             .dashboardFlyerAIGenerate, .dashboardFlyerRemoveLogoBackground, .dashboardCampaignAutomationParse,
              .dashboardSocialMetricsRefresh, .dashboardSocialMetricsManual, .businessTeamInvite, .businessTeamStaffAccount:
             return "POST"
-        case .patchDashboardSettings, .updateCategory, .updateLocationSettings, .dashboardPatchGame:
+        case .patchDashboardSettings, .updateCategory, .updateLocationSettings, .dashboardPatchGame, .dashboardSocialMissionsPatch:
             return "PATCH"
         case .deleteCategory, .authDeleteAccount, .deleteDashboardMember, .businessTeamRevoke:
             return "DELETE"
+        case .devSimulatePayment(_, let activate):
+            return activate ? "POST" : "DELETE"
         case .dashboardGameRewardsPut, .dashboardFlyerPut:
             return "PUT"
         default:
@@ -433,32 +488,67 @@ enum APIEndpoint {
             bodyData = try encoder.encode(CheckEmailPayload(email: email))
         case .authCheckIdentifier(let identifier):
             bodyData = try encoder.encode(CheckIdentifierPayload(identifier: identifier))
-        case .authRegister(let email, let password, let name, let googlePlaceId, let establishmentName):
+        case .authRegister(let email, let password, let name, let googlePlaceId, let establishmentName, let establishments):
             bodyData = try encoder.encode(
-                AuthRegisterPayload(email: email, password: password, name: name, googlePlaceId: googlePlaceId, establishmentName: establishmentName)
+                AuthRegisterPayload(
+                    email: email,
+                    password: password,
+                    name: name,
+                    googlePlaceId: googlePlaceId,
+                    establishmentName: establishmentName,
+                    establishments: establishments
+                )
             )
         case .authForgotPassword(let email):
             bodyData = try encoder.encode(ForgotPasswordPayload(email: email))
         case .authResetPassword(let token, let newPassword):
             bodyData = try encoder.encode(ResetPasswordPayload(token: token, newPassword: newPassword))
-        case .authGoogle(let idToken, let googlePlaceId, let establishmentName):
-            bodyData = try encoder.encode(GooglePayload(idToken: idToken, googlePlaceId: googlePlaceId, establishmentName: establishmentName))
-        case .authApple(let idToken, let name, let email, let googlePlaceId, let establishmentName):
-            bodyData = try encoder.encode(ApplePayload(idToken: idToken, name: name, email: email, googlePlaceId: googlePlaceId, establishmentName: establishmentName))
+        case .authGoogle(let idToken, let googlePlaceId, let establishmentName, let establishments, let authIntent):
+            bodyData = try encoder.encode(
+                GooglePayload(
+                    idToken: idToken,
+                    googlePlaceId: googlePlaceId,
+                    establishmentName: establishmentName,
+                    establishments: establishments,
+                    authIntent: authIntent
+                )
+            )
+        case .authApple(let idToken, let name, let email, let googlePlaceId, let establishmentName, let establishments, let authIntent):
+            bodyData = try encoder.encode(
+                ApplePayload(
+                    idToken: idToken,
+                    name: name,
+                    email: email,
+                    googlePlaceId: googlePlaceId,
+                    establishmentName: establishmentName,
+                    establishments: establishments,
+                    authIntent: authIntent
+                )
+            )
         case .authPhoneSendCode(let phone):
             bodyData = try encoder.encode(PhoneSendBody(phone: phone))
-        case .authPhoneVerify(let phone, let code, let googlePlaceId, let establishmentName):
+        case .authPhoneVerify(let phone, let code, let googlePlaceId, let establishmentName, let establishments):
             bodyData = try encoder.encode(
-                PhoneVerifyBody(phone: phone, code: code, googlePlaceId: googlePlaceId, establishmentName: establishmentName)
+                PhoneVerifyBody(
+                    phone: phone,
+                    code: code,
+                    googlePlaceId: googlePlaceId,
+                    establishmentName: establishmentName,
+                    establishments: establishments
+                )
             )
         case .createBusiness(let payload):
             bodyData = try encoder.encode(payload)
-        case .paymentCheckout(let planId):
-            bodyData = try encoder.encode(CheckoutSessionPayload(planId: planId))
+        case .createBusinessFromPlace(let name, let placeId):
+            bodyData = try encoder.encode(CreateBusinessFromPlacePayload(establishmentName: name, googlePlaceId: placeId))
+        case .paymentCheckout(let plan):
+            bodyData = try encoder.encode(CheckoutSessionPayload(plan: plan))
         case .paymentReconcileSubscription:
             bodyData = try encoder.encode(PaymentReconcileEmptyBody())
         case .paymentPortalSession:
             bodyData = try encoder.encode(PaymentReconcileEmptyBody())
+        case .paymentBusinessCheckoutSession(let businessSlug, let interval):
+            bodyData = try encoder.encode(BusinessCheckoutSessionPayload(businessSlug: businessSlug, interval: interval))
         case .scan(_, let barcode, let visit, let points, let amountEur, let receiptValidationToken):
             bodyData = try encoder.encode(ScanPayload(barcode: barcode, visit: visit, points: points, amount_eur: amountEur, receiptValidationToken: receiptValidationToken))
         case .dashboardReceiptChallenge(_, let amountEur):
@@ -494,11 +584,15 @@ enum APIEndpoint {
             bodyData = try payload.encodedJSON()
         case .dashboardFlyerAIGenerate(_, let body):
             bodyData = try encoder.encode(body)
+        case .dashboardFlyerRemoveLogoBackground(_, let imageDataUrl):
+            bodyData = try encoder.encode(FlyerRemoveLogoBgRequestBody(imageDataUrl: imageDataUrl))
         case .dashboardCampaignAutomationParse(_, let body):
             bodyData = try encoder.encode(body)
         case .dashboardSocialMetricsRefresh:
             bodyData = try encoder.encode(EmptyJSONBody())
         case .dashboardSocialMetricsManual(_, let payload):
+            bodyData = try encoder.encode(payload)
+        case .dashboardSocialMissionsPatch(_, let payload):
             bodyData = try encoder.encode(payload)
         case .dashboardPatchGame(_, _, let body):
             bodyData = try encoder.encode(body)
@@ -518,8 +612,6 @@ enum APIEndpoint {
             bodyData = try encoder.encode(RefreshTokenPayload(refreshToken: refreshToken))
         case .authLogout(let refreshToken):
             bodyData = try encoder.encode(RefreshTokenPayload(refreshToken: refreshToken))
-        case .authRevenueCatSync:
-            bodyData = try encoder.encode(PaymentReconcileEmptyBody())
         case .businessTeamInvite(_, let body):
             bodyData = try encoder.encode(body)
         case .businessTeamStaffAccount(_, let body):
@@ -534,6 +626,8 @@ enum APIEndpoint {
         switch self {
         case .dashboardNotificationSend, .patchDashboardSettings, .dashboardFlyerAIGenerate, .dashboardCampaignAutomationParse:
             request.timeoutInterval = 300
+        case .dashboardFlyerRemoveLogoBackground:
+            request.timeoutInterval = 120
         default:
             break
         }
@@ -572,11 +666,15 @@ private struct GooglePayload: Encodable {
     let idToken: String
     let googlePlaceId: String?
     let establishmentName: String?
+    let establishments: [AuthEstablishmentPayload]?
+    let authIntent: String?
 
     enum CodingKeys: String, CodingKey {
         case idToken
         case googlePlaceId = "google_place_id"
         case establishmentName = "establishment_name"
+        case establishments
+        case authIntent = "auth_intent"
     }
 }
 
@@ -589,11 +687,13 @@ private struct PhoneVerifyBody: Encodable {
     let code: String
     let googlePlaceId: String?
     let establishmentName: String?
+    let establishments: [AuthEstablishmentPayload]?
 
     enum CodingKeys: String, CodingKey {
         case phone, code
         case googlePlaceId = "google_place_id"
         case establishmentName = "establishment_name"
+        case establishments
     }
 }
 
@@ -603,6 +703,8 @@ private struct ApplePayload: Encodable {
     let email: String?
     let googlePlaceId: String?
     let establishmentName: String?
+    let establishments: [AuthEstablishmentPayload]?
+    let authIntent: String?
 
     enum CodingKeys: String, CodingKey {
         case idToken
@@ -610,6 +712,8 @@ private struct ApplePayload: Encodable {
         case email
         case googlePlaceId = "google_place_id"
         case establishmentName = "establishment_name"
+        case establishments
+        case authIntent = "auth_intent"
     }
 }
 

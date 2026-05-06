@@ -15,34 +15,88 @@ private struct WelcomeFlow: View {
 
     /// Snapshot au montage (et à chaque incrément de `firstLaunchOnboardingRestartEpoch` via `.id`).
     @State private var needsMerchantPremises: Bool = !FirstLaunchOnboarding.hasCompleted
+    @State private var stage: WelcomeStage = .entry
+    @State private var authEntryPath: AuthEntryPath = .signUp
+
+    private enum WelcomeStage {
+        case entry
+        case merchantPremises
+        case authChoice
+    }
+
+    private enum AuthEntryPath {
+        case signUp
+        case signIn
+    }
 
     var body: some View {
         Group {
-            if needsMerchantPremises {
+            switch stage {
+            case .entry:
+                AuthLaunchEntryView(
+                    onCreateAccount: {
+                        authEntryPath = .signUp
+                        FirstLaunchOnboarding.rewindToMerchantPremisesSelectionForFreshCommercePick()
+                        withAnimation(.easeInOut(duration: 0.25)) {
+                            needsMerchantPremises = true
+                            stage = .merchantPremises
+                        }
+                    },
+                    onSignIn: {
+                        authEntryPath = .signIn
+                        FirstLaunchOnboarding.markRelaxPlaceRequirementForExistingAccountFlow()
+                        withAnimation(.easeInOut(duration: 0.25)) {
+                            needsMerchantPremises = false
+                            stage = .authChoice
+                        }
+                    }
+                )
+            case .merchantPremises:
                 FirstLaunchOnboardingView(onComplete: {
                     withAnimation(.easeInOut(duration: 0.25)) {
                         needsMerchantPremises = false
+                        stage = .authChoice
+                    }
+                }, onAlreadyHaveAccount: {
+                    // Retour explicite depuis "Quel est votre commerce ?":
+                    // revenir à l'écran d'entrée sans basculer dans la création de compte.
+                    FirstLaunchOnboarding.rewindToMerchantPremisesSelectionForFreshCommercePick()
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        needsMerchantPremises = true
+                        authEntryPath = .signUp
+                        stage = .entry
                     }
                 })
-            } else {
-                OnboardingChoiceView()
+            case .authChoice:
+                Group {
+                    if authEntryPath == .signIn {
+                        AuthSignInView(onBack: {
+                            withAnimation(.easeInOut(duration: 0.22)) {
+                                stage = .entry
+                            }
+                        })
+                    } else {
+                        AuthSignUpView(onBack: {
+                            withAnimation(.easeInOut(duration: 0.22)) {
+                                stage = .entry
+                            }
+                        })
+                    }
+                }
             }
         }
         .id("welcome-flow-\(authService.firstLaunchOnboardingRestartEpoch)")
+        .onChange(of: authService.firstLaunchOnboardingRestartEpoch) { _, _ in
+            needsMerchantPremises = !FirstLaunchOnboarding.hasCompleted
+            authEntryPath = .signUp
+            stage = .entry
+        }
     }
 }
 
 struct RootView: View {
     @EnvironmentObject var authService: AuthService
     @Environment(\.managedObjectContext) private var viewContext
-    /// Même clé que `MainTabView` / `OneTimeOnBoarding` : tant que le tutoriel n’est pas fini, on n’affiche pas
-    /// l’écran « Chargement du compte… » (sinon icône de chargement par-dessus le parcours tutoriel).
-    @AppStorage("myfidpass.homeTutorial.v1") private var homeTutorialCompleted = false
-
-    /// Blocage plein écran uniquement pour les comptes qui ont **déjà** terminé le tutoriel (retour app, cold start).
-    private var shouldBlockAuthenticatedUIForBootstrap: Bool {
-        !authService.merchantSubscriptionEligibilityResolved && homeTutorialCompleted
-    }
 
     var body: some View {
         Group {
@@ -51,35 +105,19 @@ struct RootView: View {
                 WelcomeFlow()
             case .authenticated:
                 Group {
-                    if shouldBlockAuthenticatedUIForBootstrap {
-                        ZStack {
-                            Color(.systemBackground).ignoresSafeArea()
-                            VStack(spacing: 14) {
-                                ProgressView()
-                                Text("Chargement du compte…")
-                                    .font(.subheadline)
-                                    .foregroundStyle(.secondary)
-                            }
+                    Group {
+                        if authService.isPlatformAdmin && !authService.adminShowsMerchantWorkspace {
+                            PlatformAdminRootView()
+                        } else {
+                            ContentView()
                         }
-                    } else {
-                        Group {
-                            if authService.isPlatformAdmin && !authService.adminShowsMerchantWorkspace {
-                                PlatformAdminRootView()
-                            } else {
-                                ContentView()
-                            }
-                        }
-                        .environment(\.managedObjectContext, viewContext)
                     }
-                }
-                .task {
-                    if !authService.merchantSubscriptionEligibilityResolved {
-                        await authService.refreshBusinessesIfNeeded()
-                    }
+                    .environment(\.managedObjectContext, viewContext)
                 }
             }
         }
-        .animation(.easeInOut(duration: 0.25), value: authService.currentScreen)
+        // Pas d’animation implicite entre welcome et authentifié : évite flash / mélange des deux racines.
+        .animation(nil, value: authService.currentScreen)
         .onReceive(NotificationCenter.default.publisher(for: .myfidpassSessionInvalidated)) { _ in
             // Reset serveur / compte supprimé : les JWT sont morts mais `isLoggedIn` restait vrai sans cette étape.
             authService.logout()
@@ -91,9 +129,5 @@ struct RootView: View {
     RootView()
         .environmentObject(AuthService())
         .environmentObject(SyncService(container: PersistenceController.preview.container))
-        .environmentObject(RevenueCatSubscriptionState())
         .environment(\.managedObjectContext, PersistenceController.preview.container.viewContext)
-        .onAppear {
-            RevenueCatBootstrap.configureIfNeeded()
-        }
 }

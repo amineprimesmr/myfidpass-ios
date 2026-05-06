@@ -107,9 +107,6 @@ struct DashboardActivityFullView: View {
         .refreshable {
             await syncService.syncAfterServerMutation()
         }
-        .onReceive(NotificationCenter.default.publisher(for: .myfidpassRemoteSyncDidMerge)) { _ in
-            dataService.bumpRefreshAfterRemoteMerge()
-        }
     }
 
     private var emptyTitle: String {

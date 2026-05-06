@@ -25,6 +25,25 @@ private actor RefreshTokenSerialGate {
     }
 }
 
+/// Déduplique les requêtes HTTP idempotentes identiques en cours (même méthode+URL+headers utiles).
+/// Réduit les rafales au retour/focus quand plusieurs vues déclenchent le même GET en parallèle.
+private actor RequestInFlightCoalescer {
+    private var inFlight: [String: Task<(Data, URLResponse), Error>] = [:]
+
+    func run(
+        key: String,
+        operation: @escaping @Sendable () async throws -> (Data, URLResponse)
+    ) async throws -> (Data, URLResponse) {
+        if let existing = inFlight[key] {
+            return try await existing.value
+        }
+        let task = Task { try await operation() }
+        inFlight[key] = task
+        defer { inFlight[key] = nil }
+        return try await task.value
+    }
+}
+
 private enum JWTAccessExpiry {
     /// Champ `exp` du JWT (secondes depuis 1970), sans vérifier la signature — uniquement pour anticiper le refresh.
     static func expirationDate(of jwt: String) -> Date? {
@@ -49,6 +68,7 @@ final class APIClient: @unchecked Sendable {
     static let shared = APIClient()
 
     private let refreshGate = RefreshTokenSerialGate()
+    private let requestCoalescer = RequestInFlightCoalescer()
 
     /// Session : plafond large ; les timeouts fins sont sur `URLRequest` (ex. 300 s pour POST campagne).
     private static func makeDefaultSession() -> URLSession {
@@ -87,6 +107,28 @@ final class APIClient: @unchecked Sendable {
         set { AuthStorage.authToken = newValue }
     }
 
+    /// Exécute la requête réseau avec coalescing pour les GET (même endpoint + même contexte auth).
+    private func performNetworkData(for request: URLRequest) async throws -> (Data, URLResponse) {
+        let method = request.httpMethod?.uppercased() ?? "GET"
+        guard method == "GET", request.httpBody == nil else {
+            return try await session.data(for: request)
+        }
+        let key = requestCoalescingKey(for: request)
+        return try await requestCoalescer.run(key: key) { [session] in
+            try await session.data(for: request)
+        }
+    }
+
+    /// Clé de coalescing: méthode + URL + en-têtes qui changent la réponse (`Authorization`, dashboard token, accept).
+    private func requestCoalescingKey(for request: URLRequest) -> String {
+        let method = request.httpMethod?.uppercased() ?? "GET"
+        let url = request.url?.absoluteString ?? ""
+        let auth = request.value(forHTTPHeaderField: "Authorization") ?? ""
+        let dashboard = request.value(forHTTPHeaderField: "X-Dashboard-Token") ?? ""
+        let accept = request.value(forHTTPHeaderField: "Accept") ?? ""
+        return [method, url, auth, dashboard, accept].joined(separator: "|")
+    }
+
     /// Efface les jetons et notifie l’app : `AuthService` appelle `logout()` (sinon `isLoggedIn` reste vrai alors que le serveur a refusé la session — ex. reset BDD / compte supprimé).
     private func terminateSessionAfterAuthFailure() {
         AuthStorage.authToken = nil
@@ -116,7 +158,7 @@ final class APIClient: @unchecked Sendable {
 
         let (data, response): (Data, URLResponse)
         do {
-            (data, response) = try await session.data(for: request)
+            (data, response) = try await performNetworkData(for: request)
         } catch {
             throw APIError.network(error)
         }
@@ -127,8 +169,8 @@ final class APIClient: @unchecked Sendable {
 
         switch http.statusCode {
         case 200...299:
-            if T.self == EmptyResponse.self {
-                return EmptyResponse() as! T
+            if let empty = EmptyResponse() as? T {
+                return empty
             }
             guard !data.isEmpty else { throw APIError.noData }
             do {
@@ -151,7 +193,7 @@ final class APIClient: @unchecked Sendable {
                 retryRequest.setValue("application/json", forHTTPHeaderField: "Accept")
                 let (retryData, retryResponse): (Data, URLResponse)
                 do {
-                    (retryData, retryResponse) = try await session.data(for: retryRequest)
+                    (retryData, retryResponse) = try await performNetworkData(for: retryRequest)
                 } catch {
                     throw APIError.network(error)
                 }
@@ -163,7 +205,7 @@ final class APIClient: @unchecked Sendable {
                     throw APIError.unauthorized
                 }
                 if retryHttp.statusCode >= 200, retryHttp.statusCode < 300 {
-                    if T.self == EmptyResponse.self { return EmptyResponse() as! T }
+                    if let empty = EmptyResponse() as? T { return empty }
                     guard !retryData.isEmpty else { throw APIError.noData }
                     return try Self.makeJSONDecoder().decode(T.self, from: retryData)
                 }
@@ -192,14 +234,17 @@ final class APIClient: @unchecked Sendable {
             }
             return APIError.subscriptionRequired
         }
-        if statusCode == 400, let auth = parseAuthStructuredError(from: data) {
+        if statusCode == 403, isBusinessQuotaReachedPayload(data) {
+            return APIError.businessQuotaReached
+        }
+        if let auth = parseAuthStructuredError(statusCode: statusCode, from: data) {
             return auth
         }
         return APIError.server(statusCode: statusCode, message: Self.parseServerErrorMessage(from: data))
     }
 
     /// Erreurs métier JSON (`code` + `error`) — ex. inscription téléphone sans établissement.
-    private static func parseAuthStructuredError(from data: Data) -> APIError? {
+    private static func parseAuthStructuredError(statusCode: Int, from data: Data) -> APIError? {
         struct Body: Decodable {
             let code: String?
             let error: String?
@@ -212,6 +257,10 @@ final class APIClient: @unchecked Sendable {
             let fallback = "Sélectionnez d’abord votre établissement avant de créer votre compte."
             return .missingEstablishment(msg.isEmpty ? fallback : msg)
         }
+        if statusCode == 409, raw == "business_place_already_linked" {
+            let fallback = "Ce commerce est déjà utilisé. Connectez-vous au compte existant ou choisissez un autre commerce."
+            return .businessPlaceAlreadyLinked(msg.isEmpty ? fallback : msg)
+        }
         return nil
     }
 
@@ -221,6 +270,14 @@ final class APIClient: @unchecked Sendable {
         }
         guard let b = try? Self.makeJSONDecoder().decode(Body.self, from: data) else { return false }
         return b.code == "subscription_required"
+    }
+
+    private static func isBusinessQuotaReachedPayload(_ data: Data) -> Bool {
+        struct Body: Decodable {
+            let code: String?
+        }
+        guard let b = try? Self.makeJSONDecoder().decode(Body.self, from: data) else { return false }
+        return b.code == "business_quota_reached"
     }
 
     /// Rafraîchit l’access token avant expiration (appelée avant les requêtes authentifiées et au retour au premier plan).
@@ -342,7 +399,7 @@ final class APIClient: @unchecked Sendable {
 
         let (data, response): (Data, URLResponse)
         do {
-            (data, response) = try await session.data(for: request)
+            (data, response) = try await performNetworkData(for: request)
         } catch {
             throw APIError.network(error)
         }
@@ -364,7 +421,7 @@ final class APIClient: @unchecked Sendable {
                 applyDashboardTokenHeaderIfNeeded(to: &retryRequest, endpoint: endpoint)
                 retryRequest.setValue("application/json", forHTTPHeaderField: "Accept")
                 if endpoint.method == "POST" { retryRequest.setValue("application/json", forHTTPHeaderField: "Content-Type") }
-                let (retryData, retryResponse) = try await session.data(for: retryRequest)
+                let (retryData, retryResponse) = try await performNetworkData(for: retryRequest)
                 guard let retryHttp = retryResponse as? HTTPURLResponse else { throw APIError.noData }
                 if retryHttp.statusCode >= 200, retryHttp.statusCode < 300 { return retryData }
                 if retryHttp.statusCode == 401 {
@@ -404,7 +461,7 @@ final class APIClient: @unchecked Sendable {
 
         let (data, response): (Data, URLResponse)
         do {
-            (data, response) = try await session.data(for: request)
+            (data, response) = try await performNetworkData(for: request)
         } catch {
             throw APIError.network(error)
         }
@@ -425,7 +482,7 @@ final class APIClient: @unchecked Sendable {
                 for (k, v) in endpoint.supplementalHeaders { retryRequest.setValue(v, forHTTPHeaderField: k) }
                 applyDashboardTokenHeaderIfNeeded(to: &retryRequest, endpoint: endpoint)
                 retryRequest.setValue("text/csv", forHTTPHeaderField: "Accept")
-                let (retryData, retryResponse) = try await session.data(for: retryRequest)
+                let (retryData, retryResponse) = try await performNetworkData(for: retryRequest)
                 guard let retryHttp = retryResponse as? HTTPURLResponse else { throw APIError.noData }
                 if retryHttp.statusCode >= 200, retryHttp.statusCode < 300 { return retryData }
                 if retryHttp.statusCode == 401 {
@@ -457,6 +514,62 @@ final class APIClient: @unchecked Sendable {
         seg = seg.removingPercentEncoding ?? seg
         guard let tok = AuthStorage.dashboardToken(forSlug: seg), !tok.isEmpty else { return }
         request.setValue(tok, forHTTPHeaderField: "X-Dashboard-Token")
+    }
+
+    // MARK: - Compte existe ? (check-email / check-identifier)
+
+    /// Vérifie `account_exists` sans `Decodable` strict (évite les échecs si le JSON varie ou si le décodage rejette un type mineur).
+    func fetchAccountExistsProbe(identifier: String) async throws -> Bool {
+        let norm = identifier.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !norm.isEmpty else { throw APIError.noData }
+        if norm.contains("@") {
+            do {
+                return try await fetchAccountExistsPOST(.authCheckEmail(email: norm))
+            } catch {
+                return try await fetchAccountExistsPOST(.authCheckIdentifier(identifier: norm))
+            }
+        }
+        return try await fetchAccountExistsPOST(.authCheckIdentifier(identifier: norm))
+    }
+
+    private func fetchAccountExistsPOST(_ endpoint: APIEndpoint) async throws -> Bool {
+        var req = try endpoint.urlRequest(base: APIConfig.baseURL, encoder: Self.makeJSONEncoder())
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        applyDashboardTokenHeaderIfNeeded(to: &req, endpoint: endpoint)
+        let (data, response): (Data, URLResponse)
+        do {
+            (data, response) = try await performNetworkData(for: req)
+        } catch {
+            throw APIError.network(error)
+        }
+        guard let http = response as? HTTPURLResponse else { throw APIError.noData }
+        guard (200...299).contains(http.statusCode) else {
+            throw Self.resolveNonSuccessHTTPError(statusCode: http.statusCode, data: data)
+        }
+        guard !data.isEmpty else { throw APIError.noData }
+        return try Self.parseBoolAccountExists(from: data)
+    }
+
+    private static func parseBoolAccountExists(from data: Data) throws -> Bool {
+        let obj = try JSONSerialization.jsonObject(with: data, options: [])
+        guard let dict = obj as? [String: Any] else {
+            throw APIError.decoding(
+                NSError(domain: "myfidpass.accountExists", code: 0, userInfo: [NSLocalizedDescriptionKey: "Réponse JSON inattendue"])
+            )
+        }
+        let raw = dict["account_exists"] ?? dict["accountExists"]
+        if let b = raw as? Bool { return b }
+        if let i = raw as? Int { return i != 0 }
+        if let n = raw as? NSNumber { return n.boolValue }
+        if let s = raw as? String {
+            let t = s.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if ["true", "1", "yes"].contains(t) { return true }
+            if ["false", "0", "no"].contains(t) { return false }
+        }
+        throw APIError.decoding(
+            NSError(domain: "myfidpass.accountExists", code: 1, userInfo: [NSLocalizedDescriptionKey: "Champ account_exists absent ou illisible"])
+        )
     }
 
     /// Extrait un message d’erreur API (`error`, `message`) ou un extrait du corps brut (HTML/JSON non standard).

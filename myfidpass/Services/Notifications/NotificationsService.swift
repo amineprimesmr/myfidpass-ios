@@ -23,10 +23,21 @@ import Combine
 final class NotificationsService: NSObject, ObservableObject {
     static let shared = NotificationsService()
     @Published var isAuthorized = false
+    @Published var authorizationStatus: UNAuthorizationStatus = .notDetermined
     @Published var deviceToken: String?
 
     /// Clé UserDefaults pour le token en attente d'envoi au backend.
     private static let pendingTokenKey = "myfidpass.pendingDeviceToken"
+    /// Relances onboarding commerçant (local notifications).
+    private static let merchantCardReminderRequestId = "myfidpass.merchant.cardSetup.reminder.v1"
+    private static let merchantFlyerReminderRequestId = "myfidpass.merchant.flyerSetup.reminder.v1"
+    private static let merchantTrialReminderRequestId = "myfidpass.merchant.trialEnding.reminder.v1"
+    private static let merchantCardReminderScheduledAtBySlugKey = "myfidpass.merchant.cardSetup.reminder.scheduledAtBySlug.v1"
+    private static let merchantFlyerReminderScheduledAtBySlugKey = "myfidpass.merchant.flyerSetup.reminder.scheduledAtBySlug.v1"
+    private static let merchantTrialReminderScheduledAtBySlugKey = "myfidpass.merchant.trialEnding.reminder.scheduledAtBySlug.v1"
+    private static let merchantCardReminderDelay: TimeInterval = 3 * 60 * 60
+    private static let merchantFlyerReminderDelay: TimeInterval = 8 * 60 * 60
+    private static let merchantTrialEndsAtIsoKey = "myfidpass.merchantTrialEndsAtIso"
 
     override private init() {
         super.init()
@@ -38,6 +49,7 @@ final class NotificationsService: NSObject, ObservableObject {
             // Closure `@Sendable` non isolée : hop explicite vers le MainActor (Swift 6).
             Task { @MainActor in
                 NotificationsService.shared.syncPushTokenAfterLogin()
+                await NotificationsService.shared.refreshMerchantCardSetupReminder()
             }
         }
     }
@@ -70,6 +82,7 @@ final class NotificationsService: NSObject, ObservableObject {
             }()
             Task { @MainActor in
                 NotificationsService.shared.isAuthorized = authorized
+                NotificationsService.shared.authorizationStatus = settings.authorizationStatus
             }
         }
     }
@@ -79,8 +92,10 @@ final class NotificationsService: NSObject, ObservableObject {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { granted, _ in
             Task { @MainActor in
                 NotificationsService.shared.isAuthorized = granted
+                NotificationsService.shared.authorizationStatus = granted ? .authorized : .denied
                 if granted {
                     UIApplication.shared.registerForRemoteNotifications()
+                    await NotificationsService.shared.refreshMerchantCardSetupReminder()
                 }
             }
         }
@@ -153,5 +168,247 @@ final class NotificationsService: NSObject, ObservableObject {
         if let current = deviceToken, current == pending { return }
 
         Task { await NotificationsService.shared.sendTokenToBackend(pending) }
+    }
+
+    // MARK: - Onboarding commerçant (relance création carte)
+
+    /// Campagne locale onboarding commerçant (carte + flyer + fin d'offre 1€).
+    func refreshMerchantCardSetupReminder() async {
+        guard AuthStorage.isLoggedIn else {
+            await cancelMerchantOnboardingReminders()
+            return
+        }
+        // Jamais pour les comptes staff.
+        if let staff = AuthStorage.userStaffLogin?.trimmingCharacters(in: .whitespacesAndNewlines), !staff.isEmpty {
+            await cancelMerchantOnboardingReminders()
+            return
+        }
+        guard let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines), !slug.isEmpty else {
+            await cancelMerchantOnboardingReminders()
+            return
+        }
+
+        let settings = await notificationSettings()
+        let authorized = {
+            switch settings.authorizationStatus {
+            case .authorized, .provisional, .ephemeral: return true
+            default: return false
+            }
+        }()
+        guard authorized else { return }
+
+        let pending = await pendingNotificationRequests()
+        await refreshCardReminder(slug: slug, pending: pending)
+        await refreshFlyerReminder(slug: slug, pending: pending)
+        await refreshTrialEndingReminder(slug: slug, pending: pending)
+    }
+
+    private func refreshCardReminder(slug: String, pending: [UNNotificationRequest]) async {
+        if isMerchantCardConfigured(slug: slug) {
+            UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [Self.merchantCardReminderRequestId])
+            clearScheduleStamp(for: slug, key: Self.merchantCardReminderScheduledAtBySlugKey)
+            return
+        }
+
+        if let existing = pending.first(where: { $0.identifier == Self.merchantCardReminderRequestId }) {
+            let existingSlug = existing.content.userInfo["business_slug"] as? String
+            if existingSlug == slug { return }
+            UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [Self.merchantCardReminderRequestId])
+        }
+        if isReminderRecentlyScheduled(for: slug, key: Self.merchantCardReminderScheduledAtBySlugKey, delay: Self.merchantCardReminderDelay) {
+            return
+        }
+
+        let content = UNMutableNotificationContent()
+        content.title = "Créez votre carte fidélité"
+        content.body = "Vous n'avez pas encore finalisé votre carte. Configurez-la maintenant pour commencer à fidéliser vos clients."
+        content.sound = .default
+        content.userInfo = ["business_slug": slug, "campaign": "merchant_card_setup_reminder"]
+
+        let trigger = UNTimeIntervalNotificationTrigger(
+            timeInterval: Self.merchantCardReminderDelay,
+            repeats: false
+        )
+        let request = UNNotificationRequest(
+            identifier: Self.merchantCardReminderRequestId,
+            content: content,
+            trigger: trigger
+        )
+
+        await addNotificationRequest(request)
+        markReminderScheduledNow(for: slug, key: Self.merchantCardReminderScheduledAtBySlugKey)
+    }
+
+    private func refreshFlyerReminder(slug: String, pending: [UNNotificationRequest]) async {
+        if isMerchantFlyerConfigured(slug: slug) {
+            UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [Self.merchantFlyerReminderRequestId])
+            clearScheduleStamp(for: slug, key: Self.merchantFlyerReminderScheduledAtBySlugKey)
+            return
+        }
+
+        if let existing = pending.first(where: { $0.identifier == Self.merchantFlyerReminderRequestId }) {
+            let existingSlug = existing.content.userInfo["business_slug"] as? String
+            if existingSlug == slug { return }
+            UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [Self.merchantFlyerReminderRequestId])
+        }
+        if isReminderRecentlyScheduled(for: slug, key: Self.merchantFlyerReminderScheduledAtBySlugKey, delay: Self.merchantFlyerReminderDelay) {
+            return
+        }
+
+        let content = UNMutableNotificationContent()
+        content.title = "Activez votre flyer en boutique"
+        content.body = "Votre flyer n'est pas encore prêt. Imprimez-le et affichez-le en commerce pour accélérer les scans clients."
+        content.sound = .default
+        content.userInfo = ["business_slug": slug, "campaign": "merchant_flyer_setup_reminder"]
+        let trigger = UNTimeIntervalNotificationTrigger(
+            timeInterval: Self.merchantFlyerReminderDelay,
+            repeats: false
+        )
+        let request = UNNotificationRequest(
+            identifier: Self.merchantFlyerReminderRequestId,
+            content: content,
+            trigger: trigger
+        )
+        await addNotificationRequest(request)
+        markReminderScheduledNow(for: slug, key: Self.merchantFlyerReminderScheduledAtBySlugKey)
+    }
+
+    private func refreshTrialEndingReminder(slug: String, pending: [UNNotificationRequest]) async {
+        guard let trialEnd = parseISO8601(UserDefaults.standard.string(forKey: Self.merchantTrialEndsAtIsoKey)) else {
+            UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [Self.merchantTrialReminderRequestId])
+            clearScheduleStamp(for: slug, key: Self.merchantTrialReminderScheduledAtBySlugKey)
+            return
+        }
+        let now = Date()
+        guard trialEnd > now else {
+            UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [Self.merchantTrialReminderRequestId])
+            clearScheduleStamp(for: slug, key: Self.merchantTrialReminderScheduledAtBySlugKey)
+            return
+        }
+
+        if let existing = pending.first(where: { $0.identifier == Self.merchantTrialReminderRequestId }) {
+            let existingSlug = existing.content.userInfo["business_slug"] as? String
+            if existingSlug == slug { return }
+            UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [Self.merchantTrialReminderRequestId])
+        }
+
+        if isReminderRecentlyScheduled(for: slug, key: Self.merchantTrialReminderScheduledAtBySlugKey, delay: 10 * 60) {
+            return
+        }
+
+        let targetFireDate = max(now.addingTimeInterval(10 * 60), trialEnd.addingTimeInterval(-(12 * 60 * 60)))
+        let interval = max(60, targetFireDate.timeIntervalSince(now))
+        let hoursLeft = max(1, Int(ceil(trialEnd.timeIntervalSince(targetFireDate) / 3600)))
+
+        let content = UNMutableNotificationContent()
+        content.title = "Offre 1 € : il reste du temps"
+        content.body = "Il vous reste environ \(hoursLeft)h pour activer votre mois à 1 € et débloquer toutes les fonctionnalités commerçant."
+        content.sound = .default
+        content.userInfo = ["business_slug": slug, "campaign": "merchant_trial_ending_reminder"]
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: interval, repeats: false)
+        let request = UNNotificationRequest(
+            identifier: Self.merchantTrialReminderRequestId,
+            content: content,
+            trigger: trigger
+        )
+        await addNotificationRequest(request)
+        markReminderScheduledNow(for: slug, key: Self.merchantTrialReminderScheduledAtBySlugKey)
+    }
+
+    private func cancelMerchantOnboardingReminders() async {
+        UNUserNotificationCenter.current().removePendingNotificationRequests(
+            withIdentifiers: [
+                Self.merchantCardReminderRequestId,
+                Self.merchantFlyerReminderRequestId,
+                Self.merchantTrialReminderRequestId,
+            ]
+        )
+    }
+
+    private func isMerchantCardConfigured(slug: String) -> Bool {
+        guard let snapshot = CardPreviewDisplaySnapshotStore.load(slug: slug) else { return false }
+        let missing = MyCardCompletionRequirements.missingRequirements(
+            primaryHex: snapshot.primaryHex,
+            accentHex: snapshot.accentHex,
+            labelHex: snapshot.labelHex,
+            stripDisplayMode: snapshot.stripDisplayMode,
+            stripText: snapshot.stripText,
+            displayName: snapshot.displayName,
+            logoURL: snapshot.logoURL,
+            programType: snapshot.programType,
+            cardBackgroundImagePath: snapshot.hasLocalCardBackground == true ? CardLogoStorage.relativeCardBackgroundPath : nil,
+            cardBackgroundRemoteURL: snapshot.cardBackgroundRemoteURL,
+            cardBackgroundWasRemoved: false,
+            stampEmoji: snapshot.stampEmoji,
+            stampIconPendingBase64: snapshot.stampIconPendingBase64,
+            stampIconWasRemoved: snapshot.stampIconWasRemoved ?? false,
+            serverHasStampIcon: snapshot.hasServerStampIcon ?? false,
+            tierPoints: snapshot.tierPoints ?? [],
+            tierLabels: snapshot.tierLabels ?? [],
+            requiredStamps: snapshot.requiredStamps,
+            stampRewardLabel: snapshot.stampRewardLabel,
+            stampMidRewardLabel: snapshot.stampMidRewardLabel ?? ""
+        )
+        return missing.isEmpty
+    }
+
+    private func isMerchantFlyerConfigured(slug: String) -> Bool {
+        guard let cached = CommerceFlyerStateCache.load(slug: slug) else { return false }
+        let hasBootstrap = !(cached.bootstrapPreviewB64 ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasCustomBg = !(cached.customBgDataURL ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return cached.flyerRegistered || hasBootstrap || hasCustomBg
+    }
+
+    private func isReminderRecentlyScheduled(for slug: String, key: String, delay: TimeInterval) -> Bool {
+        guard let dict = UserDefaults.standard.dictionary(forKey: key) as? [String: TimeInterval],
+              let ts = dict[slug] else { return false }
+        let age = Date().timeIntervalSince1970 - ts
+        return age < delay
+    }
+
+    private func markReminderScheduledNow(for slug: String, key: String) {
+        var dict = UserDefaults.standard.dictionary(forKey: key) as? [String: TimeInterval] ?? [:]
+        dict[slug] = Date().timeIntervalSince1970
+        UserDefaults.standard.set(dict, forKey: key)
+    }
+
+    private func clearScheduleStamp(for slug: String, key: String) {
+        var dict = UserDefaults.standard.dictionary(forKey: key) as? [String: TimeInterval] ?? [:]
+        dict.removeValue(forKey: slug)
+        UserDefaults.standard.set(dict, forKey: key)
+    }
+
+    private func parseISO8601(_ raw: String?) -> Date? {
+        guard var iso = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !iso.isEmpty else { return nil }
+        if !iso.contains("T") { iso = iso.replacingOccurrences(of: " ", with: "T") }
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = f.date(from: iso) { return d }
+        f.formatOptions = [.withInternetDateTime]
+        return f.date(from: iso)
+    }
+
+    private func notificationSettings() async -> UNNotificationSettings {
+        await withCheckedContinuation { continuation in
+            UNUserNotificationCenter.current().getNotificationSettings { settings in
+                continuation.resume(returning: settings)
+            }
+        }
+    }
+
+    private func pendingNotificationRequests() async -> [UNNotificationRequest] {
+        await withCheckedContinuation { continuation in
+            UNUserNotificationCenter.current().getPendingNotificationRequests { requests in
+                continuation.resume(returning: requests)
+            }
+        }
+    }
+
+    private func addNotificationRequest(_ request: UNNotificationRequest) async {
+        await withCheckedContinuation { continuation in
+            UNUserNotificationCenter.current().add(request) { _ in
+                continuation.resume(returning: ())
+            }
+        }
     }
 }

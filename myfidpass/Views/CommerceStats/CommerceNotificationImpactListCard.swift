@@ -8,6 +8,25 @@
 import SwiftUI
 
 enum NotificationCampaignDisplay {
+    private static let isoWithFractional: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
+    private static let isoBasic: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
+
+    private static let shortDateFormatter: DateFormatter = {
+        let out = DateFormatter()
+        out.locale = Locale(identifier: "fr_FR")
+        out.setLocalizedDateFormatFromTemplate("d MMMM 'à' HH:mm")
+        return out
+    }()
+
     static func title(_ c: NotificationCampaignInsightDTO) -> String {
         if let t = c.notificationTitle?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty {
             return t
@@ -38,19 +57,10 @@ enum NotificationCampaignDisplay {
 
     static func shortDateLabel(_ iso: String?) -> String {
         guard let iso, !iso.isEmpty else { return "—" }
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        var d = f.date(from: iso)
-        if d == nil {
-            f.formatOptions = [.withInternetDateTime]
-            d = f.date(from: iso)
-        }
+        var d = isoWithFractional.date(from: iso)
+        if d == nil { d = isoBasic.date(from: iso) }
         guard let date = d else { return "—" }
-        let out = DateFormatter()
-        out.locale = Locale(identifier: "fr_FR")
-        out.dateStyle = .short
-        out.timeStyle = .short
-        return out.string(from: date)
+        return shortDateFormatter.string(from: date)
     }
 
     private static func humanizedTrigger(_ raw: String?) -> String? {
@@ -82,25 +92,49 @@ struct CommerceNotificationImpactListCard: View {
     let campaigns: [NotificationCampaignInsightDTO]
     /// Même ressource que l’onglet Campagnes (`…/notification-icon` ou bundle `logonotif`).
     let notificationIconURL: String?
+    var onTap: (() -> Void)? = nil
 
     var body: some View {
-        Button(action: {}) {
-            VStack(spacing: 0) {
-                ForEach(Array(campaigns.enumerated()), id: \.element.id) { idx, c in
-                    if idx > 0 {
-                        Divider()
-                            .background(CommerceStatisticsTheme.subtleBorder(forGlassOverlay: commerceStatsGlassOverlay))
-                            .padding(.leading, 54)
-                    }
-                    CommerceNotificationImpactRow(
-                        campaign: c,
-                        notificationIconURL: notificationIconURL
-                    )
-                }
+        Group {
+            if let onTap {
+                Button(action: onTap) { rowsContent }
+                    .buttonStyle(.plain)
+            } else {
+                rowsContent
             }
         }
-        .buttonStyle(.plain)
-        .commerceStatsLiquidGlassTileButton(cornerRadius: CommerceStatsIndicatorLiquidGlass.kpiCornerRadius, controlSize: .large)
+        .commerceStatsLiquidGlassTileButton(
+            cornerRadius: CommerceStatsIndicatorLiquidGlass.kpiCornerRadius,
+            controlSize: .large,
+            useStatic3DSurface: true
+        )
+    }
+
+    private var rowsContent: some View {
+        VStack(spacing: 0) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Notifications envoyées")
+                    .font(CommerceStatisticsTheme.kpiTileTitleFont())
+                    .foregroundStyle(CommerceStatisticsTheme.kpiTileTitleGradient(forGlassOverlay: commerceStatsGlassOverlay))
+                Spacer(minLength: 0)
+            }
+            .padding(.top, 16)
+            .padding(.leading, 16)
+            .padding(.trailing, 14)
+            .padding(.bottom, 8)
+
+            ForEach(Array(campaigns.enumerated()), id: \.element.id) { idx, c in
+                if idx > 0 {
+                    Divider()
+                        .background(CommerceStatisticsTheme.subtleBorder(forGlassOverlay: commerceStatsGlassOverlay))
+                        .padding(.leading, 54)
+                }
+                CommerceNotificationImpactRow(
+                    campaign: c,
+                    notificationIconURL: notificationIconURL
+                )
+            }
+        }
     }
 }
 
@@ -118,19 +152,15 @@ private struct CommerceNotificationImpactRow: View {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline) {
                     Text(NotificationCampaignDisplay.title(campaign))
-                        .font(CommerceStatisticsTheme.statsText(size: 15, weight: .semibold))
-                        .foregroundStyle(CommerceStatisticsTheme.onCardPrimary(forGlassOverlay: commerceStatsGlassOverlay))
+                        .font(CommerceStatisticsTheme.kpiTileTitleFont())
+                        .foregroundStyle(CommerceStatisticsTheme.kpiTileTitleGradient(forGlassOverlay: commerceStatsGlassOverlay))
                         .multilineTextAlignment(.leading)
-                    Spacer(minLength: 8)
-                    Text(NotificationCampaignDisplay.shortDateLabel(campaign.createdAt))
-                        .font(CommerceStatisticsTheme.statsText(size: 11, weight: .medium))
-                        .foregroundStyle(CommerceStatisticsTheme.onCardSecondary(forGlassOverlay: commerceStatsGlassOverlay).opacity(0.95))
                 }
 
                 if let bodyText = NotificationCampaignDisplay.messageBody(campaign), !bodyText.isEmpty {
                     Text(bodyText)
-                        .font(CommerceStatisticsTheme.statsText(size: 12, weight: .regular))
-                        .foregroundStyle(CommerceStatisticsTheme.onCardSecondary(forGlassOverlay: commerceStatsGlassOverlay))
+                        .font(CommerceStatisticsTheme.statsText(size: 13, weight: .medium))
+                        .foregroundStyle(CommerceStatisticsTheme.onCardPrimary(forGlassOverlay: commerceStatsGlassOverlay).opacity(0.9))
                         .lineLimit(6)
                         .multilineTextAlignment(.leading)
                 }
@@ -143,11 +173,17 @@ private struct CommerceNotificationImpactRow: View {
                     Text(StatsFR.formatInt(n))
                         .font(CommerceStatisticsTheme.statisticNumbers(size: 16, weight: .semibold))
                         .foregroundStyle(CommerceStatisticsTheme.onCardPrimary(forGlassOverlay: commerceStatsGlassOverlay))
+                    Spacer(minLength: 8)
+                    Text(NotificationCampaignDisplay.shortDateLabel(campaign.createdAt))
+                        .font(CommerceStatisticsTheme.statsText(size: 11, weight: .medium))
+                        .foregroundStyle(CommerceStatisticsTheme.onCardSecondary(forGlassOverlay: commerceStatsGlassOverlay).opacity(0.98))
                 }
             }
         }
-        .padding(.vertical, 12)
-        .padding(.horizontal, 14)
+        .padding(.top, 14)
+        .padding(.bottom, 12)
+        .padding(.leading, 16)
+        .padding(.trailing, 14)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilityString)
     }
@@ -156,20 +192,40 @@ private struct CommerceNotificationImpactRow: View {
     private var notificationIcon: some View {
         let side: CGFloat = 40
         if let s = notificationIconURL?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty {
-            BusinessLogoView(logoURL: s, logoAssetContext: .campaignNotificationIcon, size: side, cornerRadius: 10)
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            if let url = APIResourceURL.resolved(from: s) {
+                AsyncImage(url: url) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image
+                            .resizable()
+                            .scaledToFill()
+                    case .failure, .empty:
+                        notificationFallbackIcon(side: side)
+                    @unknown default:
+                        notificationFallbackIcon(side: side)
+                    }
+                }
                 .frame(width: side, height: side)
-        } else {
-            ZStack {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(CommerceStatisticsTheme.pillBackground)
-                    .frame(width: side, height: side)
-                Image("logonotif")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 24, height: 24)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            } else {
+                notificationFallbackIcon(side: side)
             }
+        } else {
+            notificationFallbackIcon(side: side)
         }
+    }
+
+    private func notificationFallbackIcon(side: CGFloat) -> some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(CommerceStatisticsTheme.pillBackground)
+                .frame(width: side, height: side)
+            Image("logonotif")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 24, height: 24)
+        }
+        .frame(width: side, height: side)
     }
 
     private var accessibilityString: String {

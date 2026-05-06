@@ -12,9 +12,6 @@ import CoreData
 struct SettingsView: View {
     /// Contenu fusionné (sans `ScrollView`) pour l’onglet « Réglages » du hub Commerce.
     var embedInProfile: Bool = false
-    /// Si non nil : « Statistiques » appelle ce bloc (ex. paywall bloquant : fermer le sheet puis pousser la route).
-    /// Si nil : fermeture du sheet Réglages + notification pour pousser sur la pile Commerce.
-    var onRequestOpenStatistics: (() -> Void)? = nil
 
     @Environment(\.openURL) private var openURL
     @Environment(\.colorScheme) private var colorScheme
@@ -22,20 +19,17 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var authService: AuthService
     @EnvironmentObject private var syncService: SyncService
-    @EnvironmentObject private var revenueCatSubscriptionState: RevenueCatSubscriptionState
 
-    @ObservedObject private var notifications = NotificationsService.shared
+    private let notifications = NotificationsService.shared
 
     @State private var showLogoutConfirmation = false
     @State private var showDeleteAccountConfirmation = false
     @State private var isDeletingAccount = false
     @State private var deleteAccountError: String?
-    @State private var showClearScanCacheConfirmation = false
-    @State private var ephemeralNotice: String?
-    @State private var isSyncingManual = false
     @State private var inAppSafariURL: URL?
-
-    private var theme: SettingsVisualTheme { SettingsVisualTheme(colorScheme: colorScheme) }
+    @State private var isSimulatingPayment = false
+    @State private var devSimulateError: String?
+    @State private var isDevSimulationActive: Bool? = nil
 
     private var appVersionShort: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
@@ -53,11 +47,8 @@ struct SettingsView: View {
         return Self.relativeSyncFormatter.localizedString(for: d, relativeTo: Date())
     }
 
-    private var subscriptionSettingsSubtitle: String? {
-        if authService.subscriptionAccessUnlocked(revenueCatPremium: revenueCatSubscriptionState.hasPremiumEntitlement) {
-            return "Accès actif"
-        }
-        return "Essai 1 mois, mensuel ou annuel"
+    private var shouldShowTrialPromoBanner: Bool {
+        authService.isMerchantTrialPeriodActive && authService.merchantTrialEndsAt != nil
     }
 
     var body: some View {
@@ -76,7 +67,6 @@ struct SettingsView: View {
                         .padding(.top, 14)
                     }
                     .scrollIndicators(.hidden)
-                    .scrollContentEdgeFade(edgeHeight: 40)
                 }
             }
         }
@@ -100,16 +90,6 @@ struct SettingsView: View {
             Button("Se déconnecter", role: .destructive) { authService.logout() }
         } message: {
             Text("Vous devrez vous reconnecter.")
-        }
-        .alert("Vider le cache de scan ?", isPresented: $showClearScanCacheConfirmation) {
-            Button("Annuler", role: .cancel) {}
-            Button("Vider", role: .destructive) {
-                ScanFlowSettingsCache.clearAll()
-                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                flashNotice("Cache vidé.")
-            }
-        } message: {
-            Text("Le prochain scan rechargera les réglages depuis le serveur.")
         }
         .alert("Supprimer votre compte ?", isPresented: $showDeleteAccountConfirmation) {
             Button("Annuler", role: .cancel) {}
@@ -145,46 +125,19 @@ struct SettingsView: View {
         .frame(maxWidth: .infinity, maxHeight: embedInProfile ? nil : .infinity)
     }
 
-    private var statisticsNavigationRow: some View {
-        Button {
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
-            if let onRequestOpenStatistics {
-                onRequestOpenStatistics()
-            } else {
-                dismiss()
-                DispatchQueue.main.async {
-                    NotificationCenter.default.post(name: .myfidpassOpenMerchantStatistics, object: nil)
-                }
-            }
-        } label: {
-            GroupedSettingsNavigationRow(
-                icon: "chart.xyaxis.line",
-                title: "Statistiques",
-                subtitle: nil,
-                value: nil,
-                showsChevron: true
-            )
-        }
-        .buttonStyle(.plain)
-    }
-
     // MARK: - Contenu fusionné
 
     @ViewBuilder
     private var settingsMergedInnerVStack: some View {
         VStack(alignment: .leading, spacing: GroupedSettingsMetrics.interCardSpacing) {
-            if let notice = ephemeralNotice {
-                Text(notice)
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(theme.accentPositive)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(14)
-                    .background(theme.noticeBG)
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            }
-
             if embedInProfile {
                 GroupedSettingsPageTitle(compact: embedInProfile)
+            }
+
+            if shouldShowTrialPromoBanner, let trialEnd = authService.merchantTrialEndsAt {
+                CommerceTrialPromoBannerView(trialEndsAt: trialEnd) {
+                    NotificationCenter.default.post(name: .myfidpassOpenMerchantSubscriptionSheet, object: nil)
+                }
             }
 
             GroupedSettingsCard {
@@ -203,24 +156,6 @@ struct SettingsView: View {
                     )
                 }
                 .buttonStyle(.plain)
-                GroupedSettingsRowDivider()
-                Button {
-                    dismiss()
-                    DispatchQueue.main.async {
-                        NotificationCenter.default.post(name: .myfidpassOpenMerchantSubscriptionSheet, object: nil)
-                    }
-                } label: {
-                    GroupedSettingsNavigationRow(
-                        icon: "crown.fill",
-                        title: "Abonnement PRO",
-                        subtitle: subscriptionSettingsSubtitle,
-                        value: nil,
-                        showsChevron: true
-                    )
-                }
-                .buttonStyle(.plain)
-                GroupedSettingsRowDivider()
-                statisticsNavigationRow
             }
 
             if authService.canManageMerchantTeam {
@@ -230,8 +165,29 @@ struct SettingsView: View {
                     } label: {
                         GroupedSettingsNavigationRow(
                             icon: "person.3.fill",
-                            title: "Équipe & accès employés",
-                            subtitle: "Invitations, retrait d’accès",
+                            title: "Équipe",
+                            subtitle: nil,
+                            value: nil,
+                            showsChevron: true
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            if let slug = authService.businesses.first?.slug.trimmingCharacters(in: .whitespacesAndNewlines), !slug.isEmpty {
+                GroupedSettingsCard {
+                    Button {
+                        NotificationCenter.default.post(name: .myfidpassSelectMerchantHomeTab, object: nil)
+                        Task { @MainActor in
+                            try? await Task.sleep(nanoseconds: 280_000_000)
+                            NotificationCenter.default.post(name: .myfidpassOpenMerchantFlyerHub, object: nil)
+                        }
+                    } label: {
+                        GroupedSettingsNavigationRow(
+                            icon: "doc.richtext",
+                            title: "Flyer & programme",
+                            subtitle: "Éditeur, export, QR",
                             value: nil,
                             showsChevron: true
                         )
@@ -241,29 +197,7 @@ struct SettingsView: View {
             }
 
             GroupedSettingsCard {
-                NavigationLink {
-                    MerchantEstablishmentForm(context: viewContext, sections: .engagementOnly)
-                        .environmentObject(syncService)
-                        .navigationTitle("Avis & réseaux")
-                        .navigationBarTitleDisplayMode(.inline)
-                } label: {
-                    GroupedSettingsNavigationRow(
-                        icon: "bubble.left.and.bubble.right.fill",
-                        title: "Avis & réseaux",
-                        subtitle: nil,
-                        value: nil,
-                        showsChevron: true
-                    )
-                }
-                .buttonStyle(.plain)
-            }
-
-            GroupedSettingsCard {
                 lastSyncDetailBlock
-                GroupedSettingsRowDivider()
-                syncNowButtonRow
-                GroupedSettingsRowDivider()
-                restartTutorialButtonRow
                 GroupedSettingsRowDivider()
                 NavigationLink {
                     SettingsScanSecurityView()
@@ -279,52 +213,12 @@ struct SettingsView: View {
                 }
                 .buttonStyle(.plain)
                 GroupedSettingsRowDivider()
-                Button {
-                    showClearScanCacheConfirmation = true
-                } label: {
-                    GroupedSettingsNavigationRow(
-                        icon: "trash.circle",
-                        title: "Vider le cache de scan",
-                        subtitle: nil,
-                        value: nil,
-                        showsChevron: false
-                    )
-                }
-                .buttonStyle(.plain)
-                GroupedSettingsRowDivider()
                 NavigationLink {
                     MerchantAccountingPackView()
                 } label: {
                     GroupedSettingsNavigationRow(
                         icon: "doc.text.magnifyingglass",
                         title: "Pack comptable (bilan)",
-                        subtitle: "CSV multi-fichiers, passif, jeu, engagement",
-                        value: nil,
-                        showsChevron: true
-                    )
-                }
-                .buttonStyle(.plain)
-                GroupedSettingsRowDivider()
-                NavigationLink {
-                    MerchantTraceabilityExportView()
-                } label: {
-                    GroupedSettingsNavigationRow(
-                        icon: "doc.richtext.fill",
-                        title: "Traçabilité & exports",
-                        subtitle: nil,
-                        value: nil,
-                        showsChevron: true
-                    )
-                }
-                .buttonStyle(.plain)
-                GroupedSettingsRowDivider()
-                NavigationLink {
-                    MembersImportExportView()
-                        .environmentObject(syncService)
-                } label: {
-                    GroupedSettingsNavigationRow(
-                        icon: "square.and.arrow.up.on.square",
-                        title: "Import / export CSV",
                         subtitle: nil,
                         value: nil,
                         showsChevron: true
@@ -372,6 +266,9 @@ struct SettingsView: View {
                 GroupedSettingsDestructiveRow(title: "Supprimer mon compte", action: { showDeleteAccountConfirmation = true })
             }
 
+            // ── Bouton dev : simulation de paiement ──
+            devSimulatePaymentCard
+
             Text("Version \(appVersionShort)")
                 .font(.caption)
                 .foregroundStyle(Color(UIColor.secondaryLabel).opacity(0.9))
@@ -408,71 +305,72 @@ struct SettingsView: View {
         .padding(.vertical, GroupedSettingsMetrics.rowVerticalPadding)
     }
 
-    private var syncNowButtonRow: some View {
-        Button {
-            Task {
-                isSyncingManual = true
-                await syncService.syncAfterServerMutation()
-                isSyncingManual = false
-                if let err = syncService.lastError, !err.isEmpty {
-                    UINotificationFeedbackGenerator().notificationOccurred(.error)
-                } else {
-                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                    flashNotice("Synchronisation terminée.")
-                }
-            }
-        } label: {
-            HStack(spacing: 12) {
-                ZStack {
-                    if syncService.isSyncing || isSyncingManual {
-                        ProgressView()
-                            .tint(Color(UIColor.label))
-                    } else {
-                        GroupedSettingsIconBox(systemName: "arrow.clockwise")
+    // MARK: - Dev simulate payment
+
+    @ViewBuilder
+    private var devSimulatePaymentCard: some View {
+        let simulated = isDevSimulationActive ?? false
+        VStack(alignment: .leading, spacing: 10) {
+            Label("Mode développeur", systemImage: "bolt.fill")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(Color.orange)
+            Text(simulated
+                 ? "Simulation active — toutes les fonctionnalités payantes sont accessibles."
+                 : "Simule un abonnement actif sans passer par Stripe.")
+                .font(.caption)
+                .foregroundStyle(Color(UIColor.secondaryLabel))
+            Button {
+                Task { await toggleDevSimulatePayment(activate: !simulated) }
+            } label: {
+                HStack(spacing: 6) {
+                    if isSimulatingPayment || isDevSimulationActive == nil {
+                        ProgressView().scaleEffect(0.8).tint(.white)
                     }
+                    Text(simulated ? "Désactiver la simulation" : "Simuler le paiement")
+                        .font(.subheadline.weight(.semibold))
                 }
-                .frame(width: GroupedSettingsMetrics.iconBoxSize, height: GroupedSettingsMetrics.iconBoxSize)
-                Text(syncService.isSyncing || isSyncingManual ? "Synchronisation…" : "Synchroniser maintenant")
-                    .font(.body.weight(.semibold))
-                    .foregroundStyle(Color(UIColor.label))
-                Spacer(minLength: 0)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+                .background(simulated ? Color.gray : Color.orange)
+                .foregroundStyle(.white)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
             }
-            .padding(.horizontal, GroupedSettingsMetrics.horizontalPadding)
-            .padding(.vertical, GroupedSettingsMetrics.rowVerticalPadding)
-            .contentShape(Rectangle())
+            .disabled(isSimulatingPayment || isDevSimulationActive == nil)
+            if let err = devSimulateError {
+                Text(err).font(.caption).foregroundStyle(.red)
+            }
         }
-        .buttonStyle(.plain)
-        .disabled(syncService.isSyncing || isSyncingManual)
+        .padding(14)
+        .background(Color.orange.opacity(0.08))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.orange.opacity(0.35), lineWidth: 1.5))
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .task { await fetchDevSimulationState() }
     }
 
-    private var restartTutorialButtonRow: some View {
-        Button {
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
-            dismiss()
-            DispatchQueue.main.async {
-                NotificationCenter.default.post(name: .myfidpassResetTutorial, object: nil)
-            }
-            flashNotice("Tutoriel relancé.")
-        } label: {
-            HStack(spacing: 12) {
-                GroupedSettingsIconBox(systemName: "arrow.counterclockwise")
-                    .frame(width: GroupedSettingsMetrics.iconBoxSize, height: GroupedSettingsMetrics.iconBoxSize)
-                Text("Relancer le tutoriel")
-                    .font(.body.weight(.semibold))
-                    .foregroundStyle(Color(UIColor.label))
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, GroupedSettingsMetrics.horizontalPadding)
-            .padding(.vertical, GroupedSettingsMetrics.rowVerticalPadding)
-            .contentShape(Rectangle())
+    private func fetchDevSimulationState() async {
+        guard let slug = authService.businesses.first?.slug else { return }
+        do {
+            let r: DevSimulatePaymentResponse = try await APIClient.shared.request(.devSimulatePaymentStatus(slug: slug))
+            await MainActor.run { isDevSimulationActive = r.simulated }
+        } catch {
+            await MainActor.run { isDevSimulationActive = false }
         }
-        .buttonStyle(.plain)
     }
 
-    private func flashNotice(_ text: String) {
-        ephemeralNotice = text
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-            ephemeralNotice = nil
+    private func toggleDevSimulatePayment(activate: Bool) async {
+        guard let slug = authService.businesses.first?.slug else { return }
+        await MainActor.run { isSimulatingPayment = true; devSimulateError = nil }
+        defer { Task { @MainActor in isSimulatingPayment = false } }
+        do {
+            let _: EmptyResponse = try await APIClient.shared.request(.devSimulatePayment(slug: slug, activate: activate))
+            // Clear le flag post-inscription qui bloque l'accès même avec Stripe actif
+            if activate {
+                await MainActor.run { authService.clearMandatoryPaywallAfterSignupPending() }
+            }
+            await authService.refreshBusinessesIfNeeded(force: true)
+            await MainActor.run { isDevSimulationActive = activate }
+        } catch {
+            await MainActor.run { devSimulateError = error.localizedDescription }
         }
     }
 
@@ -532,7 +430,6 @@ struct SettingsVisualTheme {
         SettingsView()
             .environmentObject(AuthService())
             .environmentObject(SyncService(container: PersistenceController.preview.container))
-            .environmentObject(RevenueCatSubscriptionState())
             .environment(\.managedObjectContext, PersistenceController.preview.container.viewContext)
     }
 }

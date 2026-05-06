@@ -234,6 +234,63 @@ struct CategoryEditSheet: View {
         !name.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
+    private var colorHexDigitsNorm: String {
+        colorHex.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "#", with: "").uppercased()
+    }
+
+    private var colorPaletteSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    categoryColorSwatch(hex6: nil, isNone: true)
+                    ForEach(AppVibrantColorPalette.hex6, id: \.self) { h in
+                        categoryColorSwatch(hex6: h, isNone: false)
+                    }
+                }
+            }
+            if !colorHexDigitsNorm.isEmpty, !AppVibrantColorPalette.containsHex6(colorHexDigitsNorm) {
+                Text("Cette couleur n’est pas dans la palette. Choisis une des pastilles pour unifier l’app.")
+                    .font(.caption)
+                    .foregroundStyle(AppTheme.Colors.textSecondary)
+            }
+        }
+    }
+
+    private func categoryColorSwatch(hex6: String?, isNone: Bool) -> some View {
+        let selected: Bool = {
+            if isNone { return colorHexDigitsNorm.isEmpty }
+            guard let hex6 else { return false }
+            return colorHexDigitsNorm == hex6
+        }()
+        return Button {
+            if isNone {
+                colorHex = ""
+            } else if let hex6 {
+                colorHex = hex6
+            }
+        } label: {
+            ZStack {
+                if isNone {
+                    Circle()
+                        .fill(Color(.systemGray5))
+                        .frame(width: 36, height: 36)
+                    Image(systemName: "slash.circle")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(AppTheme.Colors.textSecondary)
+                } else {
+                    Circle()
+                        .fill(Color(hex: hex6 ?? "000000"))
+                        .frame(width: 36, height: 36)
+                }
+                Circle()
+                    .strokeBorder(selected ? AppTheme.Colors.primary : Color.black.opacity(0.12), lineWidth: selected ? 3 : 1)
+                    .frame(width: 40, height: 40)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(isNone ? "Aucune couleur" : "Couleur #\(hex6 ?? "")")
+    }
+
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
@@ -285,9 +342,7 @@ struct CategoryEditSheet: View {
                         TextField("Ex. Classe A, Promo 2025", text: $name)
                     }
                     Section("Couleur (optionnel)") {
-                        TextField("Hex sans # (ex. 2563EB)", text: $colorHex)
-                            .textInputAutocapitalization(.characters)
-                            .autocorrectionDisabled()
+                        colorPaletteSection
                     }
                 }
             }

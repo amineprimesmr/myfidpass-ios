@@ -47,20 +47,10 @@ struct BusinessLogoView: View {
             AsyncLocalFileImage(filePath: path, contentMode: .fill)
                 .id(path)
         } else if let url = APIResourceURL.resolved(from: trimmed), shouldLoadNotificationIconWithAsyncImage(url) {
-            // GET …/notification-icon est public côté API (pas de Bearer). AsyncImage = chargement type Safari, sans la chaîne AuthenticatedMediaLoader.
+            // GET …/notification-icon est public côté API; on passe par le loader maison
+            // pour bénéficier du cache mémoire/disque et éviter le flash au ré-affichage.
             let displayURL = authenticatedLogoURLWithCacheBust(url)
-            AsyncImage(url: displayURL) { phase in
-                switch phase {
-                case .success(let image):
-                    image
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                case .failure, .empty:
-                    logoPlaceholder
-                @unknown default:
-                    logoPlaceholder
-                }
-            }
+            ProfileAuthenticatedLogoView(url: displayURL, size: size)
             .id(displayURL.absoluteString)
         } else if let url = APIResourceURL.resolved(from: trimmed), isAPILogoURL(url) {
             let displayURL = authenticatedLogoURLWithCacheBust(url)
@@ -116,15 +106,22 @@ struct BusinessLogoView: View {
         return .merchantStripeLogo
     }
 
+    private func notificationIconSlug(from url: URL) -> String? {
+        let parts = url.path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        guard let businessesIndex = parts.firstIndex(of: "businesses"),
+              businessesIndex + 1 < parts.count else { return nil }
+        let slug = parts[businessesIndex + 1].trimmingCharacters(in: .whitespacesAndNewlines)
+        return slug.isEmpty ? nil : slug
+    }
+
     /// Cache HTTP / mémoire : `v` selon le **type** de média (commerce vs campagne).
     private func authenticatedLogoURLWithCacheBust(_ url: URL) -> URL {
         var c = URLComponents(url: url, resolvingAgainstBaseURL: false)
         let ctx = resolvedAssetContext(for: url)
         switch ctx {
         case .campaignNotificationIcon:
-            let serverAt = UserDefaults.standard.object(forKey: CampaignNotificationImageCache.previewCompositeServerBustKey) as? Date
-            let localAt = UserDefaults.standard.object(forKey: SyncService.lastNotificationIconUploadAtKey) as? Date
-            if let d = [serverAt, localAt].compactMap({ $0 }).max() {
+            if let slug = notificationIconSlug(from: url),
+               let d = CampaignNotificationImageCache.bestBustDate(for: slug) {
                 c?.queryItems = [URLQueryItem(name: "v", value: Self.cacheBustQueryValue(from: d))]
             }
         case .merchantLogoIcon:
@@ -177,8 +174,9 @@ private struct ProfileAuthenticatedLogoView: View {
                     .font(.system(size: size * 0.5))
                     .foregroundStyle(AppTheme.Colors.textSecondary.opacity(0.6))
             } else {
-                ProgressView()
-                    .tint(AppTheme.Colors.primary)
+                Image(systemName: "photo.circle.fill")
+                    .font(.system(size: size * 0.5))
+                    .foregroundStyle(AppTheme.Colors.textSecondary.opacity(0.45))
             }
         }
         .onChange(of: urlKey) { _, _ in

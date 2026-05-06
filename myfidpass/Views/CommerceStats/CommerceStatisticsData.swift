@@ -14,6 +14,45 @@ struct CommerceDonutSegment: Identifiable, Hashable {
     let label: String
 }
 
+/// Données d’affichage « dashboard » pour la tuile **Points attribués** (courbe + tendance).
+struct CommercePointsAttributedDetail: Hashable {
+    /// Série normalisée [0, 1] (typiquement activité hebdo / passages).
+    var sparkline: [CGFloat]
+    /// Variation en % entre les deux dernières semaines de la série (activité).
+    var trendPct: Double?
+    var trendIsPositive: Bool
+}
+
+/// Ligne (style « in stock ») : chiffre + indicateur, nom de la récompense à droite.
+struct CommerceRewardUsedLineItem: Hashable {
+    let label: String
+    let count: Int
+    /// Part des échanges sur la période (0…100) — chiffre compact à côté de la flèche.
+    let shareRounded: Int
+    /// Flèche verte si la part est au moins la part « équitable » (100 % / nombre de types).
+    let trendPositive: Bool
+}
+
+/// Mise en page type carte « in stock / low stock » pour **Récompenses utilisées** (`id == "rewards"`).
+struct CommerceRewardsUsedDetail: Hashable {
+    let items: [CommerceRewardUsedLineItem]
+    let totalExchanges: Int
+}
+
+/// Détail d’impact des avis Google (période + volume) pour une carte dédiée.
+struct CommerceGoogleReviewsDetail: Hashable {
+    let monthKey: String?
+    let newReviewsInPeriod: Int
+}
+
+/// Détail d’un réseau social (courbe + tendance) pour une carte dédiée.
+struct CommerceSocialFollowsDetail: Hashable {
+    let networkId: String   // "social-instagram" | "social-tiktok" | "social-facebook" | "social-twitter"
+    var sparkline: [CGFloat]
+    var trendPct: Double?
+    var trendIsPositive: Bool
+}
+
 struct CommerceCategoryRowData: Identifiable, Hashable {
     let id: String
     let title: String
@@ -26,6 +65,14 @@ struct CommerceCategoryRowData: Identifiable, Hashable {
     let audienceSplit: CommerceAudienceSplitData?
     /// Détail des récompenses échangées (ligne « Récompenses utilisées » uniquement).
     let rewardUsageLines: [RewardRedeemedBreakdownRowDTO]?
+    /// Mise en page type « Order completion » pour **Points attribués** (ligne `id == "pts"`).
+    let pointsAttributedDetail: CommercePointsAttributedDetail?
+    /// Mise en page type « in stock / low stock » pour **Récompenses utilisées** (ligne `id == "rewards"`).
+    let rewardsUsedDetail: CommerceRewardsUsedDetail?
+    /// Carte dédiée « Avis Google » (impact mensuel + cumul local).
+    let googleReviewsDetail: CommerceGoogleReviewsDetail?
+    /// Carte dédiée réseau social (Instagram / TikTok / Facebook / X).
+    let socialFollowsDetail: CommerceSocialFollowsDetail?
 
     init(
         id: String,
@@ -36,7 +83,11 @@ struct CommerceCategoryRowData: Identifiable, Hashable {
         iconName: String,
         swatch: Color,
         audienceSplit: CommerceAudienceSplitData? = nil,
-        rewardUsageLines: [RewardRedeemedBreakdownRowDTO]? = nil
+        rewardUsageLines: [RewardRedeemedBreakdownRowDTO]? = nil,
+        pointsAttributedDetail: CommercePointsAttributedDetail? = nil,
+        rewardsUsedDetail: CommerceRewardsUsedDetail? = nil,
+        googleReviewsDetail: CommerceGoogleReviewsDetail? = nil,
+        socialFollowsDetail: CommerceSocialFollowsDetail? = nil
     ) {
         self.id = id
         self.title = title
@@ -47,6 +98,10 @@ struct CommerceCategoryRowData: Identifiable, Hashable {
         self.swatch = swatch
         self.audienceSplit = audienceSplit
         self.rewardUsageLines = rewardUsageLines
+        self.pointsAttributedDetail = pointsAttributedDetail
+        self.rewardsUsedDetail = rewardsUsedDetail
+        self.googleReviewsDetail = googleReviewsDetail
+        self.socialFollowsDetail = socialFollowsDetail
     }
 }
 
@@ -80,6 +135,8 @@ struct CommerceStatisticsPresentation {
     let categoryRows: [CommerceCategoryRowData]
     /// Section dédiée « Avis Google ».
     let googleReviewsRows: [CommerceCategoryRowData]
+    /// Section dédiée réseaux sociaux (Instagram, TikTok, Facebook, X) — vide si non configuré.
+    let socialNetworkRows: [CommerceCategoryRowData]
     let barWeeksOperations: [CommerceBarWeekData]
     /// Courbe haute de la tuile **Membres** : **une** valeur normalisée [0,1] par semaine (API), préf. `membersCount`, sinon `operationsCount`. Pas les parts du donut.
     let membersWeeklySparkline: [CGFloat]
@@ -139,10 +196,13 @@ enum CommerceStatisticsDataBuilder {
             String(format: "%.0f %%", min(100, (w / twGoogle) * 100))
         }
 
+        let opsSeriesForPoints = evolution.map { $0.operationsCount ?? 0 }
+        let (ptsSpark, ptsTrend, ptsTrendPos) = Self.pointsRowSparklineAndTrend(opsSeries: opsSeriesForPoints)
+
         let indicatorRows: [CommerceCategoryRowData] = [
             .init(
                 id: "audienceSplit",
-                title: "Clients actifs / inactifs (30 j)",
+                title: "Clients actifs / inactifs",
                 subtitle: "Actif = au moins 1 passage · Inactif = 0",
                 rightPrimary: "\(StatsFR.formatPct(Double(actI) / Double(max(1, members)))) actifs",
                 rightSecondary: "\(StatsFR.formatPct(Double(inactiveN) / Double(max(1, members)))) inactifs",
@@ -158,18 +218,28 @@ enum CommerceStatisticsDataBuilder {
                 rightSecondary: weightPctIndicator(wPts),
                 iconName: "star.fill",
                 swatch: colors[1],
-                audienceSplit: nil
+                audienceSplit: nil,
+                pointsAttributedDetail: .init(
+                    sparkline: ptsSpark,
+                    trendPct: ptsTrend,
+                    trendIsPositive: ptsTrendPos
+                )
             ),
             .init(
                 id: "rewards",
                 title: "Récompenses utilisées",
                 subtitle: "Sur la période",
                 rightPrimary: StatsFR.formatInt(rewardsN),
-                rightSecondary: "",
+                rightSecondary: weightPctIndicator(wRew),
                 iconName: "gift.fill",
                 swatch: Color(red: 0.98, green: 0.42, blue: 0.42),
                 audienceSplit: nil,
-                rewardUsageLines: rewardBreakdown.isEmpty ? nil : rewardBreakdown
+                rewardUsageLines: nil,
+                pointsAttributedDetail: nil,
+                rewardsUsedDetail: Self.rewardsUsedDetailFrom(
+                    breakdown: rewardBreakdown,
+                    totalExchanges: max(0, rewardsN)
+                )
             ),
         ]
 
@@ -182,7 +252,11 @@ enum CommerceStatisticsDataBuilder {
                 rightSecondary: weightPctGoogle(wG),
                 iconName: "star.bubble.fill",
                 swatch: Color(red: 0.26, green: 0.52, blue: 0.96),
-                audienceSplit: nil
+                audienceSplit: nil,
+                googleReviewsDetail: .init(
+                    monthKey: stats?.periodKey ?? stats?.period,
+                    newReviewsInPeriod: max(0, googleRev)
+                )
             ),
         ]
 
@@ -217,6 +291,35 @@ enum CommerceStatisticsDataBuilder {
 
         let (dPanier, dFreq) = trendDeltas(evolution: evolution, stats: stats)
 
+        let socialNetworkRows: [CommerceCategoryRowData] = {
+            guard let sf = stats?.socialFollowsClaimed else { return [] }
+            let nets: [(id: String, label: String, icon: String, count: Int)] = [
+                ("social-instagram", "Instagram", "camera.fill",      sf.instagram ?? 0),
+                ("social-tiktok",    "TikTok",    "music.note",       sf.tiktok    ?? 0),
+                ("social-facebook",  "Facebook",  "person.2.fill",    sf.facebook  ?? 0),
+                ("social-twitter",   "X",         "bubble.left.fill", sf.twitter   ?? 0),
+            ]
+            return nets.map { net in
+                let spark = Self.syntheticSocialSparkline(total: net.count)
+                return CommerceCategoryRowData(
+                    id: net.id,
+                    title: "\(net.label)",
+                    subtitle: "Nouveaux abonnés via mission",
+                    rightPrimary: "+\(StatsFR.formatInt(net.count))",
+                    rightSecondary: "",
+                    iconName: net.icon,
+                    swatch: .blue,
+                    socialFollowsDetail: CommerceSocialFollowsDetail(
+                        networkId: net.id,
+                        sparkline: spark,
+                        trendPct: nil,
+                        trendIsPositive: true
+                    )
+                )
+            }
+        }()
+
+
         return CommerceStatisticsPresentation(
             panierMoyenEuro: panier,
             panierRepereEuro: repere,
@@ -227,12 +330,119 @@ enum CommerceStatisticsDataBuilder {
             donutSegments: donut,
             categoryRows: indicatorRows,
             googleReviewsRows: googleReviewsRows,
+            socialNetworkRows: socialNetworkRows,
             barWeeksOperations: bars,
             membersWeeklySparkline: membersSpark,
             membersTotal: members,
             activeMembers: active30,
             retentionPct: stats?.retentionPct
         )
+    }
+
+    /// Avant abonnement payant : conserve **donut + courbe** membres réels ; panier, fréquence et rangées détail depuis la maquette.
+    static func paywallTeaserMerging(real: CommerceStatisticsPresentation, mock: CommerceStatisticsPresentation) -> CommerceStatisticsPresentation {
+        CommerceStatisticsPresentation(
+            panierMoyenEuro: mock.panierMoyenEuro,
+            panierRepereEuro: mock.panierRepereEuro,
+            panierMesureVsReperePct: mock.panierMesureVsReperePct,
+            frequenceParActif: mock.frequenceParActif,
+            trendPanierDeltaEuro: mock.trendPanierDeltaEuro,
+            trendFrequenceDelta: mock.trendFrequenceDelta,
+            donutSegments: real.donutSegments,
+            categoryRows: mock.categoryRows,
+            googleReviewsRows: mock.googleReviewsRows,
+            socialNetworkRows: mock.socialNetworkRows,
+            barWeeksOperations: mock.barWeeksOperations,
+            membersWeeklySparkline: real.membersWeeklySparkline,
+            membersTotal: real.membersTotal,
+            activeMembers: real.activeMembers,
+            retentionPct: mock.retentionPct
+        )
+    }
+
+    /// Lignes type « in stock » : part des échanges (chiffre à côté de la flèche) et vert / rouge vs répartition équitable.
+    private static func rewardsUsedDetailFrom(
+        breakdown: [RewardRedeemedBreakdownRowDTO],
+        totalExchanges: Int
+    ) -> CommerceRewardsUsedDetail {
+        let t = max(0, totalExchanges)
+        if breakdown.isEmpty {
+            if t == 0 {
+                return CommerceRewardsUsedDetail(
+                    items: [CommerceRewardUsedLineItem(
+                        label: "Aucun échange",
+                        count: 0,
+                        shareRounded: 0,
+                        trendPositive: true
+                    )],
+                    totalExchanges: 0
+                )
+            }
+            return CommerceRewardsUsedDetail(
+                items: [CommerceRewardUsedLineItem(
+                    label: "Rachats (détail par type indisponible)",
+                    count: t,
+                    shareRounded: 100,
+                    trendPositive: true
+                )],
+                totalExchanges: t
+            )
+        }
+        let n = max(1, breakdown.count)
+        let equalShare = 100.0 / Double(n)
+        let denom = max(1, t)
+        var items: [CommerceRewardUsedLineItem] = []
+        for r in breakdown {
+            let c = max(0, r.count)
+            let share = (Double(c) / Double(denom)) * 100.0
+            let sr = min(100, max(0, Int(round(share))))
+            let positive = share + 0.15 >= equalShare
+            let label = r.label.trimmingCharacters(in: .whitespacesAndNewlines)
+            let safeLabel = label.isEmpty ? "Récompense" : label
+            items.append(
+                CommerceRewardUsedLineItem(
+                    label: safeLabel,
+                    count: c,
+                    shareRounded: sr,
+                    trendPositive: positive
+                )
+            )
+        }
+        items.sort { lhs, rhs in
+            if lhs.count != rhs.count { return lhs.count > rhs.count }
+            return lhs.label < rhs.label
+        }
+        return CommerceRewardsUsedDetail(items: items, totalExchanges: t)
+    }
+
+    /// Courbe + tendance (2 dernières semaines) pour la tuile **Points attribués** — série = activité caisse, alignée sur l’évolution API.
+    private static func pointsRowSparklineAndTrend(opsSeries: [Int]) -> (spark: [CGFloat], trend: Double?, positive: Bool) {
+        let raw: [CGFloat] = opsSeries.map { CGFloat($0) }
+        let spark: [CGFloat]
+        if raw.isEmpty {
+            spark = [0.5, 0.52, 0.48, 0.55, 0.51, 0.5]
+        } else {
+            let minV = raw.min() ?? 0
+            let maxV = raw.max() ?? 0
+            if maxV - minV < 1e-3 {
+                spark = raw.map { _ in 0.5 }
+            } else {
+                let span = maxV - minV
+                spark = raw.map { ($0 - minV) / span }
+            }
+        }
+        var trend: Double?
+        var positive = true
+        if opsSeries.count >= 2 {
+            let last = opsSeries[opsSeries.count - 1]
+            let prev = opsSeries[opsSeries.count - 2]
+            if prev > 0 {
+                let d = Double(last - prev) / Double(prev) * 100.0
+                trend = d
+                positive = d >= 0
+            }
+        }
+        return (spark, trend, positive)
     }
 
     /// Barres d’**activité** (opérations) : min–max sur la période (sinon toutes semaines = même hauteur lisible).
@@ -274,6 +484,12 @@ enum CommerceStatisticsDataBuilder {
         }
         if index == total - 1 { return "S" }
         return "\(index + 1)"
+    }
+
+    /// Courbe synthétique pour un réseau social (pas de données hebdo par réseau dans l’API).
+    private static func syntheticSocialSparkline(total: Int) -> [CGFloat] {
+        guard total > 0 else { return [0.08, 0.10, 0.09, 0.12, 0.10, 0.09] }
+        return [0.28, 0.44, 0.58, 0.74, 0.88, 1.0]
     }
 
     /// Tendance grossière : compare les deux dernières valeurs d’évolution (opérations).
@@ -352,6 +568,15 @@ enum CommerceStatsMonthNavigator {
         let raw = f.string(from: date)
         guard let first = raw.first else { return key }
         return String(first).uppercased() + raw.dropFirst()
+    }
+
+    /// Mois depuis `creationMonthKey` (inclus) jusqu’au mois courant, max 6, plus récent en premier.
+    /// Si `creationMonthKey` est nil ou invalide, renvoie les 6 derniers mois.
+    static func monthKeys(from creationMonthKey: String?, reference: Date = Date()) -> [String] {
+        let all = sixMonthKeysEndingCurrentMonth(reference: reference)
+        guard let creation = creationMonthKey, isCalendarMonthPeriod(creation) else { return all }
+        let limited = all.filter { $0 >= creation }
+        return limited.isEmpty ? [all[0]] : limited
     }
 
     /// Anciens paramètres (`6m`, `this_month`…) → mois courant pour l’API mois par mois.

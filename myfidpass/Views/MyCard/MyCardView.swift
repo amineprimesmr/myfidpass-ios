@@ -116,8 +116,8 @@ private struct LocalImagePreviewView: View {
 }
 
 /// Nombre de paliers points **éditables** dans « Récompenses » (ex. 30 € / 60 € / 100 €), hors « Début du jeu ».
-private enum MyCardPointsRewardTiers {
-    static let slotCount = 3
+enum MyCardPointsRewardTiers {
+    static let slotCount = 5
 }
 
 /// État comparé pour savoir si « Enregistrer » doit apparaître (aligné sur ce que `saveTemplate` envoie).
@@ -206,12 +206,16 @@ struct MyCardView: View {
     @State private var pointsPerEuro: Int = 1
     @State private var pointsPerVisit: Int = 0
     @State private var pointsMinAmountEur: String = ""
-    /// Paliers points (3, hors ligne « Début du jeu »), alignés sur le SaaS web.
+    /// Paliers points (5, hors ligne « 10 pts » / début de jeu), alignés sur le SaaS web.
     @State private var tierPoints: [String] = Array(repeating: "", count: MyCardPointsRewardTiers.slotCount)
     @State private var tierLabels: [String] = Array(repeating: "", count: MyCardPointsRewardTiers.slotCount)
     @State private var stampRewardLabel: String = ""
     /// Récompense « Début du jeu » (1ʳᵉ tour de roue à l’ouverture de la carte) — persiste localement via `CardPreviewDisplaySnapshot`.
     @State private var startGameRewardLabel: String = ""
+    /// Bonus d'inscription : 1 = actif, 0 = désactivé.
+    @State private var welcomeBonusEnabled: Bool = true
+    /// Nombre de points (mode points) offerts à l'inscription. Toujours 1 en mode tampons.
+    @State private var welcomeBonusAmount: Int = 10
     @State private var expiryMonths: String = ""
     @State private var sector: String = ""
     @State private var rulesLoadedFromAPI = false
@@ -230,9 +234,12 @@ struct MyCardView: View {
     @State private var stampIconPhotoItem: PhotosPickerItem?
     /// Dernier GET dashboard : le serveur a une icône tampon personnalisée (hors emoji seul).
     @State private var serverHasStampIconAsset = false
+    /// Dernière URL d’icône tampon renvoyée par l’API (aperçu + grille quand le brouillon a été enregistré).
+    @State private var serverStampIconURLString: String?
     /// Dernière version enregistrée (ou chargée depuis l’API) — pour afficher « Enregistrer » seulement si l’état a divergé.
     @State private var lastPersistedSnapshot: MyCardPersistedSnapshot?
     @State private var cardSettingsSaveInFlight = false
+    @State private var touchPillBlink = false
     /// Alerte avant de quitter la page si des changements ne sont pas enregistrés.
     @State private var showUnsavedLeaveAlert = false
     init(context: NSManagedObjectContext) {
@@ -325,7 +332,6 @@ struct MyCardView: View {
         .background(AppTheme.Colors.background)
         .background(MyCardNavigationPopGate(blockInteractivePop: hasUnsavedCardChanges))
         .onAppear {
-            tabRouter.isMyCardScreenPresented = true
             loadCurrentTemplate()
             restoreLocalBackgroundFromSnapshot()
             mergeStampIconFromDisplaySnapshotIfNeeded()
@@ -344,9 +350,6 @@ struct MyCardView: View {
                 }
                 await prefetchCardMediaFromCurrentState()
             }
-        }
-        .onDisappear {
-            tabRouter.isMyCardScreenPresented = false
         }
         .onChange(of: syncService.lastSyncDate) { _, newDate in
             guard newDate != nil else { return }
@@ -471,7 +474,14 @@ struct MyCardView: View {
     private func requestLeaveMyCard() {
         customizationZone = nil
         if hasUnsavedCardChanges {
-            showUnsavedLeaveAlert = true
+            Task {
+                cardSettingsSaveInFlight = true
+                _ = await saveTemplate()
+                await MainActor.run {
+                    cardSettingsSaveInFlight = false
+                    dismiss()
+                }
+            }
         } else {
             dismiss()
         }
@@ -537,6 +547,8 @@ struct MyCardView: View {
         .pickerStyle(.segmented)
         .accessibilityLabel(Text("Type de programme : Points ou Tampons"))
         .onChange(of: programType) { _, new in
+            welcomeBonusEnabled = true
+            welcomeBonusAmount = new == "points" ? 10 : 1
             if new == "stamps" {
                 requiredStamps = 10
                 if previewStampsCount > 10 { previewStampsCount = 10 }
@@ -585,6 +597,8 @@ struct MyCardView: View {
                                 stripDisplayMode: stripDisplayMode,
                                 stripText: stripText.isEmpty ? nil : stripText,
                                 stampEmoji: stampEmoji.isEmpty ? nil : stampEmoji,
+                                stampIconDataURL: stampIconPendingBase64,
+                                stampIconRemoteURL: stampIconRemoteURLForPreview(),
                                 cardBackgroundImagePath: CardLogoStorage.resolvedDisplayPath(forStoredPath: cardBackgroundImagePath),
                                 cardBackgroundRemoteURL: cardBackgroundRemoteURL,
                                 labelColorHex: labelHex.trimmingCharacters(in: .whitespaces).isEmpty ? nil : labelHex,
@@ -629,8 +643,38 @@ struct MyCardView: View {
                 }
                 .frame(width: geo.size.width, height: geo.size.height)
                 .id(
-                    "\(programType)-\(primaryHex)-\(accentHex)-\(labelHex)-\(logoURL)-\(stripDisplayMode)-\(stripText)-\(displayName)-\(requiredStamps)-\(previewStampsCount)-\(previewPointsCount)-\(cardBackgroundImagePath ?? "")-\(cardBackgroundRemoteURL ?? "")-\(cardMemberPreviewText)-\(previewMemberColumnTitle)-\(stampEmoji)-\(stampRewardLabel)-\(stampMidRewardLabel)-\(labelRestants)"
+                    "\(programType)-\(primaryHex)-\(accentHex)-\(labelHex)-\(logoURL)-\(stripDisplayMode)-\(stripText)-\(displayName)-\(requiredStamps)-\(previewStampsCount)-\(previewPointsCount)-\(cardBackgroundImagePath ?? "")-\(cardBackgroundRemoteURL ?? "")-\(cardMemberPreviewText)-\(previewMemberColumnTitle)-\(stampEmoji)-\(stampRewardLabel)-\(stampMidRewardLabel)-\(labelRestants)-\(stampIconPendingBase64?.prefix(32) ?? "")-\(serverStampIconURLString ?? "")-\(stampIconWasRemoved)"
                 )
+                .overlay(alignment: .bottomLeading) {
+                    if shouldShowCompletionPills {
+                        HStack(spacing: 5) {
+                            Image(systemName: "hand.tap.fill")
+                                .font(.system(size: 11, weight: .bold))
+                            Text("Touchez")
+                                .font(.system(size: 11, weight: .bold))
+                        }
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(
+                            Capsule()
+                                .fill(Color.black.opacity(0.82))
+                        )
+                        .overlay(
+                            Capsule()
+                                .strokeBorder(Color.white.opacity(0.34), lineWidth: 1)
+                        )
+                        .shadow(color: Color.black.opacity(0.35), radius: 8, y: 4)
+                        .padding(.leading, AppTheme.Spacing.lg + 10)
+                        .padding(.bottom, 90)
+                        .opacity(touchPillBlink ? 1 : 0.45)
+                        .scaleEffect(touchPillBlink ? 1 : 0.96)
+                        .animation(.easeInOut(duration: 0.75).repeatForever(autoreverses: true), value: touchPillBlink)
+                        .onAppear { touchPillBlink = true }
+                        .onDisappear { touchPillBlink = false }
+                        .allowsHitTesting(false)
+                    }
+                }
             }
             .frame(height: previewMinHeight + 36)
             .padding(.vertical, AppTheme.Spacing.xs)
@@ -676,13 +720,19 @@ struct MyCardView: View {
             previewPointsCount: $previewPointsCount,
             stampEmoji: $stampEmoji,
             stampIconPhotoItem: $stampIconPhotoItem,
+            stampIconPendingBase64: $stampIconPendingBase64,
+            stampIconWasRemoved: $stampIconWasRemoved,
+            serverStampIconURL: serverStampIconURLString,
+            serverHasStampIconAsset: serverHasStampIconAsset,
             stampRewardLabel: $stampRewardLabel,
             stampMidRewardLabel: $stampMidRewardLabel,
             startGameRewardLabel: $startGameRewardLabel,
             backTerms: $backTerms,
             backContact: $backContact,
             notificationTitleOverride: $notificationTitleOverride,
-            notificationChangeMessage: $notificationChangeMessage
+            notificationChangeMessage: $notificationChangeMessage,
+            welcomeBonusEnabled: $welcomeBonusEnabled,
+            welcomeBonusAmount: $welcomeBonusAmount
         )
     }
 
@@ -1021,11 +1071,8 @@ struct MyCardView: View {
     }
 
     private func applyStampIconJPEGFromCroppedImage(_ image: UIImage) async {
-        guard let jpeg = image.jpegData(compressionQuality: 0.85) else { return }
-        let maxLen = 512 * 1024
-        guard jpeg.count <= maxLen else { return }
-        let b64 = jpeg.base64EncodedString()
-        let payload = "data:image/jpeg;base64,\(b64)"
+        /// Même cible 500 Ko max que l’icône logo (refus silencieux si l’on garde un seul JPEG 0,85).
+        guard let payload = CardLogoStorage.compressedBase64ForLogoIconAPI(image: image) else { return }
         await MainActor.run {
             stampIconPendingBase64 = payload
             stampIconWasRemoved = false
@@ -1033,6 +1080,15 @@ struct MyCardView: View {
                 persistDisplaySnapshot(slug: slug)
             }
         }
+    }
+
+    private func stampIconRemoteURLForPreview() -> URL? {
+        if let p = stampIconPendingBase64?.trimmingCharacters(in: .whitespacesAndNewlines), !p.isEmpty { return nil }
+        if stampIconWasRemoved { return nil }
+        if !serverHasStampIconAsset { return nil }
+        let s = serverStampIconURLString?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if s.isEmpty { return nil }
+        return APIResourceURL.resolved(from: s)
     }
 
     private func loadCurrentTemplate() {
@@ -1115,6 +1171,9 @@ struct MyCardView: View {
             stampIconWasRemoved = true
             stampIconPendingBase64 = nil
         }
+        if let has = s.hasServerStampIcon {
+            serverHasStampIconAsset = has
+        }
     }
 
     /// Restaure `cardBackgroundImagePath` depuis le snapshot si le fichier local existe encore sur disque.
@@ -1141,6 +1200,8 @@ struct MyCardView: View {
         } else if snap.stampIconWasRemoved == true {
             stampIconWasRemoved = true
             stampIconPendingBase64 = nil
+        } else if snap.hasServerStampIcon == true {
+            serverHasStampIconAsset = true
         }
     }
 
@@ -1170,7 +1231,8 @@ struct MyCardView: View {
             tierPoints: tierPoints,
             tierLabels: tierLabels,
             stampIconPendingBase64: stampIconPendingBase64,
-            stampIconWasRemoved: stampIconWasRemoved
+            stampIconWasRemoved: stampIconWasRemoved,
+            hasServerStampIcon: serverHasStampIconAsset
         )
     }
 
@@ -1196,7 +1258,7 @@ struct MyCardView: View {
         }
     }
 
-    private func prefetchCardMediaURLs(logoURLString: String, backgroundURLString: String?) async {
+    private func prefetchCardMediaURLs(logoURLString: String, backgroundURLString: String?, stampIconURLString: String? = nil) async {
         let logo = logoURLString.trimmingCharacters(in: .whitespacesAndNewlines)
         if !logo.isEmpty, let u = APIResourceURL.resolved(from: logo),
            APIResourceURL.isOurAPIHost(u), u.path.hasSuffix("/logo") {
@@ -1208,10 +1270,15 @@ struct MyCardView: View {
            APIResourceURL.isOurAPIHost(u), u.path.contains("card-background") {
             await AuthenticatedMediaLoader.prefetch(url: u)
         }
+        if let st = stampIconURLString?.trimmingCharacters(in: .whitespacesAndNewlines), !st.isEmpty,
+           let u = APIResourceURL.resolved(from: st),
+           APIResourceURL.isOurAPIHost(u) {
+            await AuthenticatedMediaLoader.prefetch(url: u)
+        }
     }
 
     private func prefetchCardMediaFromCurrentState() async {
-        await prefetchCardMediaURLs(logoURLString: logoURL, backgroundURLString: cardBackgroundRemoteURL)
+        await prefetchCardMediaURLs(logoURLString: logoURL, backgroundURLString: cardBackgroundRemoteURL, stampIconURLString: serverStampIconURLString)
     }
 
     /// Charge les réglages complets depuis l’API (design + règles) pour que l’aperçu et le pass « Tester dans l’Apple Wallet » reflètent les changements faits sur le SaaS ou ailleurs.
@@ -1265,11 +1332,19 @@ struct MyCardView: View {
                 let midSaved = settings.stampMidRewardLabel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 stampMidRewardLabel = midSaved
                 serverHasStampIconAsset = (settings.hasStampIcon == true)
+                if settings.hasStampIcon == true,
+                   let su = settings.stampIconUrl?.trimmingCharacters(in: .whitespacesAndNewlines), !su.isEmpty {
+                    serverStampIconURLString = su
+                } else {
+                    serverStampIconURLString = nil
+                }
                 if let em = settings.stampEmoji?.trimmingCharacters(in: .whitespacesAndNewlines), !em.isEmpty {
                     stampEmoji = em
                 }
                 expiryMonths = settings.expiryMonths.map { String($0) } ?? ""
                 sector = settings.sector ?? ""
+                welcomeBonusEnabled = true
+                welcomeBonusAmount = programType == "points" ? 10 : 1
                 backTerms = settings.backTerms ?? ""
                 backContact = settings.backContact ?? ""
                 labelRestants = settings.labelRestants ?? ""
@@ -1520,6 +1595,8 @@ struct MyCardView: View {
                 patch.pointsMinAmountEur = programType == "points" ? ptsMinEur : nil
                 patch.pointsRewardTiers = programType == "points" ? rewardTiers : nil
                 patch.stampRewardLabel = stampRewardLabel.isEmpty ? nil : String(stampRewardLabel.prefix(120))
+                patch.welcomeBonusEnabled = 1
+                patch.welcomeBonusAmount = programType == "stamps" ? 1 : 10
                 if programType == "stamps" {
                     let mid = stampMidRewardLabel.trimmingCharacters(in: .whitespaces)
                     if mid.isEmpty {
@@ -1557,14 +1634,27 @@ struct MyCardView: View {
                         patch.stampIconBase64 = pending
                     }
                 }
+                let stampIconServerAfterPatch: Bool? = await MainActor.run {
+                    guard dashboardSettingsHydrated else { return nil }
+                    if stampIconWasRemoved { return false }
+                    if let p = stampIconPendingBase64?.trimmingCharacters(in: .whitespacesAndNewlines), !p.isEmpty {
+                        return true
+                    }
+                    return nil
+                }
                 _ = try await APIClient.shared.request(APIEndpoint.patchDashboardSettings(slug: slug, patch: patch)) as EmptyResponse
+                /// Avant le GET de relecture : snapshot UserDefaults à jour pour l’accueil (évite « Finalisez » si l’utilisateur quitte pendant `loadCardSettingsFromAPI`).
                 await MainActor.run {
                     saveLogoError = nil
                     if cardBackgroundBase64 == "" { cardBackgroundWasRemoved = false }
+                    if let v = stampIconServerAfterPatch {
+                        serverHasStampIconAsset = v
+                    }
                     if stampIconWasRemoved || stampIconPendingBase64 != nil {
                         stampIconWasRemoved = false
                         stampIconPendingBase64 = nil
                     }
+                    persistDisplaySnapshot(slug: slug)
                 }
                 if skipPostSaveReload {
                     await MainActor.run {
@@ -1627,6 +1717,14 @@ struct ColorPickerRow: View {
             .uppercased()
     }
 
+    /// Ancienne teinte pas dans la grille : pastille « Actuelle » pour conserver ou remplacer par une teinte vive.
+    private var legacyHexForOrphan: String? {
+        let d = Self.hexDigits(hex)
+        guard d.count == 6, d.allSatisfy(\.isHexDigit) else { return nil }
+        if AppVibrantColorPalette.containsHex6(d) { return nil }
+        return d
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: AppTheme.Spacing.sm) {
             VStack(alignment: .leading, spacing: 2) {
@@ -1641,9 +1739,17 @@ struct ColorPickerRow: View {
             }
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: AppTheme.Spacing.sm) {
-                    ForEach(MyCardPresetColors.all, id: \.hex) { preset in
-                        let presetNorm = preset.hex.hasPrefix("#") ? preset.hex : "#" + preset.hex
-                        let selected = Self.hexDigits(hex) == Self.hexDigits(preset.hex)
+                    if let leg = legacyHexForOrphan {
+                        let full = "#" + leg
+                        ColorPresetButton(hex: full, name: "Actuelle", isSelected: Self.hexDigits(hex) == leg) {
+                            withAnimation(.easeOut(duration: 0.2)) {
+                                hex = full
+                            }
+                        }
+                    }
+                    ForEach(AppVibrantColorPalette.cardRowPresets, id: \.hex) { preset in
+                        let presetNorm = "#" + CardColorPaletteUX.normalizeHex(preset.hex)
+                        let selected = Self.hexDigits(hex) == CardColorPaletteUX.normalizeHex(preset.hex)
                         ColorPresetButton(hex: presetNorm, name: preset.name, isSelected: selected) {
                             withAnimation(.easeOut(duration: 0.2)) {
                                 hex = presetNorm
@@ -1653,33 +1759,6 @@ struct ColorPickerRow: View {
                 }
                 .padding(.vertical, 2)
             }
-
-            ColorPicker(selection: Binding(
-                get: {
-                    let d = Self.hexDigits(hex)
-                    let six = d.count == 6 ? d : "000000"
-                    return Color(hex: six)
-                },
-                set: { newColor in
-                    hex = newColor.toHexRGBString()
-                }
-            ), supportsOpacity: false) {
-                Label("Nuancier (toutes les couleurs)", systemImage: "eyedropper.halffull")
-                    .font(.subheadline)
-            }
-
-            TextField("#RRGGBB", text: $hex)
-                .textFieldStyle(.plain)
-                .font(.system(.body, design: .monospaced))
-                .textInputAutocapitalization(.characters)
-                .autocorrectionDisabled()
-                .padding(10)
-                .background(AppTheme.Colors.background)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 10)
-                        .strokeBorder(AppTheme.Colors.textSecondary.opacity(0.2), lineWidth: 1)
-                )
         }
     }
 }
@@ -1715,21 +1794,6 @@ struct ColorPresetButton: View {
             .frame(width: 56)
         }
     }
-}
-
-// MARK: - Palette de couleurs
-
-enum MyCardPresetColors {
-    static let all: [(name: String, hex: String)] = [
-        ("Bleu", "2563EB"),
-        ("Vert", "10B981"),
-        ("Violet", "8B5CF6"),
-        ("Ambre", "F59E0B"),
-        ("Rouge", "EF4444"),
-        ("Indigo", "4F46E5"),
-        ("Teal", "14B8A6"),
-        ("Rose", "EC4899"),
-    ]
 }
 
 // MARK: - Désactive le swipe « retour » si la carte a des modifications locales (évite de quitter sans choix).

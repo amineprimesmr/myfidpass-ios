@@ -42,8 +42,6 @@ struct FlyerEditorSessionDraftMeta: Codable, Equatable {
     var cachedPublicLogoDataUrl: String?
     var serverUpdatedAt: String?
     var savedAt: Date
-    /// `true` : session ouverte via « Modifier le flyer » — seuls ces brouillons relancent l’éditeur au redémarrage.
-    var openedAsFlyerForEdit: Bool?
 }
 
 enum CommerceFlyerEditorDraftStore {
@@ -72,8 +70,6 @@ enum CommerceFlyerEditorDraftStore {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
-
-    static func hasResumableDraft(slug: String) -> Bool { load(slug: slug) != nil }
 
     static func load(slug: String) -> (meta: FlyerEditorSessionDraftMeta, bootstrapB64: String)? {
         guard !slug.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }

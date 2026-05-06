@@ -2,23 +2,33 @@
 //  CustomMerchantProPaywallView.swift
 //  myfidpass
 //
-//  Paywall PRO maison : frise d’essai (timeline) + formules, prix via StoreKit / RevenueCat.
+//  Paywall PRO maison : frise d’essai (timeline) + souscription Stripe (Checkout hébergé).
 //
 
 import SwiftUI
 import UIKit
-import RevenueCat
 
 /// Accent violet (frise d’abonnement type timeline, cohérent avec la page de vente d’icône).
 private let paywallAccent = Color(red: 0.60, green: 0.36, blue: 0.99)
 
-private enum PaywallPlanKind {
-    case monthly
-    case annual
+/// Pastilles forfait (remise annuelle / prix mensuel) — verts doux, lisibles sur fond « verre ».
+private enum PaywallPlanBadgeStyle {
+    static let discountFill = Color(red: 0.86, green: 0.96, blue: 0.90)
+    static let discountStroke = Color(red: 0.58, green: 0.82, blue: 0.68).opacity(0.85)
+    static let discountText = Color(red: 0.08, green: 0.38, blue: 0.26)
+    static let monthlyGradTop = Color(red: 0.14, green: 0.58, blue: 0.42)
+    static let monthlyGradBottom = Color(red: 0.08, green: 0.42, blue: 0.52)
+}
+
+/// Espacement du rail vertical : hauteur du pointillé + marge inter-étape ≈ distance entre deux pastilles.
+private enum PaywallTimelineMetrics {
+    /// Longueur du segment sous un badge (remplace l’ancien 22 + le vide du padding inter-ligne).
+    static let connectorToNextBadge: CGFloat = 48
+    static let stepBottomPadding: CGFloat = 4
 }
 
 private enum PaywallHaptics {
-    /// Retour tactile marqué au changement mensuel / annuel.
+    /// Retour tactile au changement mensuel / annuel Stripe.
     static func planToggleChanged() {
         let g = UIImpactFeedbackGenerator(style: .heavy)
         g.prepare()
@@ -29,24 +39,20 @@ private enum PaywallHaptics {
 struct CustomMerchantProPaywallView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var authService: AuthService
-    @EnvironmentObject private var revenueCatSubscriptionState: RevenueCatSubscriptionState
     /// Paywall **bloquant** (après connexion) : pas de bouton fermer.
     var allowsCloseButton: Bool = true
     /// Si non nil : appelé au tap sur « X » ; sinon `dismiss()` seul (ex. feuille modale).
     var onCloseRequested: (() -> Void)? = nil
     /// Espace sous le bord supérieur du contenu (ex. sheet sans tiret : plus d’air avant le titre).
     var headerExtraTopPadding: CGFloat = 4
+    /// Délai avant d’afficher la croix (évite fermeture immédiate en feuille). Paywall **obligatoire** en essai : `0`.
+    var closeButtonRevealDelay: TimeInterval = 5
 
-    @State private var annualPackage: Package?
-    @State private var monthlyPackage: Package?
-    @State private var selectedPlan: PaywallPlanKind = .monthly
-    @State private var loadError: String?
-    @State private var isLoadingOfferings = true
+    /// `false` = cycle **annuel** Stripe (défaut), `true` = **mensuel**. S’applique au compte (1 commerce) ou au commerce actif (2+).
+    @State private var planSecondaryOptionEnabled: Bool = false
     @State private var isPurchasing = false
-    @State private var isRestoring = false
     @State private var purchaseError: String?
     @State private var legalSafariURL: URL?
-    @State private var animateTimelineBorder = false
     @State private var isCloseButtonRevealed = false
 
     private let bottomBarClearance: CGFloat = 116
@@ -56,32 +62,13 @@ struct CustomMerchantProPaywallView: View {
 
     var body: some View {
         ZStack {
-            if isLoadingOfferings {
-                ProgressView()
-                    .tint(.white)
-                    .scaleEffect(1.2)
-            } else if let loadError {
-                VStack(spacing: 16) {
-                    Text(loadError)
-                        .font(AppTheme.Fonts.subheadline())
-                        .foregroundStyle(.white.opacity(0.9))
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal)
-                    Button("Réessayer") {
-                        Task { await loadOfferings() }
-                    }
-                    .buttonStyle(.borderedProminent)
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 0) {
+                    headerBlock
+                    subscriptionValueTimeline
                 }
-            } else {
-                ScrollView(showsIndicators: false) {
-                    VStack(alignment: .leading, spacing: 0) {
-                        headerBlock
-                        subscriptionValueTimeline
-                        plansCard
-                    }
-                    .padding(.horizontal, 20)
-                    .padding(.bottom, bottomBarClearance)
-                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, bottomBarClearance)
             }
         }
         .background {
@@ -98,14 +85,6 @@ struct CustomMerchantProPaywallView: View {
             stickyBottomPurchaseBar
         }
         .preferredColorScheme(.dark)
-        .task {
-            await loadOfferings()
-            if !animateTimelineBorder {
-                withAnimation(.linear(duration: 4.8).repeatForever(autoreverses: false)) {
-                    animateTimelineBorder = true
-                }
-            }
-        }
         .alert("Achat", isPresented: Binding(
             get: { purchaseError != nil },
             set: { if !$0 { purchaseError = nil } }
@@ -128,9 +107,18 @@ struct CustomMerchantProPaywallView: View {
     // MARK: - Header
 
     private var headerBlock: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            if allowsCloseButton, isCloseButtonRevealed {
-                HStack {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 12) {
+                Text(MerchantSubscriptionPricingCopy.paywallTitleLine1)
+                    .font(.system(.largeTitle, design: .default, weight: .heavy))
+                    .foregroundStyle(.white)
+                    .multilineTextAlignment(.leading)
+                    .textCase(.uppercase)
+                    .tracking(0.4)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                if allowsCloseButton, isCloseButtonRevealed {
                     Button {
                         if let onCloseRequested {
                             onCloseRequested()
@@ -146,320 +134,430 @@ struct CustomMerchantProPaywallView: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Fermer")
-                    Spacer()
                 }
-                .transition(.opacity.combined(with: .move(edge: .top)))
             }
-
-            headline
+            if !MerchantSubscriptionPricingCopy.paywallUnderTitleLine.isEmpty {
+                Text(MerchantSubscriptionPricingCopy.paywallUnderTitleLine)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.82))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .padding(.top, headerExtraTopPadding)
-        .padding(.bottom, 28)
+        .padding(.bottom, 20)
         .animation(.easeOut(duration: 0.32), value: isCloseButtonRevealed)
-        .task(id: allowsCloseButton) {
+        .task(id: "\(allowsCloseButton)-\(closeButtonRevealDelay)") {
             guard allowsCloseButton else {
                 isCloseButtonRevealed = false
                 return
             }
             isCloseButtonRevealed = false
-            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            let nanos = UInt64(max(0, closeButtonRevealDelay) * 1_000_000_000)
+            if nanos > 0 {
+                try? await Task.sleep(nanoseconds: nanos)
+            }
             isCloseButtonRevealed = true
         }
     }
 
-    private var paywallTitleResolved: String {
-        if isLoadingOfferings, monthlyPackage == nil, annualPackage == nil {
-            return MerchantSubscriptionPricingCopy.paywallTitle
-        }
-        let line2 = MerchantIAPProductTimeline.paywallSecondHeadlineLine(
-            monthly: monthlyPackage?.storeProduct,
-            annual: annualPackage?.storeProduct
-        )
-        return MerchantSubscriptionPricingCopy.paywallTitleLine1 + "\n" + line2
-    }
-
-    private var headline: some View {
-        Text(paywallTitleResolved)
-            .foregroundStyle(.white)
-            .font(AppTheme.Fonts.title())
-            .fixedSize(horizontal: false, vertical: true)
-    }
-
-    // MARK: - Frise verticale (accès app → abonnement App Store)
+    // MARK: - Frise verticale (style timeline)
 
     private var subscriptionValueTimeline: some View {
         VStack(alignment: .leading, spacing: 0) {
-            paywallTimelineRow(
-                isLast: false,
-                title: {
-                    Text(timelineStep1Title)
-                        .font(timelineTitleFont)
-                        .foregroundStyle(.white)
-                        .contentTransition(.interpolate)
-                        .animation(planChangeAnimation, value: selectedPlan)
-                },
-                subtitle: timelineStep1Subtitle
+            // 1 — étape passée
+            paywallTimelineStep(
+                style: .completed,
+                title: MerchantSubscriptionPricingCopy.paywallTimelineCompletedTitle,
+                subtitle: MerchantSubscriptionPricingCopy.paywallTimelineCompletedDetail,
+                connectorBelow: PaywallTimelineMetrics.connectorToNextBadge
             )
-            paywallTimelineRow(
-                isLast: false,
-                title: { timelineStep2TitleText },
-                subtitle: timelineStep2Subtitle
-            )
-            paywallTimelineRow(
-                isLast: true,
+            // 2 — étape actuelle
+            paywallTimelineStep(
+                style: .current,
                 title: {
-                    Text("Toujours – Sans engagement, annulable à tout moment")
-                        .font(timelineTitleFont)
+                    Text(MerchantSubscriptionPricingCopy.paywallTimelineTodayStepTitle)
+                        .font(AppTheme.Fonts.headline())
                         .foregroundStyle(.white)
                 },
-                subtitle: nil
+                subtitle: paywallTimelineTodayStepSubtitleLine,
+                connectorBelow: PaywallTimelineMetrics.connectorToNextBadge
+            )
+            // 3 — bénéfice produit
+            paywallTimelineStep(
+                style: .upcoming(icon: "bell"),
+                title: MerchantSubscriptionPricingCopy.paywallTimelineReminderTitle,
+                subtitle: MerchantSubscriptionPricingCopy.paywallTimelineReminderDetail.isEmpty
+                    ? nil
+                    : MerchantSubscriptionPricingCopy.paywallTimelineReminderDetail,
+                connectorBelow: PaywallTimelineMetrics.connectorToNextBadge
+            )
+            // 4 — fin accès
+            paywallTimelineStep(
+                style: .end(icon: "heart"),
+                title: MerchantSubscriptionPricingCopy.paywallTimelineEndTitle,
+                subtitle: paywallTimelineEndSubtitle,
+                connectorBelow: 0,
+                isLast: true
             )
         }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 28)
-        .frame(minHeight: 312, alignment: .topLeading)
+        .padding(.horizontal, 22)
+        .padding(.vertical, 24)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .fill(Color.white.opacity(0.05))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .strokeBorder(
                     LinearGradient(
-                        colors: [paywallAccent.opacity(0.12), Color.white.opacity(0.03)],
+                        colors: [Color.white.opacity(0.18), Color.white.opacity(0.06)],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
-                    )
+                    ),
+                    lineWidth: 1
                 )
         )
-        .overlay(animatedTimelineBorder)
+        .padding(.top, 6)
         .padding(.bottom, 28)
     }
 
-    private var animatedTimelineBorder: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.10), lineWidth: 1)
+    private var paywallTimelineEndSubtitle: String {
+        paywallRecurringEngagementLine
+    }
 
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .strokeBorder(
-                    AngularGradient(
-                        gradient: Gradient(colors: [
-                            Color(red: 0.16, green: 0.17, blue: 0.20),
-                            Color(red: 0.45, green: 0.30, blue: 1.00),
-                            Color(red: 0.22, green: 0.58, blue: 1.00),
-                            Color(red: 0.20, green: 0.22, blue: 0.28),
-                            Color(red: 0.63, green: 0.36, blue: 1.00),
-                            Color(red: 0.30, green: 0.72, blue: 1.00),
-                            Color(red: 0.14, green: 0.16, blue: 0.22),
-                            Color(red: 0.45, green: 0.30, blue: 1.00)
-                        ]),
-                        center: .center,
-                        angle: .degrees(animateTimelineBorder ? 360 : 0)
-                    ),
-                    lineWidth: 2.2
-                )
-                .shadow(color: Color(red: 0.50, green: 0.38, blue: 1.00).opacity(0.55), radius: 7, y: 0)
-                .blendMode(.plusLighter)
+    /// Date indicative de fin du premier mois à 1 € (calendrier +1 mois à partir d’aujourd’hui, avant achat).
+    private var paywallTodayStepPromoEndDateDisplay: String {
+        let end = Calendar.current.date(byAdding: .month, value: 1, to: Date()) ?? Date()
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "fr_FR")
+        f.calendar = Calendar.current
+        // Jour + mois en toutes lettres, sans année (ex. « 2 juin »).
+        f.dateFormat = "d MMMM"
+        return f.string(from: end)
+    }
+
+    /// Sous-titre sous « Aujourd’hui : Payez 1 € » (1 phrase + date).
+    private var paywallTimelineTodayStepSubtitleLine: String {
+        "Débloquez l’accès complet jusqu’au \(paywallTodayStepPromoEndDateDisplay)."
+    }
+
+    /// « Puis … » — formulation générique ; les montants exacts sont sur Stripe Checkout.
+    private var paywallRecurringEngagementLine: String {
+        if isMultiCommerceAccount {
+            return planSecondaryOptionEnabled
+                ? "Puis abonnement mensuel par commerce (Stripe), annulable à tout moment."
+                : "Puis abonnement annuel par commerce (Stripe), annulable à tout moment."
         }
+        return planSecondaryOptionEnabled
+            ? "Puis tarif mensuel sur Stripe, annulable à tout moment."
+            : "Puis tarif annuel sur Stripe, annulable à tout moment."
     }
 
-    private var timelineTitleFont: Font { AppTheme.Fonts.headline() }
-    private var timelineSubtitleColor: Color { Color.white.opacity(0.52) }
-
-    private var timelineStep1Title: String {
-        MerchantSubscriptionPricingCopy.appAccessStepTitle
-    }
-
-    private var timelineStep1Subtitle: String {
-        MerchantSubscriptionPricingCopy.appAccessStepDetail
+    private enum PaywallTimelineNodeStyle {
+        case completed
+        case current
+        case upcoming(icon: String)
+        case end(icon: String)
     }
 
     @ViewBuilder
-    private var timelineStep2TitleText: some View {
-        Text(
-            MerchantIAPProductTimeline.paywallStep2Title(
-                monthly: monthlyPackage?.storeProduct,
-                annual: annualPackage?.storeProduct,
-                selectedIsAnnual: selectedPlan == .annual
-            )
-        )
-        .font(timelineTitleFont)
-        .foregroundStyle(.white)
-        .contentTransition(.interpolate)
-        .animation(planChangeAnimation, value: selectedPlan)
-    }
-
-    private var timelineStep2Subtitle: String? {
-        MerchantIAPProductTimeline.paywallStep2Detail(
-            monthly: monthlyPackage?.storeProduct,
-            annual: annualPackage?.storeProduct,
-            selectedIsAnnual: selectedPlan == .annual
-        )
-    }
-
-    private func referenceTwelveMonthRackString(monthly: Package, annual: Package) -> String? {
-        let mP = monthly.storeProduct
-        let aP = annual.storeProduct
-        let twelve = mP.price * Decimal(12)
-        guard twelve > aP.price, twelve > 0 else { return nil }
-        // Indicatif 12 mois au tarif mensuel (pas d’API `priceFormatStyle` sur l’abstraction RC).
-        return "12× \(mP.localizedPriceString) / an"
-    }
-
-    private struct PaywallDottedVLine: View {
-        var color: Color
-        var height: CGFloat
-        var body: some View {
-            Canvas { context, size in
-                var p = Path()
-                p.move(to: CGPoint(x: size.width * 0.5, y: 0))
-                p.addLine(to: CGPoint(x: size.width * 0.5, y: size.height))
-                context.stroke(
-                    p,
-                    with: .color(color),
-                    style: StrokeStyle(lineWidth: 1.5, lineCap: .round, dash: [3, 4])
-                )
+    private func paywallTimelineNode(style: PaywallTimelineNodeStyle) -> some View {
+        switch style {
+        case .completed:
+            ZStack {
+                Circle()
+                    .fill(paywallAccent)
+                    .frame(width: 28, height: 28)
+                Circle()
+                    .stroke(Color.white.opacity(0.26), lineWidth: 1)
+                    .frame(width: 28, height: 28)
+                Image(systemName: "checkmark")
+                    .font(.system(size: 12, weight: .bold, design: .default))
+                    .foregroundStyle(.white)
             }
-            .frame(width: 20, height: height)
+            .frame(width: 40, height: 40, alignment: .center)
+        case .current:
+            ZStack {
+                Circle()
+                    .stroke(paywallAccent.opacity(0.55), lineWidth: 2)
+                    .frame(width: 40, height: 40)
+                Circle()
+                    .fill(Color.white.opacity(0.06))
+                    .frame(width: 40, height: 40)
+                Circle()
+                    .fill(paywallAccent.opacity(0.22))
+                    .frame(width: 30, height: 30)
+                Image(systemName: "lock.open")
+                    .font(.system(size: 14, weight: .semibold, design: .default))
+                    .foregroundStyle(.white)
+            }
+            .frame(width: 40, height: 40, alignment: .center)
+        case .upcoming(let icon), .end(let icon):
+            ZStack {
+                Circle()
+                    .fill(Color.white.opacity(0.06))
+                    .frame(width: 40, height: 40)
+                Circle()
+                    .stroke(paywallAccent.opacity(0.28), lineWidth: 1.2)
+                    .frame(width: 40, height: 40)
+                Image(systemName: icon)
+                    .font(.system(size: 16, weight: .semibold, design: .default))
+                    .foregroundStyle(Color.white.opacity(0.94))
+            }
+            .frame(width: 40, height: 40, alignment: .center)
         }
     }
 
-    private func paywallTimelineRow<Title: View>(
-        isLast: Bool,
-        @ViewBuilder title: () -> Title,
-        subtitle: String?
-    ) -> some View {
-        HStack(alignment: .top, spacing: 14) {
-            VStack(spacing: 0) {
-                ZStack {
-                    Circle()
-                        .fill(paywallAccent)
-                        .frame(width: 24, height: 24)
-                Image(systemName: "checkmark")
-                        .font(.system(.caption2, design: .default, weight: .bold))
-                        .foregroundStyle(.white)
+    private struct PaywallTimelineVLine: View {
+        var height: CGFloat
+        var body: some View {
+            let h = max(height, 0)
+            ZStack {
+                // Tirets verticaux + dégradé vers transparent (reliant les pastilles de la frise).
+                Path { p in
+                    p.move(to: CGPoint(x: 5.5, y: 0))
+                    p.addLine(to: CGPoint(x: 5.5, y: h))
                 }
-                if !isLast {
-                    PaywallDottedVLine(color: paywallAccent.opacity(0.88), height: 42)
+                .stroke(
+                    LinearGradient(
+                        colors: [
+                            paywallAccent.opacity(0.6),
+                            paywallAccent.opacity(0.32),
+                            paywallAccent.opacity(0.1),
+                            Color.clear,
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    ),
+                    style: StrokeStyle(
+                        lineWidth: 1.7,
+                        lineCap: .round,
+                        lineJoin: .round,
+                        dash: [3.5, 6.5]
+                    )
+                )
+                // Léger liseré clair sur les tirets (lisible sur fond sombre / image).
+                Path { p in
+                    p.move(to: CGPoint(x: 5.5, y: 0))
+                    p.addLine(to: CGPoint(x: 5.5, y: h))
+                }
+                .stroke(
+                    LinearGradient(
+                        colors: [
+                            Color.white.opacity(0.14),
+                            Color.white.opacity(0.04),
+                            Color.clear,
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    ),
+                    style: StrokeStyle(
+                        lineWidth: 0.9,
+                        lineCap: .round,
+                        dash: [3.5, 6.5]
+                    )
+                )
+            }
+            .frame(width: 11, height: h, alignment: .top)
+            .frame(maxWidth: .infinity)
+        }
+    }
+
+    @ViewBuilder
+    private func paywallTimelineStep<Title: View>(
+        style: PaywallTimelineNodeStyle,
+        @ViewBuilder title: () -> Title,
+        subtitle: String? = nil,
+        connectorBelow: CGFloat,
+        isLast: Bool = false
+    ) -> some View {
+        HStack(alignment: .top, spacing: 0) {
+            VStack(spacing: 0) {
+                HStack {
+                    Spacer(minLength: 0)
+                    paywallTimelineNode(style: style)
+                    Spacer(minLength: 0)
+                }
+                if connectorBelow > 0 {
+                    PaywallTimelineVLine(height: connectorBelow)
                 }
             }
-            .frame(width: 24)
+            .frame(width: 40, alignment: .top)
 
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 0) {
                 title()
-                    .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
                 if let subtitle, !subtitle.isEmpty {
                     Text(subtitle)
                         .font(AppTheme.Fonts.subheadline())
-                        .foregroundStyle(timelineSubtitleColor)
-                        .multilineTextAlignment(.leading)
+                        .foregroundStyle(Color.white.opacity(0.52))
                         .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 4)
                         .contentTransition(.interpolate)
+                        .animation(.easeInOut(duration: 0.28), value: subtitle)
                 }
             }
-            .animation(planChangeAnimation, value: selectedPlan)
             .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.leading, 10)
         }
-        .padding(.bottom, isLast ? 0 : 28)
+        .padding(.bottom, isLast ? 0 : PaywallTimelineMetrics.stepBottomPadding)
     }
 
-    // MARK: - Formules (défaut mensuel + toggle annuel)
-
-    private var plansCard: some View {
-        VStack(alignment: .leading, spacing: 18) {
-        }
-        .padding(.horizontal, 2)
-        .padding(.vertical, 6)
-        .frame(maxWidth: .infinity, alignment: .center)
-        .padding(.bottom, 0)
+    private func paywallTimelineStep(
+        style: PaywallTimelineNodeStyle,
+        title: String,
+        subtitle: String? = nil,
+        connectorBelow: CGFloat,
+        isLast: Bool = false
+    ) -> some View {
+        paywallTimelineStep(style: style, title: {
+            switch style {
+            case .completed:
+                Text(title)
+                    .font(AppTheme.Fonts.headline())
+                    .foregroundStyle(paywallAccent)
+                    .strikethrough(true, color: paywallAccent.opacity(0.7))
+            case .current, .upcoming(_), .end(_):
+                Text(title)
+                    .font(AppTheme.Fonts.headline())
+                    .foregroundStyle(.white)
+            }
+        }, subtitle: subtitle, connectorBelow: connectorBelow, isLast: isLast)
     }
 
-    // MARK: - Toggle forfait annuel
-    private var annualPlanBinding: Binding<Bool> {
+    // MARK: - Stripe (forfaits)
+
+    /// Nombre de commerces à couvrir (1…5), aligné compte + API.
+    private func desiredCommerceSlotTarget() -> Int {
+        let n = max(authService.usedBusinesses, authService.businesses.count)
+        return min(5, max(1, n))
+    }
+
+    /// **≥ 2** → Stripe Checkout par commerce actif ; **1** → Checkout sur abonnement compte (`create-checkout-session`).
+    private var isMultiCommerceAccount: Bool {
+        desiredCommerceSlotTarget() >= 2
+    }
+
+    private var planChannelPrimaryLabel: String {
+        planSecondaryOptionEnabled ? "Mensuel · Stripe" : "Annuel · Stripe"
+    }
+
+    private var planSecondaryOptionBinding: Binding<Bool> {
         Binding(
-            get: { selectedPlan == .annual },
-            set: { isAnnual in
+            get: { planSecondaryOptionEnabled },
+            set: { isOn in
                 PaywallHaptics.planToggleChanged()
                 withAnimation(planChangeAnimation) {
-                    selectedPlan = isAnnual ? .annual : .monthly
+                    planSecondaryOptionEnabled = isOn
                 }
             }
         )
     }
 
-    @ViewBuilder
-    private var annualPlanTogglePillSavingsOrPrice: some View {
-        if selectedPlan == .annual {
-            Group {
-                if let p = annualPackage?.storeProduct {
-                    Text("\(p.localizedPriceString) / an")
-                } else {
-                    Text("— / an")
-                }
-            }
+    /// Pastille « -33 % » — vert menthe discret.
+    private var paywallAnnualDiscountMintBadge: some View {
+        Text("-33%")
             .font(AppTheme.Fonts.caption().weight(.semibold))
-            .foregroundStyle(.black)
+            .foregroundStyle(PaywallPlanBadgeStyle.discountText)
             .lineLimit(1)
-            .minimumScaleFactor(0.7)
-            .monospacedDigit()
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
             .background(
                 Capsule(style: .continuous)
-                    .fill(Color.black.opacity(0.08))
+                    .fill(PaywallPlanBadgeStyle.discountFill)
             )
-        } else if let s = savingsPercent, s > 0 {
-            Text("-\(s)%")
-                .font(.system(size: 17, weight: .bold, design: .rounded))
-                .foregroundStyle(.black)
-                .lineLimit(1)
-                .minimumScaleFactor(0.75)
-                .monospacedDigit()
-                .padding(.horizontal, 11)
-                .padding(.vertical, 6)
-                .background(
-                    Capsule(style: .continuous)
-                        .fill(Color.black.opacity(0.12))
-                )
+            .overlay(
+                Capsule(style: .continuous)
+                    .stroke(PaywallPlanBadgeStyle.discountStroke, lineWidth: 1)
+            )
+    }
+
+    /// Pastille prix mensuel — dégradé vert / bleu-vert, texte blanc.
+    private func paywallMonthlyPricePremiumBadge(priceLine: String) -> some View {
+        Text(priceLine)
+            .font(AppTheme.Fonts.caption().weight(.semibold))
+            .foregroundStyle(.white)
+            .lineLimit(1)
+            .minimumScaleFactor(0.75)
+            .monospacedDigit()
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [PaywallPlanBadgeStyle.monthlyGradTop, PaywallPlanBadgeStyle.monthlyGradBottom],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+            )
+            .shadow(color: PaywallPlanBadgeStyle.monthlyGradTop.opacity(0.35), radius: 4, y: 2)
+    }
+
+    private var multiCommerceMonthlyPriceLine: String {
+        "34,99 € / mois"
+    }
+
+    @ViewBuilder
+    private var planChannelTogglePillTrailingCapsule: some View {
+        if isMultiCommerceAccount {
+            if planSecondaryOptionEnabled {
+                paywallMonthlyPricePremiumBadge(priceLine: multiCommerceMonthlyPriceLine)
+            } else {
+                paywallAnnualDiscountMintBadge
+            }
+        } else if planSecondaryOptionEnabled {
+            paywallMonthlyPricePremiumBadge(priceLine: "À partir du tarif mensuel")
+        } else {
+            paywallAnnualDiscountMintBadge
         }
     }
 
-    private var annualPlanTogglePill: some View {
-        HStack(alignment: .center, spacing: 8) {
-            Text("Forfait annuel")
-                .font(AppTheme.Fonts.headline())
-                .foregroundStyle(.black)
-                .lineLimit(1)
-                .minimumScaleFactor(0.88)
-                .layoutPriority(1)
+    private var planChannelTogglePill: some View {
+        Button {
+            planSecondaryOptionBinding.wrappedValue.toggle()
+        } label: {
+            HStack(alignment: .center, spacing: 8) {
+                Text(planChannelPrimaryLabel)
+                    .font(AppTheme.Fonts.headline())
+                    .foregroundStyle(.black)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.88)
+                    .layoutPriority(1)
 
-            annualPlanTogglePillSavingsOrPrice
-                .contentTransition(.interpolate)
-                .animation(planChangeAnimation, value: selectedPlan)
+                planChannelTogglePillTrailingCapsule
+                    .contentTransition(.interpolate)
+                    .animation(planChangeAnimation, value: planSecondaryOptionEnabled)
+                    .animation(planChangeAnimation, value: isMultiCommerceAccount)
 
-            Spacer(minLength: 4)
+                Spacer(minLength: 4)
 
-            Toggle("", isOn: annualPlanBinding)
-                .labelsHidden()
-                .tint(.black)
-                .scaleEffect(0.92)
+                Toggle("", isOn: .constant(planSecondaryOptionEnabled))
+                    .labelsHidden()
+                    .tint(.black)
+                    .scaleEffect(0.92)
+                    .allowsHitTesting(false)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .frame(maxWidth: 320, alignment: .leading)
+            .modifier(PlanChannelPillGlassCompatModifier())
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .frame(maxWidth: 320, alignment: .leading)
-        .modifier(AnnualPlanPillGlassCompatModifier())
+        .buttonStyle(.plain)
         .accessibilityElement(children: .combine)
-    }
-
-    private var savingsPercent: Int? {
-        guard let annual = annualPackage?.storeProduct,
-              let monthly = monthlyPackage?.storeProduct
-        else { return nil }
-        return Self.percentSavingsAnnualVsMonthly(annualPrice: annual.price, monthlyPrice: monthly.price)
+        .accessibilityAddTraits(.isButton)
     }
 
     private var purchaseButton: some View {
         Button {
-            Task { await purchaseSelectedPlan() }
+            Task {
+                if isMultiCommerceAccount {
+                    await purchasePerBusinessStripeCheckout()
+                } else {
+                    await purchaseAccountStripeCheckout()
+                }
+            }
         } label: {
             ZStack {
                 RoundedRectangle(cornerRadius: 28, style: .continuous)
@@ -471,25 +569,20 @@ struct CustomMerchantProPaywallView: View {
                     Text(MerchantSubscriptionPricingCopy.purchaseCta)
                         .font(AppTheme.Fonts.headline())
                         .foregroundStyle(.white)
-                        .contentTransition(.interpolate)
-                        .animation(planChangeAnimation, value: selectedPlan)
                 }
             }
             .frame(maxWidth: .infinity)
             .frame(height: 56)
         }
         .buttonStyle(.plain)
-        .disabled(selectedPackage == nil || isPurchasing)
-        .opacity(selectedPackage == nil ? 0.55 : 1)
+        .disabled(isPurchasing)
     }
 
     private var stickyBottomPurchaseBar: some View {
         VStack(spacing: 0) {
-            if annualPackage != nil, monthlyPackage != nil {
-                annualPlanTogglePill
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.bottom, 40)
-            }
+            planChannelTogglePill
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.bottom, 40)
             purchaseButton
             legalRow
                 .padding(.top, 10)
@@ -499,155 +592,84 @@ struct CustomMerchantProPaywallView: View {
         .padding(.bottom, 8)
     }
 
-    private var selectedPackage: Package? {
-        switch selectedPlan {
-        case .monthly: monthlyPackage
-        case .annual: annualPackage
-        }
-    }
-
-    // MARK: - Pied de page légal / restaurer
+    // MARK: - Pied de page légal
 
     private var legalRow: some View {
-        HStack(alignment: .center, spacing: 12) {
-            HStack(spacing: 10) {
-                Button("Confidentialité") {
-                    legalSafariURL = LegalURLs.privacyPolicy
-                }
-                Text("|")
-                    .foregroundStyle(Color.black.opacity(0.35))
-                Button("Conditions") {
-                    legalSafariURL = LegalURLs.termsOfUse
-                }
+        HStack(spacing: 10) {
+            Button("Confidentialité") {
+                legalSafariURL = LegalURLs.privacyPolicy
             }
-            .font(AppTheme.Fonts.caption().weight(.medium))
-            .foregroundStyle(Color.black.opacity(0.72))
-
-            Spacer(minLength: 6)
-
-            Text("Annulable à tout moment")
-                .font(AppTheme.Fonts.caption().weight(.medium))
-                .foregroundStyle(Color.black.opacity(0.62))
-                .lineLimit(1)
+            Text("|")
+                .foregroundStyle(Color.black.opacity(0.35))
+            Button("Conditions") {
+                legalSafariURL = LegalURLs.termsOfUse
+            }
         }
-        .frame(maxWidth: .infinity)
+        .font(AppTheme.Fonts.caption().weight(.medium))
+        .foregroundStyle(Color.black.opacity(0.72))
+        .frame(maxWidth: .infinity, alignment: .center)
         .tint(Color.black.opacity(0.78))
         .padding(.horizontal, 2)
         .padding(.bottom, 6)
     }
 
-    // MARK: - RevenueCat
+    // MARK: - Stripe Checkout
 
     @MainActor
-    private func loadOfferings() async {
-        isLoadingOfferings = true
-        loadError = nil
-        defer { isLoadingOfferings = false }
-
-        guard Purchases.isConfigured else {
-            loadError = "Les abonnements App Store ne sont pas encore disponibles sur cet appareil. Utilise l’abonnement via site web en attendant."
-            annualPackage = nil
-            monthlyPackage = nil
-            return
-        }
-
-        do {
-            let offerings = try await Purchases.shared.offerings()
-            let current = offerings.current
-            let annual = current?.annual
-                ?? current?.package(identifier: "$rc_annual")
-                ?? current?.availablePackages.first(where: { $0.packageType == .annual })
-
-            let monthly = current?.monthly
-                ?? current?.package(identifier: "$rc_monthly")
-                ?? current?.availablePackages.first(where: { $0.packageType == .monthly })
-
-            if annual == nil && monthly == nil {
-                loadError = "Aucun abonnement trouvé. Ajoute les packages mensuel et annuel à l’offre « current » dans RevenueCat, puis synchronise avec App Store Connect."
-                annualPackage = nil
-                monthlyPackage = nil
-                return
-            }
-
-            annualPackage = annual
-            monthlyPackage = monthly
-
-            if annual != nil, monthly != nil {
-                selectedPlan = .monthly
-            } else if annual != nil {
-                selectedPlan = .annual
-            } else {
-                selectedPlan = .monthly
-            }
-        } catch {
-            loadError = error.localizedDescription
-            annualPackage = nil
-            monthlyPackage = nil
-        }
-    }
-
-    @MainActor
-    private func purchaseSelectedPlan() async {
-        guard let pkg = selectedPackage else { return }
-        guard Purchases.isConfigured else {
-            purchaseError = "Les achats App Store sont temporairement indisponibles."
-            return
-        }
+    private func purchaseAccountStripeCheckout() async {
+        let billingPlan = planSecondaryOptionEnabled ? "monthly" : "annual"
         isPurchasing = true
         defer { isPurchasing = false }
         purchaseError = nil
-
         do {
-            let result = try await Purchases.shared.purchase(package: pkg)
-            if result.userCancelled { return }
-            await revenueCatSubscriptionState.refreshCustomerInfo()
-            await self.authService.syncRevenueCatSubscriptionWithServerAfterPurchase()
+            let response: CheckoutSessionResponse = try await APIClient.shared.request(
+                .paymentCheckout(plan: billingPlan),
+                responseType: CheckoutSessionResponse.self
+            )
+            let urlString = response.url?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard let url = URL(string: urlString), !urlString.isEmpty else {
+                purchaseError = "Impossible d’ouvrir la page de paiement Stripe."
+                return
+            }
+            _ = await UIApplication.shared.open(url)
         } catch {
-            purchaseError = error.localizedDescription
+            purchaseError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
     }
 
     @MainActor
-    private func restorePurchases() async {
-        guard Purchases.isConfigured else {
-            purchaseError = "Les achats App Store sont temporairement indisponibles."
+    private func purchasePerBusinessStripeCheckout() async {
+        let slug = (AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                    ? AuthStorage.currentBusinessSlug
+                    : authService.businesses.first?.slug)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !slug.isEmpty else {
+            purchaseError = "Aucun commerce actif. Sélectionnez un commerce puis réessayez."
             return
         }
-        isRestoring = true
-        defer { isRestoring = false }
+        let interval = planSecondaryOptionEnabled ? "month" : "year"
+        isPurchasing = true
+        defer { isPurchasing = false }
+        purchaseError = nil
         do {
-            _ = try await Purchases.shared.restorePurchases()
-            await revenueCatSubscriptionState.refreshCustomerInfo()
-            await self.authService.syncRevenueCatSubscriptionWithServerAfterPurchase()
+            let response: CheckoutSessionResponse = try await APIClient.shared.request(
+                .paymentBusinessCheckoutSession(businessSlug: slug, interval: interval),
+                responseType: CheckoutSessionResponse.self
+            )
+            let urlString = response.url?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard let url = URL(string: urlString), !urlString.isEmpty else {
+                purchaseError = "Impossible d’ouvrir la page de paiement pour ce commerce."
+                return
+            }
+            _ = await UIApplication.shared.open(url)
         } catch {
-            purchaseError = error.localizedDescription
+            purchaseError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
-    }
-
-    // MARK: - Formatage
-
-    private static func percentSavingsAnnualVsMonthly(annualPrice: Decimal, monthlyPrice: Decimal) -> Int? {
-        let twelve: Decimal = 12
-        let yearIfMonthly = monthlyPrice * twelve
-        guard yearIfMonthly > 0, yearIfMonthly > annualPrice else { return nil }
-        let ratio = (yearIfMonthly - annualPrice) / yearIfMonthly
-        let n = NSDecimalNumber(decimal: ratio)
-        return Int((n.doubleValue * 100).rounded())
-    }
-
-    private func frenchPeriodPhrase(_ period: SubscriptionPeriod) -> String {
-        MerchantIAPProductTimeline.frenchPeriodPhrase(period)
-    }
-
-    private func frenchAfterTrialPhrase(_ period: SubscriptionPeriod) -> String {
-        frenchPeriodPhrase(period)
     }
 }
 
-/// Forfait annuel : verre **décoratif** (pas `buttonStyle(.glass)` = pas d’effet « bouton système » cliquable).
-/// Variante `.clear` : le plus transparent ; les couleurs du fond passent derrière (doc Apple « Applying Liquid Glass »).
-/// Rayon très grand = capsule (arrondi max sur la pastille).
-private struct AnnualPlanPillGlassCompatModifier: ViewModifier {
+/// Pastille bascule forfait : verre **décoratif** (pas `buttonStyle(.glass)` sur le `Toggle` système).
+private struct PlanChannelPillGlassCompatModifier: ViewModifier {
     private static let pillCornerRadius: CGFloat = 999
 
     @ViewBuilder
@@ -678,5 +700,4 @@ private struct AnnualPlanPillGlassCompatModifier: ViewModifier {
 #Preview {
     CustomMerchantProPaywallView()
         .environmentObject(AuthService())
-        .environmentObject(RevenueCatSubscriptionState())
 }

@@ -18,8 +18,12 @@ enum APIError: LocalizedError {
     case noAccountInLogiciel
     /// HTTP 403 avec `code: subscription_required` — abonnement Stripe inactif côté serveur.
     case subscriptionRequired
+    /// HTTP 403 avec `code: business_quota_reached` — quota multi-commerce atteint.
+    case businessQuotaReached
     /// HTTP 400 avec `code: missing_establishment` — inscription sans lieu / nom d’établissement (UserDefaults onboarding).
     case missingEstablishment(String)
+    /// HTTP 409 avec `code: business_place_already_linked` — ce commerce est déjà rattaché à un autre compte.
+    case businessPlaceAlreadyLinked(String)
 
     var errorDescription: String? {
         switch self {
@@ -34,9 +38,13 @@ enum APIError: LocalizedError {
         case .notFound: return "Ressource introuvable."
         case .subscriptionRequired:
             return "Cette action nécessite un abonnement actif (ou une période d’essai gratuite encore en cours). Les nouveaux comptes ont 24 h d’accès complet ; après cette période, souscrivez via Stripe depuis l’écran d’abonnement."
+        case .businessQuotaReached:
+            return "Vous avez atteint la limite de commerces autorisés par votre formule actuelle. Passez à l’offre supérieure pour ajouter un commerce."
         case .noAccountInLogiciel:
             return "Aucun compte associé. Créez un compte via l’onglet « Inscription » dans l’app."
         case .missingEstablishment(let message):
+            return message
+        case .businessPlaceAlreadyLinked(let message):
             return message
         }
     }
@@ -61,7 +69,7 @@ enum APIError: LocalizedError {
                 break
             }
         }
-        return "Réseau : \(raw)"
+        return "Une erreur réseau est survenue. Vérifiez la connexion puis réessayez."
     }
 
     /// Annulation iOS (nouvelle requête, fermeture d’écran) — ne pas traiter comme une vraie erreur métier.

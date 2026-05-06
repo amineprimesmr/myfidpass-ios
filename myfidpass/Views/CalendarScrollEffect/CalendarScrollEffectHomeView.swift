@@ -123,9 +123,6 @@ struct CalendarScrollEffectHomeView: View {
         .onChange(of: dataService.updateTrigger) { _, _ in
             reloadActivity()
         }
-        .onReceive(NotificationCenter.default.publisher(for: .myfidpassRemoteSyncDidMerge)) { _ in
-            reloadActivity()
-        }
         .refreshable {
             await syncService.syncAfterServerMutation()
             reloadActivity()
@@ -228,6 +225,15 @@ struct CalendarScrollEffectHomeView: View {
         }
         .padding([.horizontal, .top], 15)
         .padding(.bottom, 10)
+    }
+}
+
+// MARK: - Palette (calendrier)
+
+extension Color {
+    /// Même valeur sRGB que l’asset MainBackground du module CalendarScrollEffect (0.133³).
+    static var calendarScrollMainBackground: Color {
+        Color(red: 0.133, green: 0.133, blue: 0.133)
     }
 }
 

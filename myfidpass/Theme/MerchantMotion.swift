@@ -7,10 +7,34 @@
 
 import SwiftUI
 
+// MARK: - Aperçu carte accueil (pression tactile)
+
+/// Contexte tactile optionnel pour **`MerchantPressableButtonStyle`** (zoom immédiat sans bloquer un scroll voisin).
+/// Sur l’accueil commerçant : `.inactive`. Conservé pour d’éventuels écrans avec paging horizontal à côté d’un bouton.
+struct HomeCarouselPressContext: Equatable {
+    /// Petit mouvement encore traité comme « doigt à l’écran » pour l’effet visuel press.
+    var fingerDownForVisual: Bool = false
+    /// Scroll / swipe horizontal prioritaire : désactive l’effet press sur la carte.
+    var horizontalPageSwipe: Bool = false
+
+    static let inactive = HomeCarouselPressContext()
+}
+
+private struct HomeCarouselPressKey: EnvironmentKey {
+    static let defaultValue = HomeCarouselPressContext.inactive
+}
+
+extension EnvironmentValues {
+    var homeCarouselPress: HomeCarouselPressContext {
+        get { self[HomeCarouselPressKey.self] }
+        set { self[HomeCarouselPressKey.self] = newValue }
+    }
+}
+
 /// Animations partagées — ressorts légèrement amortis pour éviter l’effet « ressort trop nerveux ».
 enum MerchantMotion {
     /// Changement d’onglet (TabView) ou sélection programmatique.
-    static let tabSwitch: Animation = .spring(response: 0.38, dampingFraction: 0.86, blendDuration: 0)
+    static let tabSwitch: Animation = .easeInOut(duration: 0.18)
 
     /// Push / pop dans un `NavigationStack` (profondeur de pile).
     static let navigationPath: Animation = .spring(response: 0.42, dampingFraction: 0.88, blendDuration: 0)
@@ -22,17 +46,49 @@ enum MerchantMotion {
     static let buttonPress: Animation = .spring(response: 0.3, dampingFraction: 0.78, blendDuration: 0)
 }
 
-/// Style de bouton « press » pour cartes et CTA : léger zoom + assombrissement, sans lag.
+/// Style de bouton « press » pour cartes et CTA : léger zoom + assombrissement.
+///
+/// - Par défaut : suit `configuration.isPressed`.
+/// - `recognizeTouchImmediately` : combine `isPressed` avec `Environment.homeCarouselPress` (souvent `.inactive`).
 struct MerchantPressableButtonStyle: ButtonStyle {
     var scalePressed: CGFloat = 0.97
     var opacityPressed: Double = 0.9
+    var recognizeTouchImmediately: Bool = false
 
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .scaleEffect(configuration.isPressed ? scalePressed : 1)
-            .brightness(configuration.isPressed ? -0.035 : 0)
-            .opacity(configuration.isPressed ? opacityPressed : 1)
-            .animation(MerchantMotion.buttonPress, value: configuration.isPressed)
+        PressBody(
+            configuration: configuration,
+            scalePressed: scalePressed,
+            opacityPressed: opacityPressed,
+            recognizeTouchImmediately: recognizeTouchImmediately
+        )
+    }
+
+    private struct PressBody: View {
+        let configuration: Configuration
+        let scalePressed: CGFloat
+        let opacityPressed: Double
+        let recognizeTouchImmediately: Bool
+
+        @Environment(\.homeCarouselPress) private var homeCarouselPress
+
+        private var pressedEffective: Bool {
+            if !recognizeTouchImmediately {
+                return configuration.isPressed
+            }
+            if homeCarouselPress.horizontalPageSwipe {
+                return false
+            }
+            return configuration.isPressed || homeCarouselPress.fingerDownForVisual
+        }
+
+        var body: some View {
+            configuration.label
+                .scaleEffect(pressedEffective ? scalePressed : 1)
+                .brightness(pressedEffective ? -0.035 : 0)
+                .opacity(pressedEffective ? opacityPressed : 1)
+                .animation(MerchantMotion.buttonPress, value: pressedEffective)
+        }
     }
 }
 

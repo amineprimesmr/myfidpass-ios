@@ -93,7 +93,7 @@ struct PerimeterMapView: View {
                         accessibilityLabel: "Fermer la carte",
                         action: onDismissEmbedded
                     )
-                    .padding(.top, 54)
+                    .padding(.top, DashboardHomeMinimalTopBarLayout.scrollContentTopInset)
                     .padding(.leading, 12)
                 }
             }

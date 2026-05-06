@@ -31,8 +31,8 @@ object IosParityChecklist {
         "GoogleReviewsCommerceDashboardView", "CommerceFlyerSavedBlockView",
     )
     val settings = listOf(
-        "SettingsView", "SettingsNotificationsHubView", "SettingsScanSecurityView",
-        "SettingsLocationDetailView", "MerchantAccountingPackView", "MerchantTraceabilityExportView",
+        "SettingsView", "AccountSettingsDetailView", "SettingsScanSecurityView",
+        "MerchantAccountingPackView", "MerchantTraceabilityExportView",
     )
     val admin = listOf("PlatformAdminRootView")
     val misc = listOf(

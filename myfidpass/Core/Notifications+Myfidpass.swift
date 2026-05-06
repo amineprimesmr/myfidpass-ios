@@ -18,9 +18,7 @@ extension Notification.Name {
     static let myfidpassMerchantSubscriptionFromRefresh = Notification.Name("myfidpass.merchantSubscriptionFromRefresh")
     /// Accusé campagne : basculer sur l’onglet Campagnes.
     static let myfidpassOpenCampaignsTab = Notification.Name("myfidpass.openCampaignsTab")
-    /// Sync API terminée (merge Core Data) : rafraîchir les listes qui dépendent de `DataService.updateTrigger`.
-    static let myfidpassRemoteSyncDidMerge = Notification.Name("myfidpass.remoteSyncDidMerge")
-    /// Dernière synchro en erreur (hors annulation) : `userInfo[MyfidpassSyncUserInfoKey.message]` = texte localisé.
+    /// Dernière synchro en erreur (hors annulation) : `userInfo["message"]` = texte localisé.
     static let myfidpassRemoteSyncDidFail = Notification.Name("myfidpass.remoteSyncDidFail")
     /// Connexion OAuth réseau (Meta / YouTube / TikTok) réussie : le serveur a mis à jour les liens missions — recharger le profil établissement.
     static let myfidpassEngagementOAuthDidComplete = Notification.Name("myfidpass.engagementOAuthDidComplete")
@@ -34,25 +32,28 @@ extension Notification.Name {
     static let myfidpassOpenProgramMyCard = Notification.Name("myfidpass.openProgramMyCard")
     /// Ouvre la feuille d’abonnement Stripe (pastille essai au-dessus du tab bar).
     static let myfidpassOpenMerchantSubscriptionSheet = Notification.Name("myfidpass.openMerchantSubscriptionSheet")
-    /// Rétrocompat : ancienne pastille « essai → Safari Stripe » — aujourd’hui ouvre le paywall natif (RevenueCat).
+    /// Rétrocompat : ancienne pastille « essai → Safari Stripe » — ouvre le paywall (Stripe Checkout).
     static let myfidpassOpenMerchantTrialStripePaymentLink = Notification.Name("myfidpass.openMerchantTrialStripePaymentLink")
+    /// Ouvre directement la feuille Réglages globale (sans passer par l’onglet Commerce).
+    static let myfidpassOpenGlobalSettingsSheet = Notification.Name("myfidpass.openGlobalSettingsSheet")
+    /// Bascule l’onglet principal sur **Accueil** (commerçant) — utilisé avant d’ouvrir le hub flyer depuis Réglages.
+    static let myfidpassSelectMerchantHomeTab = Notification.Name("myfidpass.selectMerchantHomeTab")
+    /// Ouvre l’éditeur / hub « Flyer & programme » (plein écran), écouté par `DashboardView`.
+    static let myfidpassOpenMerchantFlyerHub = Notification.Name("myfidpass.openMerchantFlyerHub")
     /// Ferme les réglages (sheet) et pousse l’écran Statistiques sur la navigation Commerce (pas une feuille).
     static let myfidpassOpenMerchantStatistics = Notification.Name("myfidpass.openMerchantStatistics")
+    /// Onglet Commerce (statistiques) sélectionné dans le `TabView` — même idée que le rappel icône sur Campagnes.
+    static let myfidpassCommerceStatsTabDidBecomeSelected = Notification.Name("myfidpass.commerceStatsTabDidBecomeSelected")
     /// Paiement abonnement finalisé dans la WebView (`myfidpass://subscription-paid`) : fermer la feuille et resynchroniser.
     static let myfidpassSubscriptionPaymentCompleted = Notification.Name("myfidpass.subscriptionPaymentCompleted")
-    /// Ouverture du hub Google Business (push nouvel avis).
-    static let myfidpassOpenGoogleBusinessHub = Notification.Name("myfidpass.openGoogleBusinessHub")
     /// Demande d'ouverture de la feuille de configuration Google (depuis le hub « non connecté »).
     static let myfidpassOpenGoogleBusinessSetupSheet = Notification.Name("myfidpass.openGoogleBusinessSetupSheet")
     /// Adopter le matchedPlaceId renvoyé par l'OAuth comme placeId configuré du commerce (userInfo["placeId"]: String).
     static let myfidpassAdoptMatchedGooglePlaceId = Notification.Name("myfidpass.adoptMatchedGooglePlaceId")
     /// Relance le tutoriel depuis zéro (debug / tests uniquement).
     static let myfidpassResetTutorial = Notification.Name("myfidpass.resetTutorial")
-}
-
-/// Clés `userInfo` pour les notifications sync.
-enum MyfidpassSyncUserInfoKey {
-    static let message = "message"
+    /// Ouvre la feuille « Ajouter un commerce » (recherche Google Places → création).
+    static let myfidpassOpenAddCommerceSheet = Notification.Name("myfidpass.openAddCommerceSheet")
 }
 
 extension NotificationCenter {

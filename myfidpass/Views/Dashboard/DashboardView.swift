@@ -2,8 +2,8 @@
 //  DashboardView.swift
 //  myfidpass
 //
-//  Accueil commerçant : en-tête glass (profil + carte), historique ;
-//  scan QR et notifications membres en bas.
+//  Accueil commerçant : carte fidélité, historique des transactions ;
+//  scan QR et accès programme (flyer) via Réglages.
 //
 
 import SwiftUI
@@ -31,12 +31,202 @@ private enum HomeMerchantStatsZoom {
 
 private enum DashboardHomeChrome {
     /// Barre profil + scanner au-dessus de la carte : désactivée (profil = onglet du bas, scanner = bouton « Dernières transactions »).
-    static let showMinimalTopBar = false
-    /// Ancienne barre du bas (notification membres, menu catégories) + `CustomMenuView` autour du `NavigationStack`.
-    static let showLegacyBottomNotificationChrome = false
+    static let showMinimalTopBar = true
+}
+
+private enum DashboardTopRoundedPanel {
+    static let shape = UnevenRoundedRectangle(
+        topLeadingRadius: 24,
+        bottomLeadingRadius: 0,
+        bottomTrailingRadius: 0,
+        topTrailingRadius: 24,
+        style: .continuous
+    )
+}
+
+/// Placeholder « carte vide » (forme Wallet horizontale) — évite tout raster confondu avec le flyer.
+private struct DashboardHomeSetupEmptyCardPlaceholder: View {
+    var body: some View {
+        RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .fill(
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.97, green: 0.98, blue: 1.0),
+                        Color(red: 0.90, green: 0.92, blue: 0.96),
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+            .aspectRatio(1.78, contentMode: .fit)
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(
+                        Color(red: 0.72, green: 0.76, blue: 0.86).opacity(0.55),
+                        style: StrokeStyle(lineWidth: 1, dash: [5, 4])
+                    )
+            )
+            .overlay {
+                Image(systemName: "creditcard.fill")
+                    .font(.system(size: 26, weight: .medium))
+                    .foregroundStyle(Color(red: 0.52, green: 0.58, blue: 0.72).opacity(0.5))
+            }
+    }
+}
+
+private struct DashboardSetupHeroCarousel: View {
+    /// Formats cibles : carte fidélité = format **ISO ID-1** (85,6 × 53,98 mm) ; flyer = **9:16** portrait (aperçu téléphone / affiche).
+    enum HeroVisualKind: Equatable {
+        case loyaltyCardIsoId1
+        case flyerPortrait9x16
+    }
+
+    let kind: HeroVisualKind
+    let imageNames: [String]
+    var fallbackImage: UIImage? = nil
+
+    /// Cadre contenu (avant rotation / éventail). Les assets `cartefid*` sont des visuels **portrait 9:16** pour le carrousel « Créez votre carte ».
+    private var heroSlotSize: CGSize {
+        switch kind {
+        case .loyaltyCardIsoId1:
+            let w: CGFloat = 86
+            let h = w * (16.0 / 9.0)
+            return CGSize(width: w, height: h)
+        case .flyerPortrait9x16:
+            let h: CGFloat = 140
+            let w = h * (9.0 / 16.0)
+            return CGSize(width: w, height: h)
+        }
+    }
+
+    /// Zone d’empilement : un peu plus large que la carte la plus large pour l’effet en éventail.
+    private var stackViewport: CGSize {
+        let slot = heroSlotSize
+        switch kind {
+        case .loyaltyCardIsoId1:
+            return CGSize(width: max(148, slot.width + 28), height: max(168, slot.height + 24))
+        case .flyerPortrait9x16:
+            return CGSize(width: max(118, slot.width + 36), height: max(158, slot.height + 22))
+        }
+    }
+
+    var body: some View {
+        let slot = heroSlotSize
+        let viewport = stackViewport
+        TimelineView(.periodic(from: .now, by: 2.7)) { timeline in
+            let count = max(imageNames.count, 1)
+            let tick = Int(timeline.date.timeIntervalSinceReferenceDate / 2.7)
+            let active = ((tick % count) + count) % count
+
+            ZStack {
+                ForEach(imageNames.indices, id: \.self) { index in
+                    let rank = ((index - active) % count + count) % count
+                    carouselCard(for: imageNames[index])
+                        .frame(width: slot.width, height: slot.height)
+                        .clipShape(RoundedRectangle(cornerRadius: heroClipCornerRadius, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: heroClipCornerRadius, style: .continuous)
+                                .stroke(Color.white.opacity(0.24), lineWidth: 1)
+                        )
+                        .shadow(color: .black.opacity(0.38), radius: 14, y: 8)
+                        .scaleEffect(rank == 0 ? 1.0 : (rank == 1 ? 0.94 : 0.89))
+                        .rotationEffect(.degrees(fanRotationDegrees(rank: rank)))
+                        .offset(x: fanOffsetX(rank: rank), y: fanOffsetY(rank: rank))
+                        .opacity(rank == 0 ? 1.0 : (rank == 1 ? 0.88 : 0.72))
+                        .zIndex(Double(100 - rank))
+                        .animation(.spring(response: 0.44, dampingFraction: 0.9), value: active)
+                }
+            }
+            .frame(width: viewport.width, height: viewport.height, alignment: .center)
+        }
+    }
+
+    /// Flyer : coins plus francs ; carte : léger arrondi (visuels portrait).
+    private var heroClipCornerRadius: CGFloat {
+        switch kind {
+        case .flyerPortrait9x16: return 10
+        case .loyaltyCardIsoId1: return 14
+        }
+    }
+
+    private func fanRotationDegrees(rank: Int) -> Double {
+        switch kind {
+        case .loyaltyCardIsoId1:
+            return rank == 0 ? -4 : (rank == 1 ? 6 : 10)
+        case .flyerPortrait9x16:
+            return rank == 0 ? -3 : (rank == 1 ? 5 : 8)
+        }
+    }
+
+    private func fanOffsetX(rank: Int) -> CGFloat {
+        switch kind {
+        case .loyaltyCardIsoId1:
+            return rank == 0 ? 0 : (rank == 1 ? 20 : 36)
+        case .flyerPortrait9x16:
+            return rank == 0 ? 0 : (rank == 1 ? 10 : 20)
+        }
+    }
+
+    private func fanOffsetY(rank: Int) -> CGFloat {
+        switch kind {
+        case .loyaltyCardIsoId1:
+            return rank == 0 ? 0 : (rank == 1 ? -4 : -7)
+        case .flyerPortrait9x16:
+            return rank == 0 ? 0 : (rank == 1 ? -3 : -5)
+        }
+    }
+
+    @ViewBuilder
+    private func carouselCard(for name: String) -> some View {
+        if let ui = UIImage(named: name) {
+            Image(uiImage: ui)
+                .resizable()
+                .aspectRatio(contentMode: kind == .loyaltyCardIsoId1 ? .fit : .fill)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(
+                    kind == .loyaltyCardIsoId1
+                        ? Color.black.opacity(0.2)
+                        : Color.clear
+                )
+        } else if let fallbackImage {
+            Image(uiImage: fallbackImage)
+                .resizable()
+                .aspectRatio(contentMode: kind == .loyaltyCardIsoId1 ? .fit : .fill)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            LinearGradient(
+                colors: [
+                    Color(red: 0.17, green: 0.24, blue: 0.35),
+                    Color(red: 0.09, green: 0.13, blue: 0.2),
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        }
+    }
+}
+
+private struct HomeSetupGlassButtonModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content
+                /// `.large` gonflait trop ces CTA dans « Finalisez votre lancement » ; `regular` garde le verre sans masse excessive.
+                .controlSize(.regular)
+                .buttonBorderShape(.capsule)
+                .buttonStyle(.glass)
+        } else {
+            content
+                .background(.ultraThinMaterial, in: Capsule(style: .continuous))
+                .overlay(
+                    Capsule(style: .continuous)
+                        .stroke(Color.white.opacity(0.28), lineWidth: 1)
+                )
+        }
+    }
 }
 
 struct DashboardView: View {
+    private let homeTopPreviewCardHeight: CGFloat = 152
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.colorScheme) private var colorScheme
     @EnvironmentObject private var syncService: SyncService
@@ -50,18 +240,13 @@ struct DashboardView: View {
     @State private var showToast: Bool = false
     @State private var successToast: Toast = .example1
     @State private var scanError: String?
-    @FocusState private var isNotificationFieldFocused: Bool
-    @State private var notificationMessage: String = ""
-    @State private var isSendingNotification = false
-    @State private var notifyResultMessage: String?
-    @State private var menuConfig: MenuConfig = MenuConfig(symbolImage: "person.2.fill")
-    @State private var selectedCategoryIdsForNotify: [String] = []
-    @State private var showCategoriesManagement = false
     @State private var navigationPath = NavigationPath()
     @Namespace private var homeMyCardZoomNamespace
     @Namespace private var homeMerchantStatsZoomNamespace
     @State private var showHomeMerchantStatistics = false
     @State private var showMyCardFullScreen = false
+    @State private var showHomeFlyerHubFullScreen = false
+    @State private var homeFlyerHubOpenedForEdit = false
     @State private var contentAppeared = false
     @State private var scanResultSheet: ScanResultSheetData?
     @State private var scanStampSheet: ScanStampSheetData?
@@ -70,6 +255,21 @@ struct DashboardView: View {
     @StateObject private var receiptCoordinator = ReceiptValidationCoordinator()
     /// Incrémenté quand `CardPreviewDisplaySnapshotStore` change pour forcer le re-rendu de l’aperçu carte (autre `DataService` que Ma carte).
     @State private var cardPreviewDisplayRefresh = 0
+    @State private var homeFlyerAvailable = false
+    @State private var homeFlyerBootstrapB64: String?
+    @State private var homeFlyerShareURL: String = ""
+    @State private var homeFlyerCustomBgDataURL: String?
+    @State private var homeFlyerUnderlayUIImage: UIImage?
+    @State private var homeFlyerCompositeSnapshot: UIImage?
+    /// Miniature « Ma carte » pour la tuile « Finalisez votre lancement » (remplace le placeholder une fois la carte prête).
+    @State private var homeCardSetupThumbnail: UIImage?
+    @State private var cachedFlyerUnderlayState: FlyerStateDTO = FlyerStateDTO.default
+    @State private var homeHasNotificationIconConfigured = false
+    @State private var homeNotificationIconURL: String?
+    @State private var homeNotificationIconLastCheckAt: Date?
+    @State private var homeNotificationIconRefreshInFlight = false
+    @State private var homeNotificationIconLastSlug: String?
+    @State private var homeSetupStateResolved = false
     /// Une fois `true` après avoir ouvert « Ma carte » depuis l’aperçu accueil — arrête pulse sur l’aperçu.
     @AppStorage("myfidpass.merchantHomeCardOpenedFromHome.v1") private var merchantHomeCardOpenedFromHome = false
     /// Aligné sur `ContentView` : pas d’indicateur sync en haut pendant le tutoriel (snapshots / overlay).
@@ -89,6 +289,57 @@ struct DashboardView: View {
         Array(activityFeed.prefix(8))
     }
 
+    private var currentBusinessSlug: String? {
+        let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return slug.isEmpty ? nil : slug
+    }
+
+    private var dashboardTopBarTitle: String {
+        let businessName = dataService.currentBusiness()?.name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return businessName.isEmpty ? "Accueil" : businessName
+    }
+
+    private var homeCardConfigured: Bool {
+        guard let slug = currentBusinessSlug,
+              let snap = CardPreviewDisplaySnapshotStore.load(slug: slug) else { return false }
+        let missing = MyCardCompletionRequirements.missingRequirements(
+            primaryHex: snap.primaryHex,
+            accentHex: snap.accentHex,
+            labelHex: snap.labelHex,
+            stripDisplayMode: snap.stripDisplayMode,
+            stripText: snap.stripText,
+            displayName: snap.displayName,
+            logoURL: snap.logoURL,
+            programType: snap.programType,
+            cardBackgroundImagePath: snap.hasLocalCardBackground == true ? CardLogoStorage.relativeCardBackgroundPath : nil,
+            cardBackgroundRemoteURL: snap.cardBackgroundRemoteURL,
+            cardBackgroundWasRemoved: false,
+            stampEmoji: snap.stampEmoji,
+            stampIconPendingBase64: snap.stampIconPendingBase64,
+            stampIconWasRemoved: snap.stampIconWasRemoved ?? false,
+            serverHasStampIcon: snap.hasServerStampIcon ?? false,
+            tierPoints: snap.tierPoints ?? [],
+            tierLabels: snap.tierLabels ?? [],
+            requiredStamps: snap.requiredStamps,
+            stampRewardLabel: snap.stampRewardLabel,
+            stampMidRewardLabel: snap.stampMidRewardLabel ?? ""
+        )
+        return missing.isEmpty
+    }
+
+    private var shouldShowSimpleHomeSetup: Bool {
+        guard merchantWorkspaceMode != .staff, homeSetupStateResolved else { return false }
+        return !homeCardConfigured || !homeFlyerAvailable
+    }
+
+    private var isHomeSetupMode: Bool {
+        shouldShowSimpleHomeSetup
+    }
+
+    private var showHomeCardSetupOverlay: Bool {
+        isHomeSetupMode && !homeCardConfigured
+    }
+
     /// Type de programme fidélité pour l’accueil (snapshot « Ma carte », défaut tampons).
     private var homeProgramIsPoints: Bool {
         let slug = AuthStorage.currentBusinessSlug ?? ""
@@ -96,48 +347,28 @@ struct DashboardView: View {
         return (raw ?? "points").lowercased() == "points"
     }
 
-    private var menuActions: [MenuAction] {
-        var list: [MenuAction] = []
-        list.append(MenuAction(id: "notify-all", symbolImage: "person.2.fill", text: "Tous les membres") {
-            menuConfig.showMenu = false
-            selectedCategoryIdsForNotify = []
-            isNotificationFieldFocused = true
-        })
-        for category in categoriesForNotify {
-            let cat = category
-            let sid = cat.serverId ?? UUID().uuidString
-            list.append(MenuAction(id: "cat-\(sid)", symbolImage: "folder.fill", text: cat.name ?? "Catégorie") {
-                menuConfig.showMenu = false
-                selectedCategoryIdsForNotify = [sid]
-                isNotificationFieldFocused = true
-            })
-        }
-        list.append(MenuAction(id: "manage-categories", symbolImage: "folder.badge.gearshape", text: "Gérer les catégories") {
-            menuConfig.showMenu = false
-            showCategoriesManagement = true
-        })
-        return list
-    }
-
     /// Contenu principal de l’accueil (ZStack + modificateurs navigation / scan).
     @ViewBuilder
     private var dashboardHomeRoot: some View {
         ZStack(alignment: .top) {
-            palette.canvas
-                .padding(-ZoomTransitionCanvasOverscan.inset)
-                .ignoresSafeArea()
+            Color.black
+                .ignoresSafeArea(edges: .top)
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
                     employeeOrOwnerHomeContent
                 }
                 .padding(.horizontal, DashboardHomeLayoutMetrics.scrollHorizontalPadding)
-                .padding(.top, DashboardHomeChrome.showMinimalTopBar ? 4 : 0)
-                .padding(.bottom, DashboardHomeChrome.showLegacyBottomNotificationChrome ? 280 : 100)
+                .padding(.top, 0)
+                .padding(.bottom, 100)
                 .opacity(contentAppeared ? 1 : 0)
                 .offset(y: contentAppeared ? 0 : 14)
             }
             .scrollIndicators(.hidden)
+            .background(palette.canvas)
+            .clipShape(DashboardTopRoundedPanel.shape)
+            .padding(.top, DashboardHomeChrome.showMinimalTopBar ? DashboardHomeMinimalTopBarLayout.scrollContentTopInset : 0)
+            .ignoresSafeArea(edges: .bottom)
             .refreshable {
                 await syncService.syncIfNeeded(force: true)
             }
@@ -145,16 +376,37 @@ struct DashboardView: View {
             if DashboardHomeChrome.showMinimalTopBar {
                 VStack(spacing: 0) {
                     DashboardHomeMinimalTopBar(
-                        palette: palette,
-                        onOpenProfile: {
-                            withAnimation(MerchantMotion.tabSwitch) {
-                                tabRouter.selectedTab = 2
+                        title: dashboardTopBarTitle,
+                        merchantName: dashboardTopBarTitle,
+                        accountEmail: authService.currentUserEmail ?? AuthStorage.userEmail,
+                        notificationIconURL: homeNotificationIconURL,
+                        hasNotificationIcon: homeHasNotificationIconConfigured,
+                        businesses: authService.businesses,
+                        activeBusinessSlug: AuthStorage.currentBusinessSlug,
+                        canCreateBusiness: authService.canCreateBusiness,
+                        onOpenSettings: {
+                            NotificationCenter.default.post(name: .myfidpassOpenGlobalSettingsSheet, object: nil)
+                        },
+                        onSelectBusiness: { slug in
+                            authService.selectBusiness(slug: slug)
+                            homeHasNotificationIconConfigured = false
+                            homeNotificationIconURL = nil
+                            homeNotificationIconLastCheckAt = nil
+                            homeNotificationIconLastSlug = nil
+                            refreshHomeFlyerAvailability()
+                            Task {
+                                defer { authService.finishBusinessSwitch() }
+                                await syncService.syncAfterServerMutation()
+                                await refreshHomeNotificationIconStatusIfNeeded(force: true)
                             }
                         },
-                        onOpenScan: { showScanner = true }
+                        onAddCommerce: {
+                            NotificationCenter.default.post(name: .myfidpassOpenAddCommerceSheet, object: nil)
+                        },
+                        onUpgradeCommerceQuota: {
+                            NotificationCenter.default.post(name: .myfidpassOpenMerchantSubscriptionSheet, object: nil)
+                        }
                     )
-                    .padding(.horizontal, DashboardHomeLayoutMetrics.topBarHorizontalInset)
-                    .padding(.top, 6)
                     Color.clear
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .allowsHitTesting(false)
@@ -162,20 +414,10 @@ struct DashboardView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
 
-            if homeTutorialCompleted {
+            if homeTutorialCompleted || HomeTutorialTemporaryDisable.isOn {
                 syncOverlay
             }
 
-            if DashboardHomeChrome.showLegacyBottomNotificationChrome {
-                VStack(spacing: 0) {
-                    Spacer(minLength: 0)
-                    notificationRecipientChips
-                    notificationBottomBar
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-                .padding(.horizontal, 15)
-                .padding(.bottom, 10)
-            }
         }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .navigationBar)
@@ -217,65 +459,50 @@ struct DashboardView: View {
         } message: {
             if let msg = scanError { Text(msg) }
         }
-        .alert("Notification", isPresented: Binding(
-            get: { notifyResultMessage != nil },
-            set: { if !$0 { notifyResultMessage = nil } }
-        )) {
-            Button("OK") { notifyResultMessage = nil }
-        } message: {
-            if let msg = notifyResultMessage { Text(msg) }
-        }
     }
 
     var body: some View {
         let _ = dataService.updateTrigger
-        Group {
-            if !DashboardHomeChrome.showLegacyBottomNotificationChrome {
-                NavigationStack(path: $navigationPath) {
-                    dashboardHomeRoot
-                }
-            } else {
-                CustomMenuView(config: $menuConfig, actions: menuActions) {
-                    NavigationStack(path: $navigationPath) {
-                        dashboardHomeRoot
-                    }
-                }
-            }
+        NavigationStack(path: $navigationPath) {
+            dashboardHomeRoot
         }
-        .animation(MerchantMotion.navigationPath, value: navigationPath.count)
         .onChange(of: navigationPath) { _, path in
             tabRouter.isDashboardAtRoot = path.isEmpty
         }
-        .onChange(of: tabRouter.selectedTab) { _, _ in
-            if showHomeMerchantStatistics { showHomeMerchantStatistics = false }
+        .onChange(of: tabRouter.selectedTab) { _, newTab in
+            if showHomeMerchantStatistics {
+                showHomeMerchantStatistics = false
+            }
+            if newTab == 0 {
+                refreshHomeFlyerAvailability()
+                Task { await refreshHomeNotificationIconStatusIfNeeded() }
+            }
         }
         .onAppear {
             tabRouter.isDashboardAtRoot = navigationPath.isEmpty
+            tabRouter.isDashboardSetupMode = isHomeSetupMode
+            tabRouter.hasResolvedDashboardSetupMode = true
+            FlyerEmbedWarmup.startIfNeeded()
+            refreshHomeFlyerAvailability()
+            Task { await refreshHomeNotificationIconStatusIfNeeded() }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .myfidpassRemoteSyncDidMerge)) { _ in
-            dataService.bumpRefreshAfterRemoteMerge()
-        }
-        /// Rafraîchit la liste « Dernières transactions » dès qu’un tampon / carte change (y compris fusion Core Data), sans se limiter au jour calendaire.
-        .onReceive(NotificationCenter.default.publisher(for: .NSManagedObjectContextDidSave, object: viewContext)) { note in
-            guard let userInfo = note.userInfo else { return }
-            let inserted = (userInfo[NSInsertedObjectsKey] as? Set<NSManagedObject>) ?? []
-            let updated = (userInfo[NSUpdatedObjectsKey] as? Set<NSManagedObject>) ?? []
-            let deleted = (userInfo[NSDeletedObjectsKey] as? Set<NSManagedObject>) ?? []
-            let touched = inserted.union(updated).union(deleted)
-            if touched.contains(where: { $0 is Stamp || $0 is ClientCard }) {
-                dataService.bumpRefreshAfterRemoteMerge()
-            }
+        .onDisappear {
+            tabRouter.isDashboardSetupMode = false
+            tabRouter.hasResolvedDashboardSetupMode = false
         }
         .onReceive(NotificationCenter.default.publisher(for: .myfidpassCardPreviewDisplayDidChange)) { _ in
             cardPreviewDisplayRefresh += 1
+            refreshHomeFlyerAvailability()
         }
-        .sheet(isPresented: $showCategoriesManagement) {
-            CategoriesManagementView(context: viewContext)
-                .environmentObject(syncService)
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.hidden)
-                .modifier(LiquidGlassSheetModifier())
+        .onReceive(NotificationCenter.default.publisher(for: .myfidpassOpenMerchantFlyerHub)) { _ in
+            openFlyerHubFromHome(forEdit: false)
         }
+        .onChange(of: showMyCardFullScreen) { _, isOpen in
+            if !isOpen {
+                refreshHomeCardSetupThumbnail()
+            }
+        }
+
         .fullScreenCover(item: $scanResultSheet) { data in
             scanAddPointsSheet(for: data)
         }
@@ -286,6 +513,9 @@ struct DashboardView: View {
                 onDismiss: { scanStampSheet = nil },
                 onConfirm: {
                     await submitStampVisit(slug: data.slug, barcode: data.barcode)
+                },
+                onRedeemFinalReward: {
+                    await redeemStampRewardFromScan(slug: data.slug, barcode: data.barcode)
                 }
             )
         }
@@ -298,10 +528,54 @@ struct DashboardView: View {
             .environment(\.managedObjectContext, viewContext)
             .statsDetailZoomTransition(sourceID: HomeMyCardZoom.previewSourceID, namespace: homeMyCardZoomNamespace)
         }
+        .fullScreenCover(isPresented: $showHomeFlyerHubFullScreen) {
+            NavigationStack {
+                MerchantProgramHubView(
+                    context: viewContext,
+                    seedOpenFlyerForEdit: homeFlyerHubOpenedForEdit,
+                    liveCommerceSnapshot: homeFlyerHubOpenedForEdit ? CommerceFlyerLiveSnapshot(
+                        bootstrapPreviewB64: homeFlyerBootstrapB64,
+                        customBgDataURL: homeFlyerCustomBgDataURL,
+                        shareURL: homeFlyerPublicPageURLString
+                    ) : nil,
+                    onFlyerSaveSuccessReturnToCommerce: { showHomeFlyerHubFullScreen = false },
+                    onExitFlyerHubPopCommerce: { showHomeFlyerHubFullScreen = false }
+                )
+                .environmentObject(syncService)
+                .environmentObject(authService)
+            }
+            .environment(\.managedObjectContext, viewContext)
+        }
         .fullScreenCover(isPresented: $showHomeMerchantStatistics) {
             homeMerchantStatisticsOverlay
                 .statsDetailZoomTransition(sourceID: HomeMerchantStatsZoom.sourceID, namespace: homeMerchantStatsZoomNamespace)
                 .merchantFluidZoomFullScreenTransparentChrome()
+        }
+        .onChange(of: currentBusinessSlug) { _, _ in
+            homeHasNotificationIconConfigured = false
+            homeNotificationIconURL = nil
+            homeNotificationIconLastCheckAt = nil
+            homeNotificationIconLastSlug = nil
+            refreshHomeFlyerAvailability()
+            Task { await refreshHomeNotificationIconStatusIfNeeded(force: true) }
+        }
+        .onChange(of: isHomeSetupMode) { _, newValue in
+            tabRouter.isDashboardSetupMode = newValue
+        }
+        .onChange(of: homeFlyerBootstrapB64) { _, newB64 in
+            let raw = newB64?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !raw.isEmpty, let parsed = FlyerBootstrapPreviewPayloadBuilder.flyerStateFromBootstrapBase64(raw) {
+                cachedFlyerUnderlayState = parsed
+            } else {
+                var d = FlyerStateDTO.default
+                d.normalizeClamps()
+                cachedFlyerUnderlayState = d
+            }
+        }
+        .onChange(of: showHomeFlyerHubFullScreen) { _, isPresented in
+            if !isPresented {
+                refreshHomeFlyerAvailability()
+            }
         }
     }
 
@@ -372,22 +646,19 @@ struct DashboardView: View {
             label()
                 .zoomTransitionSource(id: HomeMyCardZoom.previewSourceID, in: homeMyCardZoomNamespace)
         }
-        .buttonStyle(MerchantPressableButtonStyle())
+        .buttonStyle(MerchantPressableButtonStyle(scalePressed: 0.94, opacityPressed: 0.88, recognizeTouchImmediately: true))
         .accessibilityLabel("Ma carte")
         .accessibilityHint("Ouvre la personnalisation de la carte fidélité.")
-        // Le `Button` est en pleine largeur : le masque sans inset couvrait toute la ligne + trop de hauteur en bas.
+        // Le `Button` est en pleine largeur : insets forts sur les côtés + en bas pour cadrer la carte, pas toute la ligne.
         .onBoarding(
             1,
             cornerRadius: 18,
-            maskInsets: EdgeInsets(top: 6, leading: 26, bottom: 44, trailing: 26)
+            maskInsets: EdgeInsets(top: 8, leading: 44, bottom: 64, trailing: 44)
         ) {
-            VStack(spacing: 6) {
-                Text("Votre carte fidélité")
-                    .font(.headline)
-                Text("Appuyez sur la carte pour la personnaliser et la partager avec vos clients.")
-                    .font(.caption)
-                    .multilineTextAlignment(.center)
-            }
+            Text("Appuyez sur la carte pour la personnaliser")
+                .font(.title3.weight(.semibold))
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -401,60 +672,371 @@ struct DashboardView: View {
                     .frame(height: 8)
                     .accessibilityHidden(true)
                 fintechTransactionsSection
-                    .padding(.top, -12)
+                    .padding(.top, 14)
             }
         } else {
             VStack(alignment: .leading, spacing: 0) {
-                fintechHomeTopAndCardOwner
-                fintechTransactionsSection
-                    .padding(.top, -12)
+                if shouldShowSimpleHomeSetup {
+                    Color.clear
+                        .frame(height: DashboardHomeChrome.showMinimalTopBar ? (DashboardHomeMinimalTopBarLayout.scrollContentTopInset + 10) : 8)
+                        .accessibilityHidden(true)
+                    homeSimpleSetupSection
+                        .padding(.top, 12)
+                } else {
+                    fintechHomeTopAndCardOwner
+                    fintechTransactionsSection
+                        .padding(.top, 8)
+                }
             }
         }
     }
 
-    private var fintechHomeTopAndCardOwner: some View {
-        VStack(alignment: .leading, spacing: DashboardHomeChrome.showMinimalTopBar ? 18 : 8) {
-            Color.clear
-                .frame(height: DashboardHomeChrome.showMinimalTopBar ? 72 : 8)
-                .accessibilityHidden(true)
+    /// Recalcule la vignette carte pour la section setup (ImageRenderer — même rendu que l’accueil).
+    @MainActor
+    private func refreshHomeCardSetupThumbnail() {
+        guard homeCardConfigured,
+              let model = DashboardHomeCardModel.resolve(dataService: dataService) else {
+            homeCardSetupThumbnail = nil
+            return
+        }
+        let renderW: CGFloat = 360
+        let renderH: CGFloat = 460
+        let card = FintechHomeLoyaltyCardBlock(model: model, palette: palette)
+            .environment(\.colorScheme, colorScheme)
+            .frame(width: renderW, height: renderH, alignment: .center)
+            .clipped()
+        let renderer = ImageRenderer(content: card)
+        renderer.scale = UIScreen.main.scale
+        homeCardSetupThumbnail = renderer.uiImage
+    }
 
-            if let model = DashboardHomeCardModel.resolve(dataService: dataService) {
-                merchantHomeCardPreviewButton {
-                    FintechHomeLoyaltyCardBlock(
-                        model: model,
-                        palette: palette
-                    )
-                    .modifier(MerchantHomeCardFirstVisitShakeModifier(active: showHomeCardTapHint))
+    private var homeCardSetupThumbnailTaskId: String {
+        "\(currentBusinessSlug ?? "")|\(homeCardConfigured)|\(cardPreviewDisplayRefresh)"
+    }
+
+    private var homeSimpleSetupSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Finalisez votre lancement")
+                .font(.system(size: 34, weight: .regular, design: .default))
+                .foregroundStyle(Color(red: 0.05, green: 0.12, blue: 0.26))
+                .lineSpacing(0)
+                .kerning(-0.2)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Text("Créez d’abord votre carte. Le flyer (QR, téléchargement) se gère ensuite dans Réglages → « Flyer & programme », ou touchez la carte ci‑dessous tant qu’il n’est pas prêt.")
+                .font(.system(size: 17, weight: .medium))
+                .foregroundStyle(Color(red: 0.37, green: 0.47, blue: 0.63))
+                .lineSpacing(3)
+                .fixedSize(horizontal: false, vertical: true)
+
+            VStack(spacing: 14) {
+                homeSimpleSetupCard(
+                    title: "Créez votre carte",
+                    useHeroCarousel: true,
+                    carouselKind: .loyaltyCardIsoId1,
+                    carouselImageNames: ["cartefid1", "cartefid2", "cartefid3"],
+                    fallbackCarouselImage: nil,
+                    isReady: homeCardConfigured,
+                    readyLabel: "Carte créée",
+                    pendingLabel: "Créez votre carte"
+                ) {
+                    merchantHomeCardOpenedFromHome = true
+                    showMyCardFullScreen = true
                 }
-            } else {
-                merchantHomeCardPreviewButton {
-                    RoundedRectangle(cornerRadius: 36, style: .continuous)
-                        .fill(palette.card)
-                        .frame(height: 200)
-                        .overlay(
-                            VStack(spacing: 10) {
-                                Image(systemName: "creditcard")
-                                    .font(.largeTitle)
-                                    .foregroundStyle(palette.tertiaryText)
-                                Text("Synchronisez pour afficher votre carte")
-                                    .font(.subheadline.weight(.medium))
-                                    .foregroundStyle(palette.secondaryText)
-                                    .multilineTextAlignment(.center)
-                                Text("Ouvrir Ma carte")
-                                    .font(.subheadline.weight(.semibold))
-                                    .foregroundStyle(palette.accentBlue)
-                            }
-                            .padding()
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 36, style: .continuous)
-                                .strokeBorder(palette.cardStroke, lineWidth: 1)
-                        )
-                        .modifier(MerchantHomeCardFirstVisitShakeModifier(active: showHomeCardTapHint))
+
+                homeSimpleSetupCard(
+                    title: "Créez votre flyer",
+                    useHeroCarousel: false,
+                    carouselKind: .flyerPortrait9x16,
+                    carouselImageNames: [],
+                    fallbackCarouselImage: homeFlyerCompositeSnapshot ?? homeFlyerUnderlayUIImage,
+                    isReady: homeFlyerAvailable,
+                    readyLabel: "Flyer créé",
+                    pendingLabel: "Créez votre flyer"
+                ) {
+                    openFlyerHubFromHome()
                 }
             }
         }
-        .id(cardPreviewDisplayRefresh)
+        .padding(.horizontal, 4)
+        .task(id: homeCardSetupThumbnailTaskId) {
+            await Task.yield()
+            refreshHomeCardSetupThumbnail()
+        }
+    }
+
+    /// Découpe « Créez votre carte » → (« Créez votre », « carte ») pour titres sur deux lignes serrées.
+    private func homeSetupHeadlineLines(from title: String) -> (String, String) {
+        let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let needle = " votre "
+        if let r = t.range(of: needle, options: .caseInsensitive) {
+            let first = String(t[..<r.upperBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+            let second = String(t[r.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !second.isEmpty { return (first, second) }
+        }
+        return (t, "")
+    }
+
+    @ViewBuilder
+    private func homeFlyerSetupStaticHero(fallback: UIImage?) -> some View {
+        Group {
+            if let u = fallback {
+                Image(uiImage: u)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Image(systemName: "doc.richtext.fill")
+                    .font(.system(size: 38, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.55))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .frame(width: 100, height: 168)
+        .clipped()
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.18), lineWidth: 1)
+        )
+    }
+
+    @ViewBuilder
+    private func homeSimpleSetupCard(
+        title: String,
+        useHeroCarousel: Bool,
+        carouselKind: DashboardSetupHeroCarousel.HeroVisualKind,
+        carouselImageNames: [String],
+        fallbackCarouselImage: UIImage? = nil,
+        isReady: Bool,
+        readyLabel: String,
+        pendingLabel: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        let headline = homeSetupHeadlineLines(from: title)
+        RoundedRectangle(cornerRadius: 24, style: .continuous)
+            .fill(Color(red: 0.92, green: 0.93, blue: 0.95))
+            .overlay {
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color(red: 0.10, green: 0.13, blue: 0.18),
+                                Color(red: 0.08, green: 0.11, blue: 0.16),
+                                Color(red: 0.07, green: 0.10, blue: 0.14),
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .overlay(
+                        RadialGradient(
+                            colors: [
+                                Color(red: 0.05, green: 0.53, blue: 0.77).opacity(0.35),
+                                .clear,
+                            ],
+                            center: .bottom,
+                            startRadius: 16,
+                            endRadius: 220
+                        )
+                    )
+                    .padding(9)
+                    .overlay {
+                        HStack(alignment: .center, spacing: 6) {
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(headline.0)
+                                    .font(.system(size: 21, weight: .heavy))
+                                    .foregroundStyle(.white.opacity(0.96))
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.8)
+                                if !headline.1.isEmpty {
+                                    Text(headline.1)
+                                        .font(.system(size: 23, weight: .heavy))
+                                        .foregroundStyle(.white.opacity(0.96))
+                                        .lineLimit(1)
+                                        .minimumScaleFactor(0.8)
+                                        .padding(.top, -1)
+                                }
+                                Button(action: action) {
+                                    HStack(spacing: 5) {
+                                        Circle()
+                                            .stroke(Color.white.opacity(0.55), lineWidth: 1.2)
+                                            .frame(width: 6, height: 6)
+                                        Text(isReady ? readyLabel : pendingLabel)
+                                            .font(.system(size: 12.5, weight: .semibold))
+                                            .lineLimit(1)
+                                            .minimumScaleFactor(0.72)
+                                    }
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 6)
+                                }
+                                .disabled(isReady)
+                                .opacity(isReady ? 0.58 : 1)
+                                .allowsHitTesting(!isReady)
+                                .modifier(HomeSetupGlassButtonModifier())
+                                .padding(.top, 5)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .layoutPriority(1)
+
+                            Group {
+                                if useHeroCarousel {
+                                    DashboardSetupHeroCarousel(
+                                        kind: carouselKind,
+                                        imageNames: carouselImageNames,
+                                        fallbackImage: fallbackCarouselImage
+                                    )
+                                    .fixedSize(horizontal: true, vertical: true)
+                                } else {
+                                    homeFlyerSetupStaticHero(fallback: fallbackCarouselImage)
+                                        .fixedSize(horizontal: true, vertical: true)
+                                }
+                            }
+                        }
+                        .padding(.leading, 14)
+                        .padding(.trailing, 8)
+                        .padding(.vertical, 12)
+                    }
+            }
+            .frame(height: 244)
+            .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .shadow(color: .black.opacity(0.08), radius: 12, y: 4)
+    }
+
+    private var fintechHomeTopAndCardOwner: some View {
+        VStack(alignment: .leading, spacing: DashboardHomeChrome.showMinimalTopBar ? 10 : 8) {
+            Color.clear
+                .frame(height: 0)
+                .accessibilityHidden(true)
+
+            homeMyCardSlide
+                .environment(\.homeCarouselPress, .inactive)
+                .frame(maxWidth: .infinity)
+                .padding(.top, -8)
+                .padding(.bottom, -4)
+        }
+    }
+
+    @ViewBuilder
+    private var homeMyCardSlide: some View {
+        Group {
+            if showHomeCardSetupOverlay {
+                merchantHomeCardPreviewButton {
+                    homeCardSetupReplacement
+                }
+            } else {
+                Group {
+                    if let model = DashboardHomeCardModel.resolve(dataService: dataService) {
+                        merchantHomeCardPreviewButton {
+                            FintechHomeLoyaltyCardBlock(
+                                model: model,
+                                palette: palette
+                            )
+                            .modifier(MerchantHomeCardFirstVisitShakeModifier(active: showHomeCardTapHint))
+                        }
+                    } else {
+                        merchantHomeCardPreviewButton {
+                            RoundedRectangle(cornerRadius: 36, style: .continuous)
+                                .fill(palette.card)
+                                .frame(height: homeTopPreviewCardHeight)
+                                .overlay(
+                                    VStack(spacing: 10) {
+                                        Image(systemName: "creditcard")
+                                            .font(.largeTitle)
+                                            .foregroundStyle(palette.tertiaryText)
+                                        Text("Synchronisez pour afficher votre carte")
+                                            .font(.subheadline.weight(.medium))
+                                            .foregroundStyle(palette.secondaryText)
+                                            .multilineTextAlignment(.center)
+                                        Text("Ouvrir Ma carte")
+                                            .font(.subheadline.weight(.semibold))
+                                            .foregroundStyle(palette.accentBlue)
+                                    }
+                                    .padding()
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 36, style: .continuous)
+                                        .strokeBorder(palette.cardStroke, lineWidth: 1)
+                                )
+                                .modifier(MerchantHomeCardFirstVisitShakeModifier(active: showHomeCardTapHint))
+                        }
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func openFlyerHubFromHome(forEdit: Bool = false) {
+        homeFlyerHubOpenedForEdit = forEdit
+        showHomeFlyerHubFullScreen = true
+    }
+
+    private func homeSetupReplacementButton(
+        title: String,
+        subtitle: String,
+        icon: String,
+        cornerRadius: CGFloat
+    ) -> some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [Color.white.opacity(0.95), Color(red: 0.88, green: 0.89, blue: 0.92)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .strokeBorder(Color.black.opacity(0.08), lineWidth: 1)
+                )
+
+            VStack(spacing: 14) {
+                Spacer(minLength: 0)
+                Image(systemName: icon)
+                    .font(.system(size: 36, weight: .bold))
+                    .foregroundStyle(Color.black.opacity(0.82))
+
+                Text(title)
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(Color.black.opacity(0.92))
+                    .multilineTextAlignment(.center)
+
+                Text(subtitle)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(Color.black.opacity(0.62))
+                    .multilineTextAlignment(.center)
+
+                HStack(spacing: 8) {
+                    Image(systemName: "hand.tap.fill")
+                    Text("Cliquer pour ouvrir")
+                        .font(.subheadline.weight(.semibold))
+                    Image(systemName: "chevron.right")
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(Color.black, in: Capsule())
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 16)
+        }
+        .shadow(color: Color.black.opacity(0.14), radius: 10, y: 6)
+        .allowsHitTesting(false)
+    }
+
+    private var homeCardSetupReplacement: some View {
+        homeSetupReplacementButton(
+            title: "Personnaliser la carte",
+            subtitle: "Appuyez pour configurer votre carte",
+            icon: "creditcard.fill",
+            cornerRadius: 22
+        )
+        .padding(.horizontal, 36)
+        .frame(minHeight: DashboardHomeCardChrome.previewMinHeight)
+        .scaleEffect(DashboardHomeCardChrome.homeCardScale, anchor: .center)
+        .padding(.vertical, AppTheme.Spacing.xs)
+        .frame(maxWidth: .infinity)
     }
 
     /// Secousse type « shake » toutes les ~5 s (pas un balancement continu) tant que Ma carte n’a pas été ouverte depuis l’accueil.
@@ -467,7 +1049,7 @@ struct DashboardView: View {
         func body(content: Content) -> some View {
             content
                 .offset(x: offsetX)
-                .shadow(color: Color.black.opacity(active ? 0.2 : 0.18), radius: 12, y: 6)
+                .shadow(color: Color.black.opacity(active ? 0.09 : 0.07), radius: 6, y: 3)
                 .onAppear { restartShakeLoopIfNeeded() }
                 .onChange(of: active) { _, new in
                     if new {
@@ -537,13 +1119,10 @@ struct DashboardView: View {
         VStack(alignment: .leading, spacing: 12) {
             FintechTransactionsSectionHeader(
                 palette: palette,
-                onSeeAll: {
-                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                    showHomeMerchantStatistics = true
-                },
+                onSeeAll: nil,
                 onOpenScanner: { showScanner = true },
-                statsTransitionSourceID: HomeMerchantStatsZoom.sourceID,
-                statsTransitionNamespace: homeMerchantStatsZoomNamespace
+                statsTransitionSourceID: nil,
+                statsTransitionNamespace: nil
             )
 
             if activityPreview.isEmpty {
@@ -578,159 +1157,9 @@ struct DashboardView: View {
 
     @ViewBuilder
     private var syncOverlay: some View {
-        if syncService.isSyncing {
-            VStack {
-                ProgressView()
-                    .scaleEffect(1.15)
-                    .tint(palette.onCanvasPrimary)
-                    .padding(.top, 10)
-                Spacer()
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .allowsHitTesting(false)
-        }
-    }
-
-    // MARK: - Notification bas d’écran
-
-    private var notificationBottomBar: some View {
-        let fillColor = palette.barButtonFill
-        let hasText = !notificationMessage.trimmingCharacters(in: .whitespaces).isEmpty
-        return AnimatedBottomBar(
-            hint: "Message pour vos membres…",
-            tint: palette.accentBlue,
-            text: $notificationMessage,
-            isFocused: $isNotificationFieldFocused,
-            leadingAction: {
-                recipientsButtonView(fillColor: fillColor)
-            },
-            trailingAction: {
-                if isNotificationFieldFocused {
-                    Button {
-                        if hasText { sendNotificationToAll() }
-                        isNotificationFieldFocused = false
-                    } label: {
-                        Image(systemName: "checkmark")
-                            .fontWeight(.medium)
-                            .foregroundStyle(Color.white)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .background(palette.accentBlue.gradient, in: .circle)
-                    }
-                    .buttonStyle(.borderless)
-                } else {
-                    Color.clear
-                        .frame(width: 35, height: 35)
-                }
-            },
-            mainAction: {
-                if isNotificationFieldFocused && hasText {
-                    Button {
-                        sendNotificationToAll()
-                    } label: {
-                        Image(systemName: "paperplane.fill")
-                            .font(.body)
-                            .foregroundStyle(Color.white)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    }
-                    .buttonStyle(.borderless)
-                    .disabled(isSendingNotification)
-                } else {
-                    recipientsButtonView(fillColor: fillColor)
-                }
-            }
-        )
-    }
-
-    @ViewBuilder
-    private var notificationRecipientChips: some View {
-        let cats = categoriesForNotify
-        if isNotificationFieldFocused, !cats.isEmpty {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    RecipientCategoryChip(
-                        title: "Tous",
-                        isSelected: selectedCategoryIdsForNotify.isEmpty,
-                        color: palette.accentBlue,
-                        palette: palette
-                    ) {
-                        selectedCategoryIdsForNotify = []
-                    }
-                    ForEach(cats, id: \.objectID) { category in
-                        let sid = category.serverId ?? ""
-                        let isSelected = !sid.isEmpty && selectedCategoryIdsForNotify.contains(sid)
-                        RecipientCategoryChip(
-                            title: category.name ?? "",
-                            isSelected: isSelected,
-                            color: (category.colorHex.flatMap { Color(hex: $0) }) ?? palette.accentBlue,
-                            palette: palette
-                        ) {
-                            if isSelected {
-                                selectedCategoryIdsForNotify.removeAll { $0 == sid }
-                            } else if !sid.isEmpty {
-                                selectedCategoryIdsForNotify.append(sid)
-                            }
-                        }
-                    }
-                }
-                .padding(.vertical, 6)
-            }
-            .padding(.bottom, 4)
-        }
-    }
-
-    private var categoriesForNotify: [MemberCategory] {
-        guard let template = dataService.currentCardTemplate() else { return [] }
-        return dataService.categories(for: template)
-    }
-
-    @ViewBuilder
-    private func recipientsButtonView(fillColor: Color) -> some View {
-        MenuSourceButton(config: $menuConfig) {
-            Image(systemName: "person.2.fill")
-                .fontWeight(.medium)
-                .foregroundStyle(palette.onCanvasPrimary)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(fillColor, in: .circle)
-        } onTap: {
-            isNotificationFieldFocused = false
-        }
-    }
-
-    private func sendNotificationToAll() {
-        let msg = notificationMessage.trimmingCharacters(in: .whitespaces)
-        guard !msg.isEmpty else { return }
-        guard let slug = AuthStorage.currentBusinessSlug else {
-            notifyResultMessage = "Aucun commerce. Reconnectez-vous."
-            return
-        }
-        isSendingNotification = true
-        notifyResultMessage = nil
-        isNotificationFieldFocused = false
-        Task {
-            do {
-                let result = try await APIClient.shared.request(
-                    APIEndpoint.notifyClients(slug: slug, message: msg, categoryIds: selectedCategoryIdsForNotify.isEmpty ? nil : selectedCategoryIdsForNotify)
-                ) as NotifyClientsResult
-                await MainActor.run {
-                    isSendingNotification = false
-                    let n = result.sent ?? 0
-                    notifyResultMessage = n > 0 ? "Notification envoyée (\(n) appareil(s))." : "Aucun appareil cible (Wallet / Web). Message enregistré."
-                    notificationMessage = ""
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                        notifyResultMessage = nil
-                    }
-                }
-                await syncService.syncAfterServerMutation()
-            } catch {
-                await MainActor.run {
-                    isSendingNotification = false
-                    notifyResultMessage = (error as? APIError)?.errorDescription ?? "Erreur lors de l’envoi."
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                        notifyResultMessage = nil
-                    }
-                }
-            }
-        }
+        // Le bandeau global de ContentView couvre déjà l'état sync.
+        // Supprimer ce spinner additionnel évite les clignotements visuels constants à l'ouverture des écrans.
+        EmptyView()
     }
 
     private func normalizeBarcodeToMemberId(_ raw: String) -> String {
@@ -742,6 +1171,163 @@ struct DashboardView: View {
         }
         if s.count == 36, s.contains("-") { return s }
         return s
+    }
+
+    private func refreshHomeFlyerAvailability() {
+        guard let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines), !slug.isEmpty else {
+            homeFlyerAvailable = false
+            homeFlyerBootstrapB64 = nil
+            homeFlyerShareURL = ""
+            homeFlyerCustomBgDataURL = nil
+            homeFlyerUnderlayUIImage = nil
+            homeFlyerCompositeSnapshot = nil
+            homeSetupStateResolved = true
+            return
+        }
+        CommerceFlyerStore.shared.hydrateFromDiskIfNeeded(slug: slug)
+        guard let cached = CommerceFlyerStore.shared.snapshot(for: slug) else {
+            homeFlyerAvailable = false
+            homeFlyerBootstrapB64 = nil
+            homeFlyerShareURL = ""
+            homeFlyerCustomBgDataURL = nil
+            homeFlyerUnderlayUIImage = nil
+            homeFlyerCompositeSnapshot = nil
+            homeSetupStateResolved = true
+            return
+        }
+        let hasBootstrap = !(cached.bootstrapPreviewB64 ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasBg = !(cached.customBgDataURL ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        homeFlyerAvailable = cached.flyerRegistered || hasBootstrap || hasBg
+        homeFlyerBootstrapB64 = hasBootstrap ? cached.bootstrapPreviewB64 : nil
+        homeFlyerShareURL = cached.shareURL
+        homeFlyerCustomBgDataURL = cached.customBgDataURL
+        if let draft = CommerceFlyerEditorDraftStore.load(slug: slug) {
+            let draftB64 = draft.bootstrapB64.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !draftB64.isEmpty {
+                homeFlyerBootstrapB64 = draftB64
+                let draftBg = draft.meta.customBgDataURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                if !draftBg.isEmpty { homeFlyerCustomBgDataURL = draftBg }
+                let draftShare = draft.meta.shareURL.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !draftShare.isEmpty { homeFlyerShareURL = draftShare }
+                homeFlyerAvailable = true
+            }
+        }
+        if (homeFlyerCustomBgDataURL?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true),
+           let b64 = homeFlyerBootstrapB64,
+           let bgFromBootstrap = FlyerBootstrapPreviewPayloadBuilder.customBgDataURLFromBootstrapBase64(b64) {
+            homeFlyerCustomBgDataURL = bgFromBootstrap
+        }
+        CommerceFlyerStore.shared.upsert(
+            slug: slug,
+            snapshot: .init(
+                flyerRegistered: homeFlyerAvailable,
+                shareURL: homeFlyerShareURL,
+                bootstrapPreviewB64: homeFlyerBootstrapB64,
+                customBgDataURL: homeFlyerCustomBgDataURL,
+                revisionKey: cached.revisionKey
+            )
+        )
+        Task { await refreshHomeFlyerVisualAssets(slug: slug) }
+        homeSetupStateResolved = true
+    }
+
+    @MainActor
+    private func refreshHomeNotificationIconStatusIfNeeded(force: Bool = false) async {
+        if homeNotificationIconRefreshInFlight { return }
+        guard let slug = currentBusinessSlug else {
+            homeHasNotificationIconConfigured = false
+            homeNotificationIconURL = nil
+            homeNotificationIconLastCheckAt = Date()
+            homeNotificationIconLastSlug = nil
+            return
+        }
+        if !force,
+           homeNotificationIconLastSlug == slug,
+           let last = homeNotificationIconLastCheckAt,
+           Date().timeIntervalSince(last) < 45 {
+            return
+        }
+        if let cached = ScanFlowSettingsCache.cached(for: slug) {
+            let icon = cached.notificationIconUrl?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            homeHasNotificationIconConfigured = !icon.isEmpty
+            homeNotificationIconURL = icon.isEmpty ? nil : icon
+            if let raw = homeNotificationIconURL,
+               let url = APIResourceURL.resolved(from: raw) {
+                Task.detached(priority: .utility) {
+                    await AuthenticatedMediaLoader.prefetch(url: url)
+                }
+            }
+        }
+        homeNotificationIconRefreshInFlight = true
+        defer { homeNotificationIconRefreshInFlight = false }
+        do {
+            let settings: BusinessSettingsResponse = try await APIClient.shared.request(.businessSettings(slug: slug))
+            ScanFlowSettingsCache.store(settings, for: slug)
+            let icon = settings.notificationIconUrl?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            homeHasNotificationIconConfigured = !icon.isEmpty
+            homeNotificationIconURL = icon.isEmpty ? nil : icon
+            if let raw = homeNotificationIconURL,
+               let url = APIResourceURL.resolved(from: raw) {
+                Task.detached(priority: .utility) {
+                    await AuthenticatedMediaLoader.prefetch(url: url)
+                }
+            }
+        } catch {
+            // Conserve l'état précédent en cas de réseau KO.
+        }
+        homeNotificationIconLastCheckAt = Date()
+        homeNotificationIconLastSlug = slug
+    }
+
+    private var homeFlyerPublicPageURLString: String {
+        let s = homeFlyerShareURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !s.isEmpty { return s }
+        guard let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines), !slug.isEmpty else {
+            return ""
+        }
+        return LegalURLs.fidelityCardPage(slug: slug)?.absoluteString ?? ""
+    }
+
+    private var homeFlyerCompositeToken: String? {
+        CommerceFlyerRasterCache.compositeSnapshotToken(
+            slug: AuthStorage.currentBusinessSlug,
+            bootstrapB64: homeFlyerBootstrapB64
+        )
+    }
+
+    @MainActor
+    private func refreshHomeFlyerVisualAssets(slug: String) async {
+        if let token = homeFlyerCompositeToken {
+            homeFlyerCompositeSnapshot = CommerceFlyerRasterCache.image(forCompositeToken: token)
+        } else {
+            homeFlyerCompositeSnapshot = nil
+        }
+
+        let bgDataURL = homeFlyerCustomBgDataURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !bgDataURL.isEmpty {
+            homeFlyerUnderlayUIImage = await CommerceFlyerRasterCache.coalescedCustomBgImage(key: bgDataURL) {
+                await Task.detached(priority: .userInitiated) {
+                    Self.decodeHomeFlyerDataURLImage(bgDataURL)
+                }.value
+            }
+        } else if !slug.isEmpty {
+            let revisionKey = FlyerBootstrapPreviewPayloadBuilder.updatedAtFromBootstrapBase64(homeFlyerBootstrapB64)
+            homeFlyerUnderlayUIImage = await CommerceFlyerRasterCache.coalescedPublicBgImage(slug: slug, revisionKey: revisionKey) {
+                await CommerceFlyerPublicBgThumbnail.loadUIImage(slug: slug, revisionKey: revisionKey)
+            }
+        } else {
+            homeFlyerUnderlayUIImage = nil
+        }
+
+    }
+
+    private nonisolated static func decodeHomeFlyerDataURLImage(_ s: String) -> UIImage? {
+        guard s.hasPrefix("data:image/"), let comma = s.firstIndex(of: ",") else { return nil }
+        let b64 = String(s[s.index(after: comma)...])
+            .replacingOccurrences(of: "\n", with: "")
+            .replacingOccurrences(of: "\r", with: "")
+        guard let data = Data(base64Encoded: b64, options: [.ignoreUnknownCharacters]), !data.isEmpty else { return nil }
+        return UIImage(data: data)
     }
 
     /// Plein écran montant € (comme la fiche membre) : `program_type == points`, ou champ absent avec mode caisse / points_per_euro.
@@ -869,37 +1455,37 @@ struct DashboardView: View {
         }
     }
 
-    @discardableResult
-    private func submitStampVisit(slug: String, barcode: String) async -> Bool {
+    private func submitStampVisit(slug: String, barcode: String) async -> ScanResponse? {
         isStampVisitSubmitting = true
         defer { Task { @MainActor in isStampVisitSubmitting = false } }
         do {
             let response: ScanResponse = try await APIClient.shared.request(
                 .scan(slug: slug, barcode: barcode, visit: true, points: nil, amountEur: nil, receiptValidationToken: nil)
             )
-            await MainActor.run {
-                successToast = Toast.scanStampSuccess(
-                    memberName: response.member?.name ?? "Client",
-                    pointsCapped: response.pointsCapped == true,
-                    pointsRequested: response.pointsRequested,
-                    pointsAdded: response.pointsAdded,
-                    stampCycleCompleted: response.stampCycleCompleted == true
-                )
-                var tx = Transaction()
-                tx.disablesAnimations = true
-                withTransaction(tx) {
-                    scanStampSheet = nil
-                }
-                showToast = true
-            }
             await syncService.syncAfterServerMutation()
-            return true
+            return response
         } catch {
             await MainActor.run {
                 scanError = (error as? APIError)?.errorDescription ?? "Erreur lors de l’enregistrement du tampon."
                 appState.showError(scanError ?? "Erreur")
             }
-            return false
+            return nil
+        }
+    }
+
+    private func redeemStampRewardFromScan(slug: String, barcode: String) async -> RedeemResponse? {
+        isStampVisitSubmitting = true
+        defer { Task { @MainActor in isStampVisitSubmitting = false } }
+        do {
+            let response = try await APIClient.shared.request(.redeemReward(slug: slug, memberId: barcode, type: .stamps)) as RedeemResponse
+            await syncService.syncAfterServerMutation()
+            return response
+        } catch {
+            await MainActor.run {
+                scanError = (error as? APIError)?.errorDescription ?? "Impossible d'utiliser la recompense."
+                appState.showError(scanError ?? "Erreur")
+            }
+            return nil
         }
     }
 
@@ -1097,8 +1683,10 @@ private struct RecipientCategoryChip: View {
 }
 
 #Preview {
-    DashboardView(context: PersistenceController.preview.container.viewContext)
-        .environmentObject(SyncService(container: PersistenceController.preview.container))
-        .environmentObject(AppState.shared)
-        .environmentObject(MainTabRouter())
+    OnBoardingEnvironmentPlaceholder {
+        DashboardView(context: PersistenceController.preview.container.viewContext)
+            .environmentObject(SyncService(container: PersistenceController.preview.container))
+            .environmentObject(AppState.shared)
+            .environmentObject(MainTabRouter())
+    }
 }

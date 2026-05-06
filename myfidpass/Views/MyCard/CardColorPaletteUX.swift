@@ -2,7 +2,7 @@
 //  CardColorPaletteUX.swift
 //  myfidpass
 //
-//  Palettes type Canva : défilement horizontal de pastilles + feuille saturation/teinte/hex.
+//  Pastilles : grille unique `AppVibrantColorPalette` (roue + reste de l’app) + teintes logo (optionnel).
 //
 
 import SwiftUI
@@ -13,7 +13,7 @@ import UIKit
 enum CardColorPaletteUX {
     static func normalizeHex(_ raw: String) -> String {
         let t = raw.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "#", with: "").uppercased()
-        guard t.count == 6, t.allSatisfy(\.isHexDigit) else { return "2563EB" }
+        guard t.count == 6, t.allSatisfy(\.isHexDigit) else { return AppVibrantColorPalette.defaultHex6 }
         return t
     }
 
@@ -37,27 +37,7 @@ enum CardColorPaletteUX {
 // MARK: - Pastilles prédéfinies (scroll large)
 
 enum CardCanvaScrollPresets {
-    /// Identifiants stables pour ForEach (évite collisions si deux teintes identiques).
-    /// **Neutres** (Y → clair) puis **cercle chromatique** (HSL ~0° → 360°, tons type Tailwind), puis **terre** / kaki.
-    /// Réf. : échelle tailwind / Material — ordre = arc-en-ciel lisible, pas aléatoire.
-    static let swatches: [(id: String, hex: String)] = [
-        // Gris (éclairci strict : du noir au blanc, ref. type Tailwind `gray` / sRGB)
-        ("ink", "0A0A0A"), ("n950", "030712"), ("n900", "111827"), ("n800", "1F2937"), ("n700", "374151"),
-        ("n600", "4B5563"), ("n500", "6B7280"), ("n400", "9CA3AF"), ("n200", "E5E7EB"), ("n100", "F3F4F6"), ("n50", "F9FAFB"), ("white", "FFFFFF"),
-        // Gris teintés (froid : ardoise / bleu) puis légèrement chaud, avant le spectre
-        ("navy", "1E3A8A"), ("slate7", "334155"), ("slate5", "64748B"), ("slate3", "CBD5E1"),
-        ("zne7", "3F3F46"), ("zinc5", "71717A"), ("zinc2", "E4E4E7"), ("stn5", "78716C"), ("stn2", "E7E5E4"),
-        // — Spectre (rouge → … → rose) — mêmes familles qu’en UI moderne
-        ("red8", "991B1B"), ("red5", "EF4444"), ("red3", "FCA5A5"),
-        ("rorg6", "EA580C"), ("orange5", "F97316"), ("ambr6", "D97706"), ("ambr5", "F59E0B"), ("ambr2", "FDE68A"),
-        ("yel5", "EAB308"), ("yel3", "FDE047"), ("lme5", "84CC16"), ("lme3", "BEF264"), ("lme1", "ECFCCB"),
-        ("grn6", "16A34A"), ("grn5", "22C55E"), ("emr5", "10B981"), ("emr3", "6EE7B7"), ("teal5", "14B8A6"), ("teal3", "5EEAD4"),
-        ("cya6", "0891B2"), ("cya5", "06B6D4"), ("cya3", "67E8F9"), ("sky5", "0EA5E9"), ("sky3", "7DD3FC"), ("blu6", "2563EB"), ("blu4", "60A5FA"),
-        ("ing6", "4F46E5"), ("ing5", "6366F1"), ("ing3", "A5B4FC"), ("vio6", "7C3AED"), ("vio5", "8B5CF6"), ("vio2", "DDD6FE"),
-        ("pur5", "A855F7"), ("pur2", "E9D5FF"), ("fuc5", "D946EF"), ("fuc2", "F0ABFC"),         ("pik5", "EC4899"), ("pik2", "F9A8D4"), ("rse5", "F43F5E"), ("rse2", "FECDD3"),
-        // Terre / sépia (chaud, après l’arc-en-ciel)
-        ("amb9", "78350F"), ("brn6", "92400E"), ("kki7", "3F6212"),
-    ]
+    static var swatches: [(id: String, hex: String)] { AppVibrantColorPalette.scrollSwatches }
 }
 
 // MARK: - Barre horizontale + bouton précision
@@ -70,8 +50,6 @@ struct CanvaStylePaletteRow: View {
     var compactEmbedded: Bool = false
     /// Anneau de sélection (ex. thème violet carte vs violet studio flyer).
     var selectionRingColor: Color = Color(hex: "7C3AED")
-
-    @State private var showPrecision = false
 
     /// `nil` si aucune couleur explicite (ex. libellés = défaut système).
     private var selectionNorm: String? {
@@ -95,9 +73,16 @@ struct CanvaStylePaletteRow: View {
         return out
     }
 
+    /// Couleur enregistrée hors palette (ex. ancienne donnée) : une pastille pour la conserver ou choisir une teinte de la grille.
+    private var orphanSelectionHex6: String? {
+        guard let s = selectionNorm else { return nil }
+        let preset = Set(CardCanvaScrollPresets.swatches.map { CardColorPaletteUX.normalizeHex($0.hex) })
+        if preset.contains(s) { return nil }
+        if imagePaletteSwatches.contains(s) { return nil }
+        return s
+    }
+
     private var swatchDiameter: CGFloat { compactEmbedded ? 32 : 40 }
-    private var precisionDiameter: CGFloat { compactEmbedded ? 36 : 44 }
-    private var plusIconSize: CGFloat { compactEmbedded ? 15 : 17 }
     private var rowSpacing: CGFloat { compactEmbedded ? 8 : 12 }
     private var horizontalPadding: CGFloat { compactEmbedded ? 2 : 14 }
     private var verticalPadding: CGFloat { compactEmbedded ? 4 : 12 }
@@ -105,7 +90,9 @@ struct CanvaStylePaletteRow: View {
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: rowSpacing) {
-                precisionEntryButton
+                if let o = orphanSelectionHex6 {
+                    swatchButton(fixedHex: o)
+                }
                 ForEach(imagePaletteSwatches, id: \.self) { n in
                     swatchButton(fixedHex: n)
                 }
@@ -117,35 +104,6 @@ struct CanvaStylePaletteRow: View {
             .padding(.vertical, verticalPadding)
         }
         .modifier(CanvaPaletteRowChrome(compactEmbedded: compactEmbedded))
-        .sheet(isPresented: $showPrecision) {
-            CardColorPrecisionSheet(hex: $hex)
-        }
-    }
-
-    private var precisionEntryButton: some View {
-        Button {
-            showPrecision = true
-        } label: {
-            ZStack {
-                Circle()
-                    .fill(
-                        AngularGradient(
-                            gradient: Gradient(colors: [
-                                .red, .yellow, .green, .cyan, .blue, .purple, .red,
-                            ]),
-                            center: .center,
-                            angle: .degrees(-90)
-                        )
-                    )
-                    .frame(width: precisionDiameter, height: precisionDiameter)
-                Image(systemName: "plus")
-                    .font(.system(size: plusIconSize, weight: .bold))
-                    .foregroundStyle(.white)
-                    .shadow(color: .black.opacity(0.35), radius: 1, y: 1)
-            }
-            .accessibilityLabel(Text("Couleur personnalisée"))
-        }
-        .buttonStyle(.plain)
     }
 
     @ViewBuilder
@@ -184,18 +142,20 @@ struct CanvaStylePaletteRow: View {
 struct FlyerAIPriorityPaletteRow: View {
     @Binding var orderedHexes: [String]
     var suggestedFromImages: [String] = []
+    /// Palette imposée (ordre exact) ; `nil` = palette par défaut du composant.
+    var customSwatches: [String]? = nil
     var compactEmbedded: Bool = false
     var selectionRingColor: Color = Color(hex: "7C3AED")
     /// Nombre max de couleurs sélectionnées (l’API flyer utilise surtout la 1re comme accent).
     var maxSlots: Int = 1
+    /// Ouvre une feuille simple `ColorPicker`.
+    var showPrecisionColorPlus: Bool = true
 
-    @State private var showPrecision = false
-    @State private var precisionScratchHex = "#FFFFFF"
     @State private var dropHoverHex: String?
+    @State private var precisionSheetOpen = false
+    @State private var precisionPicked: Color = Color(red: 1, green: 0, blue: 0.4) // resynced à l’ouverture
 
     private var swatchDiameter: CGFloat { compactEmbedded ? 32 : 40 }
-    private var precisionDiameter: CGFloat { compactEmbedded ? 36 : 44 }
-    private var plusIconSize: CGFloat { compactEmbedded ? 15 : 17 }
     private var rowSpacing: CGFloat { compactEmbedded ? 8 : 12 }
     private var horizontalPadding: CGFloat { compactEmbedded ? 2 : 14 }
     private var verticalPadding: CGFloat { compactEmbedded ? 4 : 12 }
@@ -205,7 +165,14 @@ struct FlyerAIPriorityPaletteRow: View {
     }
 
     private var presetNormSet: Set<String> {
-        Set(CardCanvaScrollPresets.swatches.map { CardColorPaletteUX.normalizeHex($0.hex) })
+        Set(baseSwatchHexes.map { CardColorPaletteUX.normalizeHex($0) })
+    }
+
+    private var baseSwatchHexes: [String] {
+        if let customSwatches, !customSwatches.isEmpty {
+            return customSwatches
+        }
+        return CardCanvaScrollPresets.swatches.map(\.hex)
     }
 
     private var extraLogoSwatches: [String] {
@@ -220,6 +187,20 @@ struct FlyerAIPriorityPaletteRow: View {
         return out.sorted { CardColorPaletteUX.relativeLuminance01(hex6: $0) < CardColorPaletteUX.relativeLuminance01(hex6: $1) }
     }
 
+    /// Couleurs encore choisies mais absentes de la grille (données existantes).
+    private var legacyOrderedNotInPreset: [String] {
+        let preset = Set(baseSwatchHexes.map { CardColorPaletteUX.normalizeHex($0) })
+        let extra = Set(extraLogoSwatches.map { CardColorPaletteUX.normalizeHex($0) })
+        var out: [String] = []
+        for canon in normalizedOrdered {
+            let n = CardColorPaletteUX.normalizeHex(canon.replacingOccurrences(of: "#", with: ""))
+            if !preset.contains(n), !extra.contains(n), !out.contains(canon) {
+                out.append(canon)
+            }
+        }
+        return out
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: maxSlots > 1 ? 12 : 8) {
             if maxSlots > 1 {
@@ -227,9 +208,14 @@ struct FlyerAIPriorityPaletteRow: View {
             }
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: rowSpacing) {
-                    precisionEntryButton
-                    ForEach(CardCanvaScrollPresets.swatches, id: \.id) { item in
-                        swatchButton(fixedHex: item.hex)
+                    if showPrecisionColorPlus {
+                        precisionPlusButton
+                    }
+                    ForEach(legacyOrderedNotInPreset, id: \.self) { canon in
+                        swatchButton(fixedHex: canon)
+                    }
+                    ForEach(baseSwatchHexes, id: \.self) { hex in
+                        swatchButton(fixedHex: hex)
                     }
                     ForEach(extraLogoSwatches, id: \.self) { n in
                         swatchButton(fixedHex: n)
@@ -239,13 +225,6 @@ struct FlyerAIPriorityPaletteRow: View {
                 .padding(.vertical, verticalPadding)
             }
             .modifier(CanvaPaletteRowChrome(compactEmbedded: compactEmbedded))
-        }
-        .sheet(isPresented: $showPrecision) {
-            CardColorPrecisionSheet(hex: $precisionScratchHex, onCommit: {
-                if let c = Self.canonHex(precisionScratchHex) {
-                    promote(c)
-                }
-            })
         }
     }
 
@@ -325,42 +304,108 @@ struct FlyerAIPriorityPaletteRow: View {
         }
     }
 
-    private var precisionEntryButton: some View {
-        Button {
-            precisionScratchHex = normalizedOrdered.first ?? "#FF6B9D"
-            showPrecision = true
+    /// Taille de case fixe : la sélection ne grossit pas la pastille (seulement contour renforcé).
+    private var swatchSlotSize: CGFloat { swatchDiameter + 10 }
+
+    private var precisionPlusButton: some View {
+        let outer: CGFloat = swatchDiameter + 4
+        return Button {
+            syncPrecisionColorFromSelection()
+            precisionSheetOpen = true
         } label: {
             ZStack {
                 Circle()
-                    .fill(
-                        AngularGradient(
-                            gradient: Gradient(colors: [
-                                .red, .yellow, .green, .cyan, .blue, .purple, .red,
-                            ]),
-                            center: .center,
-                            angle: .degrees(-90)
-                        )
-                    )
-                    .frame(width: precisionDiameter, height: precisionDiameter)
+                    .fill(Color.white.opacity(0.08))
+                    .frame(width: swatchDiameter, height: swatchDiameter)
+                Circle()
+                    .strokeBorder(Color.white.opacity(0.28), style: StrokeStyle(lineWidth: 1.2, dash: [4, 3]))
+                    .frame(width: outer, height: outer)
                 Image(systemName: "plus")
-                    .font(.system(size: plusIconSize, weight: .bold))
-                    .foregroundStyle(.white)
-                    .shadow(color: .black.opacity(0.35), radius: 1, y: 1)
+                    .font(.system(size: compactEmbedded ? 14 : 16, weight: .bold))
+                    .foregroundStyle(Color.white.opacity(0.85))
             }
-            .accessibilityLabel(Text("Couleur personnalisée"))
+            .frame(width: swatchSlotSize, height: swatchSlotSize)
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(Text("Choisir une couleur précise"))
+        .sheet(isPresented: $precisionSheetOpen) {
+            VStack(spacing: 22) {
+                Capsule()
+                    .fill(Color.primary.opacity(0.18))
+                    .frame(width: 42, height: 5)
+                    .padding(.top, 8)
+
+                Text("Choisir une couleur")
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(.primary)
+
+                ColorPicker("", selection: $precisionPicked, supportsOpacity: false)
+                    .labelsHidden()
+                    .scaleEffect(1.18)
+                    .padding(.vertical, 10)
+
+                HStack(spacing: 12) {
+                    Button {
+                        precisionSheetOpen = false
+                    } label: {
+                        Text("Annuler")
+                            .font(.body.weight(.semibold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 13)
+                    }
+                    .buttonStyle(.plain)
+                    .background(Color.primary.opacity(0.08), in: Capsule())
+
+                    Button {
+                        let h = precisionPicked.toHexRGBString()
+                        promote(h)
+                        precisionSheetOpen = false
+                    } label: {
+                        Text("Valider")
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 13)
+                    }
+                    .buttonStyle(.plain)
+                    .background(Color.black, in: Capsule())
+                }
+                .padding(.horizontal, 18)
+            }
+            .padding(.bottom, 18)
+            .presentationDetents([.height(230)])
+            .presentationDragIndicator(.hidden)
+        }
     }
 
-    /// Taille de case fixe : la sélection ne grossit pas la pastille (seulement contour renforcé).
-    private var swatchSlotSize: CGFloat { swatchDiameter + 10 }
+    private func syncPrecisionColorFromSelection() {
+        if let f = normalizedOrdered.first {
+            let u = f.replacingOccurrences(of: "#", with: "")
+            if u.count == 6, u.allSatisfy({ $0.isHexDigit }) {
+                precisionPicked = Color(hex: u)
+                return
+            }
+        }
+        if let h = baseSwatchHexes.first {
+            let u = h.replacingOccurrences(of: "#", with: "")
+            if u.count == 6, u.allSatisfy({ $0.isHexDigit }) {
+                precisionPicked = Color(hex: u)
+            }
+        }
+    }
+
+    /// Bord cranté visible sur blanc / gris très clair.
+    private static func isLightSwatchBackground(_ norm: String) -> Bool {
+        let s = Set(["FFFFFF", "F5F5F7", "F5F5F5", "FAFAFA", "F0F0F0", "E8E8ED", "D1D1D6"])
+        return s.contains(norm.uppercased())
+    }
 
     @ViewBuilder
     private func swatchButton(fixedHex: String) -> some View {
         let norm = CardColorPaletteUX.normalizeHex(fixedHex)
         let canon = "#" + norm
         let selected = normalizedOrdered.contains(canon)
-        let isWhite = norm == "FFFFFF"
+        let isLight = Self.isLightSwatchBackground(norm)
         let ringW: CGFloat = selected ? 3 : 1.25
         Button {
             if selected {
@@ -383,7 +428,7 @@ struct FlyerAIPriorityPaletteRow: View {
                         .frame(width: swatchDiameter + 5, height: swatchDiameter + 5)
                 }
                 Circle()
-                    .strokeBorder(swatchRing(isWhite: isWhite, selected: selected), lineWidth: ringW)
+                    .strokeBorder(swatchRing(isLight: isLight, selected: selected), lineWidth: ringW)
                     .frame(width: swatchDiameter + (selected ? 7 : 4), height: swatchDiameter + (selected ? 7 : 4))
             }
             .frame(width: swatchSlotSize, height: swatchSlotSize)
@@ -398,9 +443,9 @@ struct FlyerAIPriorityPaletteRow: View {
         )
     }
 
-    private func swatchRing(isWhite: Bool, selected: Bool) -> Color {
+    private func swatchRing(isLight: Bool, selected: Bool) -> Color {
         if selected { return selectionRingColor }
-        if isWhite { return Color.black.opacity(0.14) }
+        if isLight { return Color.black.opacity(0.16) }
         return Color.black.opacity(0.08)
     }
 
@@ -462,14 +507,15 @@ struct FlyerAIColorFieldCarousel: View {
     var selectionRingColor: Color = Color(hex: "7C3AED")
     var compactEmbedded: Bool = true
 
-    @State private var ordered: [String] = ["#2563EB"]
+    @State private var ordered: [String] = ["#304FFE"]
 
     var body: some View {
         FlyerAIPriorityPaletteRow(
             orderedHexes: $ordered,
             compactEmbedded: compactEmbedded,
             selectionRingColor: selectionRingColor,
-            maxSlots: 1
+            maxSlots: 1,
+            showPrecisionColorPlus: true
         )
         .onAppear(perform: pullFromHex)
         .onChange(of: hex) { _, _ in pullFromHex() }
@@ -479,7 +525,7 @@ struct FlyerAIColorFieldCarousel: View {
                 let t = f.trimmingCharacters(in: .whitespacesAndNewlines)
                 if t.hasPrefix("#"), t.count == 7 { return t.uppercased() }
                 let u = t.replacingOccurrences(of: "#", with: "").uppercased()
-                guard u.count == 6, u.count == u.filter(\.isHexDigit).count else { return "#2563EB" }
+                guard u.count == 6, u.count == u.filter(\.isHexDigit).count else { return "#304FFE" }
                 return "#" + u
             }()
             if withHash.uppercased() != hex.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() {
@@ -495,7 +541,7 @@ struct FlyerAIColorFieldCarousel: View {
             withHash = t.uppercased()
         } else {
             let u = t.replacingOccurrences(of: "#", with: "").uppercased()
-            withHash = (u.count == 6 && u.allSatisfy(\.isHexDigit)) ? "#\(u)" : "#2563EB"
+            withHash = (u.count == 6 && u.allSatisfy(\.isHexDigit)) ? "#\(u)" : "#304FFE"
         }
         if ordered != [withHash] {
             ordered = [withHash]
@@ -521,299 +567,6 @@ private struct CanvaPaletteRowChrome: ViewModifier {
                 )
                 .shadow(color: Color.black.opacity(0.07), radius: 10, x: 0, y: 4)
         }
-    }
-}
-
-// MARK: - Feuille précision (carré SB + teinte + hex)
-
-struct CardColorPrecisionSheet: View {
-    @Binding var hex: String
-    /// Appelé après validation OK (après écriture dans `hex`).
-    var onCommit: (() -> Void)? = nil
-    @Environment(\.dismiss) private var dismiss
-
-    @State private var hue: Double = 0.65
-    @State private var saturation: Double = 1
-    @State private var brightness: Double = 1
-    @State private var hexInput: String = "#FFFFFF"
-    @State private var didLoad = false
-
-    private var composedColor: Color {
-        Color(hue: hue, saturation: saturation, brightness: brightness)
-    }
-
-    private var titleLabel: String {
-        if saturation < 0.08 {
-            if brightness > 0.92 { return "Blanc" }
-            if brightness < 0.08 { return "Noir" }
-            if brightness < 0.42 { return "Gris foncé" }
-            return "Gris"
-        }
-        let deg = Int((hue * 360).truncatingRemainder(dividingBy: 360))
-        switch deg {
-        case 0..<18, 342...360: return "Rouge"
-        case 18..<45: return "Orange"
-        case 45..<70: return "Jaune"
-        case 70..<165: return "Vert"
-        case 165..<200: return "Cyan"
-        case 200..<260: return "Bleu"
-        case 260..<290: return "Violet"
-        case 290..<342: return "Rose"
-        default: return "Couleur"
-        }
-    }
-
-    var body: some View {
-        NavigationStack {
-            VStack(spacing: 14) {
-                HStack {
-                    if #available(iOS 26.0, *) {
-                        Button {
-                            dismiss()
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .symbolRenderingMode(.hierarchical)
-                        }
-                        .buttonStyle(.glass(.regular))
-                        .buttonBorderShape(.capsule)
-                        .controlSize(.regular)
-                        .accessibilityLabel(Text("Fermer"))
-                    } else {
-                        Button {
-                            dismiss()
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .symbolRenderingMode(.hierarchical)
-                                .foregroundStyle(AppTheme.Colors.textSecondary)
-                        }
-                        .accessibilityLabel(Text("Fermer"))
-                    }
-                    Spacer(minLength: 0)
-                    if #available(iOS 26.0, *) {
-                        Button("OK") {
-                            commitToBinding()
-                            onCommit?()
-                            dismiss()
-                        }
-                        .buttonStyle(.glass(.regular))
-                        .buttonBorderShape(.capsule)
-                        .controlSize(.regular)
-                        .tint(AppTheme.Colors.primary)
-                    } else {
-                        Button("OK") {
-                            commitToBinding()
-                            onCommit?()
-                            dismiss()
-                        }
-                        .font(.subheadline.weight(.semibold))
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
-                        .background(.ultraThinMaterial, in: Capsule())
-                        .overlay(Capsule().strokeBorder(Color.white.opacity(0.28), lineWidth: 1))
-                    }
-                }
-
-                Text(titleLabel)
-                    .font(.headline.weight(.semibold))
-                    .foregroundStyle(AppTheme.Colors.textPrimary)
-
-                saturationBrightnessField
-                    .frame(height: 140)
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .strokeBorder(Color.black.opacity(0.08), lineWidth: 1)
-                    )
-
-                hueSlider
-                    .frame(height: 32)
-
-                hexAndPickerRow
-            }
-            .padding(.horizontal, AppTheme.Spacing.lg)
-            .padding(.top, 4)
-            .padding(.bottom, 16)
-            .background(AppTheme.Colors.background)
-            .sheetHideNavigationBar()
-        }
-        .presentationDetents([.height(380), .medium])
-        .presentationDragIndicator(.hidden)
-        .onAppear {
-            guard !didLoad else { return }
-            didLoad = true
-            loadFromBinding()
-        }
-    }
-
-    private var saturationBrightnessField: some View {
-        GeometryReader { geo in
-            let w = geo.size.width
-            let h = geo.size.height
-            ZStack(alignment: .topLeading) {
-                ZStack {
-                    LinearGradient(
-                        colors: [.white, Color(hue: hue, saturation: 1, brightness: 1)],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                    LinearGradient(
-                        colors: [.clear, .black],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                }
-                .contentShape(Rectangle())
-                .gesture(
-                    DragGesture(minimumDistance: 0)
-                        .onChanged { g in
-                            let x = min(max(0, g.location.x / w), 1)
-                            let y = min(max(0, g.location.y / h), 1)
-                            saturation = x
-                            brightness = 1 - y
-                            syncHexFromHSB()
-                        }
-                )
-
-                Circle()
-                    .strokeBorder(Color.white, lineWidth: 2)
-                    .shadow(color: .black.opacity(0.35), radius: 2, y: 1)
-                    .frame(width: 22, height: 22)
-                    .background(Circle().fill(composedColor))
-                    .position(
-                        x: CGFloat(saturation) * w,
-                        y: CGFloat(1 - brightness) * h
-                    )
-                    .allowsHitTesting(false)
-            }
-        }
-    }
-
-    private var hueSlider: some View {
-        GeometryReader { geo in
-            let w = geo.size.width
-            let thumb: CGFloat = 26
-            ZStack(alignment: .leading) {
-                LinearGradient(
-                    colors: [
-                        Color(hue: 0, saturation: 1, brightness: 1),
-                        Color(hue: 0.15, saturation: 1, brightness: 1),
-                        Color(hue: 0.3, saturation: 1, brightness: 1),
-                        Color(hue: 0.45, saturation: 1, brightness: 1),
-                        Color(hue: 0.6, saturation: 1, brightness: 1),
-                        Color(hue: 0.75, saturation: 1, brightness: 1),
-                        Color(hue: 0.9, saturation: 1, brightness: 1),
-                        Color(hue: 1, saturation: 1, brightness: 1),
-                    ],
-                    startPoint: .leading,
-                    endPoint: .trailing
-                )
-                .clipShape(Capsule())
-                .overlay(
-                    Capsule()
-                        .strokeBorder(Color.black.opacity(0.12), lineWidth: 1)
-                )
-                .contentShape(Capsule())
-                .gesture(
-                    DragGesture(minimumDistance: 0)
-                        .onChanged { g in
-                            let x = min(max(0, g.location.x), w)
-                            hue = Double(x / max(w, 1))
-                            syncHexFromHSB()
-                        }
-                )
-
-                Circle()
-                    .fill(Color.white)
-                    .frame(width: thumb, height: thumb)
-                    .shadow(color: .black.opacity(0.2), radius: 3, y: 1)
-                    .overlay(Circle().strokeBorder(Color.black.opacity(0.15), lineWidth: 1))
-                    .offset(x: CGFloat(hue) * max(w - thumb, 1))
-                    .allowsHitTesting(false)
-            }
-        }
-    }
-
-    private var hexAndPickerRow: some View {
-        HStack(spacing: 12) {
-            Circle()
-                .fill(composedColor)
-                .frame(width: 40, height: 40)
-                .overlay(Circle().strokeBorder(Color.black.opacity(0.1), lineWidth: 1))
-
-            TextField("#RRGGBB", text: $hexInput)
-                .textFieldStyle(.plain)
-                .font(.system(.body, design: .monospaced))
-                .textInputAutocapitalization(.characters)
-                .autocorrectionDisabled()
-                .padding(.horizontal, 14)
-                .padding(.vertical, 12)
-                .background(AppTheme.Colors.cardBackground)
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .strokeBorder(AppTheme.Colors.textSecondary.opacity(0.15), lineWidth: 1)
-                )
-                .onChange(of: hexInput) { _, new in
-                    applyHexInput(new)
-                }
-        }
-    }
-
-    private func loadFromBinding() {
-        let raw = hex.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "#", with: "").uppercased()
-        let norm: String
-        if raw.count == 6, raw.range(of: "^[0-9A-F]{6}$", options: .regularExpression) != nil {
-            norm = raw
-        } else {
-            norm = "FFFFFF"
-        }
-        let ui = UIColor(Color(hex: norm))
-        var h: CGFloat = 0, s: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
-        if ui.getHue(&h, saturation: &s, brightness: &b, alpha: &a) {
-            hue = Double(h)
-            saturation = Double(s)
-            brightness = Double(b)
-        } else {
-            var w: CGFloat = 0
-            ui.getWhite(&w, alpha: &a)
-            hue = 0
-            saturation = 0
-            brightness = Double(w)
-        }
-        hexInput = "#" + norm
-    }
-
-    private func syncHexFromHSB() {
-        let out = composedColor.toHexRGBString()
-        hexInput = out
-        hex = out
-    }
-
-    private func applyHexInput(_ raw: String) {
-        let cleaned = raw.replacingOccurrences(of: "#", with: "").uppercased()
-        guard cleaned.count == 6, isValidHex6(cleaned) else { return }
-        let ui = UIColor(Color(hex: cleaned))
-        var h: CGFloat = 0, s: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
-        if ui.getHue(&h, saturation: &s, brightness: &b, alpha: &a) {
-            hue = Double(h)
-            saturation = Double(s)
-            brightness = Double(b)
-        } else {
-            var w: CGFloat = 0
-            ui.getWhite(&w, alpha: &a)
-            hue = 0
-            saturation = 0
-            brightness = Double(w)
-        }
-        hex = "#" + cleaned
-    }
-
-    private func commitToBinding() {
-        hex = composedColor.toHexRGBString()
-    }
-
-    private func isValidHex6(_ s: String) -> Bool {
-        s.range(of: "^[0-9A-F]{6}$", options: .regularExpression) != nil
     }
 }
 

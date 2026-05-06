@@ -10,6 +10,12 @@ import AuthenticationServices
 import SwiftUI
 import UIKit
 
+/// Connexion ou inscription (libellé du bouton Apple + scopes métier côté `AuthService`).
+enum SocialSignInIntent {
+    case signIn
+    case signUp
+}
+
 struct AppleSignInRow: View {
     @Environment(\.colorScheme) private var colorScheme
     var intent: SocialSignInIntent
@@ -20,6 +26,12 @@ struct AppleSignInRow: View {
     var onAuthorization: (Result<ASAuthorization, Error>) -> Void
 
     private let minHeight: CGFloat = 52
+    private var accessibilityIdleLabel: String {
+        intent == .signUp ? "Créer avec Apple" : "Continuer avec Apple"
+    }
+    private var accessibilityLoadingLabel: String {
+        intent == .signUp ? "Inscription Apple en cours" : "Connexion Apple en cours"
+    }
 
     var body: some View {
         ZStack {
@@ -48,7 +60,7 @@ struct AppleSignInRow: View {
         }
         .disabled(isLoading)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(isLoading ? "Connexion Apple en cours" : "Continuer avec Apple")
+        .accessibilityLabel(isLoading ? accessibilityLoadingLabel : accessibilityIdleLabel)
         .accessibilityHint("Authentification sécurisée avec votre identifiant Apple.")
     }
 }
@@ -94,6 +106,8 @@ private struct AppleSignInUIKitRepresentable: UIViewRepresentable {
 
 private final class Coordinator: NSObject, ASAuthorizationControllerDelegate, ASAuthorizationControllerPresentationContextProviding {
     var onAuthorization: (Result<ASAuthorization, Error>) -> Void
+    // Retenu explicitement : sans ça ARC désalloue le controller avant le callback (iPad / cold-start).
+    private var pendingController: ASAuthorizationController?
 
     init(onAuthorization: @escaping (Result<ASAuthorization, Error>) -> Void) {
         self.onAuthorization = onAuthorization
@@ -106,6 +120,7 @@ private final class Coordinator: NSObject, ASAuthorizationControllerDelegate, AS
         let controller = ASAuthorizationController(authorizationRequests: [request])
         controller.delegate = self
         controller.presentationContextProvider = self
+        pendingController = controller   // ← retain : évite la désallocation avant callback
         controller.performRequests()
     }
 
@@ -114,10 +129,12 @@ private final class Coordinator: NSObject, ASAuthorizationControllerDelegate, AS
     }
 
     func authorizationController(controller: ASAuthorizationController, didCompleteWithAuthorization authorization: ASAuthorization) {
+        pendingController = nil
         deliver(.success(authorization))
     }
 
     func authorizationController(controller: ASAuthorizationController, didCompleteWithError error: Error) {
+        pendingController = nil
         deliver(.failure(error))
     }
 

@@ -7,11 +7,19 @@
 
 import SwiftUI
 import Combine
+import UIKit
 
 // MARK: - Étapes du parcours commerçant
 
 private enum MerchantOBStep: Int, CaseIterable {
     case establishmentSearch = 0
+}
+
+private struct MerchantOBEstablishment: Codable, Equatable {
+    let placeId: String
+    let description: String
+    let mainText: String
+    let secondaryText: String?
 }
 
 @MainActor
@@ -22,6 +30,7 @@ private final class MerchantOBViewModel: ObservableObject {
     @Published var selectedPlaceId: String?
     @Published var selectedPlaceDescription: String?
     @Published var relaxEstablishmentRequirement = false
+    @Published var selectedEstablishments: [MerchantOBEstablishment] = []
 
     let flowStepCount: Int = MerchantOBStep.allCases.count
 
@@ -40,21 +49,53 @@ private final class MerchantOBViewModel: ObservableObject {
     func canContinue(for step: MerchantOBStep) -> Bool {
         switch step {
         case .establishmentSearch:
-            return selectedPlaceId != nil
+            return selectedPlaceId != nil || !selectedEstablishments.isEmpty || relaxEstablishmentRequirement
         }
     }
 
     func persistSelectionsToUserDefaults() {
         let d = UserDefaults.standard
-        if let pid = selectedPlaceId?.trimmingCharacters(in: .whitespacesAndNewlines), !pid.isEmpty {
-            d.set(pid, forKey: "myfidpass.ob.placeId")
+        var establishmentsToPersist = selectedEstablishments
+        if let pidRaw = selectedPlaceId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           let descRaw = selectedPlaceDescription?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !pidRaw.isEmpty, !descRaw.isEmpty,
+           !establishmentsToPersist.contains(where: { $0.placeId == pidRaw }) {
+            establishmentsToPersist.append(
+                MerchantOBEstablishment(
+                    placeId: pidRaw,
+                    description: descRaw,
+                    mainText: descRaw.split(separator: ",", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? descRaw,
+                    secondaryText: nil
+                )
+            )
         }
-        if let desc = selectedPlaceDescription?.trimmingCharacters(in: .whitespacesAndNewlines), !desc.isEmpty {
+        if let first = establishmentsToPersist.first {
+            d.set(first.placeId, forKey: "myfidpass.ob.placeId")
+            d.set(first.description, forKey: "myfidpass.ob.placeDescription")
+            if let data = try? JSONEncoder().encode(establishmentsToPersist),
+               let raw = String(data: data, encoding: .utf8) {
+                d.set(raw, forKey: "myfidpass.ob.establishments")
+            }
+            MerchantLinkedPlaceCache.save(placeId: first.placeId, description: first.description)
+        } else if let pid = selectedPlaceId?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  let desc = selectedPlaceDescription?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !pid.isEmpty, !desc.isEmpty {
+            d.set(pid, forKey: "myfidpass.ob.placeId")
             d.set(desc, forKey: "myfidpass.ob.placeDescription")
+            d.removeObject(forKey: "myfidpass.ob.establishments")
+            MerchantLinkedPlaceCache.save(placeId: pid, description: desc)
+        } else {
+            d.removeObject(forKey: "myfidpass.ob.placeId")
+            d.removeObject(forKey: "myfidpass.ob.placeDescription")
+            d.removeObject(forKey: "myfidpass.ob.establishments")
         }
         d.set(relaxEstablishmentRequirement, forKey: "myfidpass.ob.relaxPlaceRequirement")
-        if let pid = selectedPlaceId?.trimmingCharacters(in: .whitespacesAndNewlines), !pid.isEmpty {
-            MerchantLinkedPlaceCache.save(placeId: pid, description: selectedPlaceDescription)
+        let snap = FirstLaunchOnboarding.readPendingEstablishment()
+        if let pid = snap.placeId?.trimmingCharacters(in: .whitespacesAndNewlines), !pid.isEmpty,
+           let name = snap.description?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
+            FirstLaunchOnboarding.persistSignupCommerceDraftBackup(placeId: pid, establishmentName: name)
+        } else {
+            FirstLaunchOnboarding.clearSignupCommerceDraftBackup()
         }
     }
 }
@@ -68,6 +109,8 @@ struct MyfidpassMerchantOnboardingRootView: View {
 
     @StateObject private var viewModel = MerchantOBViewModel()
     @StateObject private var hapticManager = HapticManager.shared
+    @State private var keyboardHeight: CGFloat = 0
+    @State private var isEstablishmentPredictionsVisible = false
 
     private var step: MerchantOBStep {
         MerchantOBStep(rawValue: viewModel.currentStep) ?? .establishmentSearch
@@ -82,11 +125,11 @@ struct MyfidpassMerchantOnboardingRootView: View {
     }
 
     private var shouldShowBackButton: Bool {
-        viewModel.currentStep > 0
+        viewModel.currentStep > 0 || onAlreadyHaveAccount != nil
     }
 
     private var shouldShowGlobalContinue: Bool {
-        step == .establishmentSearch
+        step == .establishmentSearch && !isEstablishmentPredictionsVisible
     }
 
     private var canContinueNow: Bool {
@@ -99,6 +142,9 @@ struct MyfidpassMerchantOnboardingRootView: View {
                 .ignoresSafeArea(.all)
                 .allowsHitTesting(false)
 
+            // Derrière le contenu : sinon le dégradé recouvre l’UI et les cartes (ex. propositions) paraissent transparentes.
+            processAnimatedGlow
+
             VStack(spacing: 0) {
                 Group {
                     stepContent(for: step)
@@ -109,6 +155,7 @@ struct MyfidpassMerchantOnboardingRootView: View {
                 .animation(.onboardingTransition, value: viewModel.currentStep)
                 .id("onboarding_content_\(viewModel.currentStep)")
             }
+            .zIndex(0)
 
             if shouldShowGlobalContinue {
                 VStack {
@@ -117,37 +164,24 @@ struct MyfidpassMerchantOnboardingRootView: View {
                     Button(action: handleContinueTap) {
                         Text("CONTINUER")
                             .font(.system(size: 20, weight: .black))
+                            .foregroundStyle(.white)
                             .transition(.opacity.combined(with: .scale(scale: 0.9)))
                             .frame(maxWidth: .infinity)
                             .frame(height: 50)
                     }
-                    .glassStyle()
                     .buttonBorderShape(.roundedRectangle(radius: 50))
-                    .tint(.primary)
+                    .liquidGlassButtonAppearance(.regularTint(LiquidGlassNativeTint.darkRegular), cornerRadius: 50)
                     .padding(.horizontal, 40)
                     .disabled(!canContinueNow)
                     .opacity(canContinueNow ? 1.0 : 0.5)
                     .allowsHitTesting(canContinueNow)
 
-                    if let skipToLogin = onAlreadyHaveAccount {
-                        Button {
-                            hapticManager.impact(.light)
-                            skipToLogin()
-                        } label: {
-                            Text("J’ai déjà un compte")
-                                .font(.system(size: 16, weight: .semibold))
-                                .foregroundStyle(AppTheme.Colors.textSecondary)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 12)
-                        }
-                        .buttonStyle(.plain)
-                        .padding(.top, 6)
-                    }
-
                     Spacer()
-                        .frame(height: continueButtonBottomOffset)
+                        .frame(height: continueButtonsBottomInset)
                 }
                 .animation(.onboardingTransition, value: viewModel.currentStep)
+                .animation(.easeOut(duration: 0.2), value: keyboardHeight)
+                .zIndex(1)
             }
 
             if shouldShowFullProcessHeader {
@@ -160,11 +194,11 @@ struct MyfidpassMerchantOnboardingRootView: View {
                             }) {
                                 Image(systemName: "chevron.left")
                                     .font(.system(size: 13, weight: .semibold))
-                                    .foregroundStyle(AppTheme.Colors.textPrimary.opacity(0.85))
+                                    .foregroundStyle(.white)
                                     .frame(width: 34, height: 34)
                             }
-                            .glassStyle()
                             .buttonBorderShape(.circle)
+                            .liquidGlassButtonAppearance(.regularTint(LiquidGlassNativeTint.darkRegular), cornerRadius: 17)
                         } else {
                             Spacer()
                                 .frame(width: 34, height: 34)
@@ -186,12 +220,23 @@ struct MyfidpassMerchantOnboardingRootView: View {
 
                     Spacer()
                 }
+                .zIndex(3)
             }
-
-            processAnimatedGlow
         }
         .ignoresSafeArea(.all)
         .preferredColorScheme(.light)
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { note in
+            guard
+                let userInfo = note.userInfo,
+                let endFrame = userInfo[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect
+            else { return }
+            let screenH = UIScreen.main.bounds.height
+            let overlap = max(0, screenH - endFrame.origin.y)
+            keyboardHeight = overlap
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            keyboardHeight = 0
+        }
     }
 
     private var processAnimatedGlow: some View {
@@ -212,6 +257,13 @@ struct MyfidpassMerchantOnboardingRootView: View {
     }
 
     private var continueButtonBottomOffset: CGFloat { 50 }
+    private var continueButtonsBottomInset: CGFloat {
+        if keyboardHeight > 0 {
+            // Place les actions juste au-dessus du clavier.
+            return max(10, keyboardHeight + 6)
+        }
+        return continueButtonBottomOffset
+    }
 
     private func handleContinueTap() {
         guard canContinueNow else { return }
@@ -223,7 +275,10 @@ struct MyfidpassMerchantOnboardingRootView: View {
     }
 
     private func goBack() {
-        guard viewModel.currentStep > 0 else { return }
+        if viewModel.currentStep == 0 {
+            onAlreadyHaveAccount?()
+            return
+        }
         viewModel.visitedSteps.removeAll { $0 == viewModel.currentStep }
         withAnimation(.onboardingTransition) {
             viewModel.currentStep -= 1
@@ -246,7 +301,9 @@ struct MyfidpassMerchantOnboardingRootView: View {
             MerchantOBEstablishmentSearchContent(
                 selectedPlaceId: $viewModel.selectedPlaceId,
                 selectedDescription: $viewModel.selectedPlaceDescription,
-                relaxRequirement: $viewModel.relaxEstablishmentRequirement
+                relaxRequirement: $viewModel.relaxEstablishmentRequirement,
+                selectedEstablishments: $viewModel.selectedEstablishments,
+                isPredictionsVisible: $isEstablishmentPredictionsVisible
             )
         }
     }
@@ -258,6 +315,9 @@ private struct MerchantOBEstablishmentSearchContent: View {
     @Binding var selectedPlaceId: String?
     @Binding var selectedDescription: String?
     @Binding var relaxRequirement: Bool
+    @Binding var selectedEstablishments: [MerchantOBEstablishment]
+    @Binding var isPredictionsVisible: Bool
+    @State private var addCommerceRequestToken: Int = 0
 
     var body: some View {
         ZStack {
@@ -271,14 +331,88 @@ private struct MerchantOBEstablishmentSearchContent: View {
                     )
 
                 ScrollView(showsIndicators: false) {
-                    GoogleEstablishmentPicker(
-                        selectedPlaceId: $selectedPlaceId,
-                        selectedDescription: $selectedDescription,
-                        relaxRequirement: $relaxRequirement,
-                        compactIntro: true,
-                        processEstablishmentStyle: true
-                    )
-                    .padding(.horizontal, 16)
+                    VStack(spacing: 0) {
+                        GoogleEstablishmentPicker(
+                            selectedPlaceId: $selectedPlaceId,
+                            selectedDescription: $selectedDescription,
+                            relaxRequirement: $relaxRequirement,
+                            compactIntro: true,
+                            processEstablishmentStyle: true,
+                            onAddSelectedCommerce: { placeId, description, mainText, secondaryText in
+                                let normalized = placeId.trimmingCharacters(in: .whitespacesAndNewlines)
+                                guard !normalized.isEmpty else { return false }
+                                if selectedEstablishments.contains(where: { $0.placeId == normalized }) {
+                                    return false
+                                }
+                                selectedEstablishments.append(
+                                    MerchantOBEstablishment(
+                                        placeId: normalized,
+                                        description: description,
+                                        mainText: mainText,
+                                        secondaryText: secondaryText
+                                    )
+                                )
+                                return true
+                            },
+                            alreadyAddedPlaceIds: Set(selectedEstablishments.map(\.placeId)),
+                            addCommerceRequestToken: addCommerceRequestToken,
+                            onPredictionsVisibilityChanged: { visible in
+                                isPredictionsVisible = visible
+                            }
+                        )
+                        .padding(.horizontal, 16)
+
+                        if !selectedEstablishments.isEmpty && !isPredictionsVisible {
+                            VStack(spacing: 10) {
+                                ForEach(Array(selectedEstablishments.enumerated()), id: \.element.placeId) { _, item in
+                                    GroupedSettingsCard {
+                                        HStack(alignment: .top, spacing: 12) {
+                                            GroupedSettingsIconBox(systemName: "building.2")
+                                            VStack(alignment: .leading, spacing: 4) {
+                                                Text(item.mainText)
+                                                    .font(.body.weight(.semibold))
+                                                    .foregroundStyle(Color(UIColor.label))
+                                                if let sub = item.secondaryText, !sub.isEmpty {
+                                                    Text(sub)
+                                                        .font(.subheadline)
+                                                        .foregroundStyle(Color(UIColor.secondaryLabel))
+                                                }
+                                            }
+                                            Spacer(minLength: 10)
+                                        }
+                                        .padding(.horizontal, GroupedSettingsMetrics.horizontalPadding)
+                                        .padding(.vertical, GroupedSettingsMetrics.rowVerticalPadding)
+                                    }
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: GroupedSettingsMetrics.cardCornerRadius, style: .continuous)
+                                            .strokeBorder(Color.black.opacity(0.06), lineWidth: 1)
+                                    )
+                                }
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.top, 8)
+                        }
+
+                        if (selectedPlaceId != nil || !selectedEstablishments.isEmpty) && !isPredictionsVisible {
+                            Button {
+                                addCommerceRequestToken += 1
+                            } label: {
+                                HStack(spacing: 8) {
+                                    Image(systemName: "plus.circle")
+                                        .font(.system(size: 14, weight: .semibold))
+                                    Text("Ajouter un commerce")
+                                        .font(.subheadline.weight(.semibold))
+                                }
+                                .foregroundStyle(AppTheme.Colors.textSecondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 6)
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.horizontal, 20)
+                            .padding(.top, 10)
+                        }
+                    }
                     .padding(.bottom, 24)
                 }
             }

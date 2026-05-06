@@ -59,9 +59,6 @@ struct MembersListView: View {
                 .searchable(text: $searchText, prompt: "Nom, email ou identifiant…")
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .myfidpassRemoteSyncDidMerge)) { _ in
-            dataService.bumpRefreshAfterRemoteMerge()
-        }
         .navigationTitle("Membres")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

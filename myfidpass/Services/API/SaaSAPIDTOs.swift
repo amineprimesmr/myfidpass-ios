@@ -356,7 +356,26 @@ struct CheckoutSessionResponse: Decodable {
 }
 
 struct CheckoutSessionPayload: Encodable {
-    let planId: String?
+    /// Aligné sur `POST /api/payment/create-checkout-session` (`req.body.plan`).
+    let plan: String
+}
+
+struct BusinessCheckoutSessionPayload: Encodable {
+    let businessSlug: String
+    let interval: String?
+
+    enum CodingKeys: String, CodingKey {
+        case businessSlug = "business_slug"
+        case interval
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(businessSlug, forKey: .businessSlug)
+        if let interval, !interval.isEmpty {
+            try c.encode(interval, forKey: .interval)
+        }
+    }
 }
 
 struct PaymentReconcileEmptyBody: Encodable {}
@@ -377,6 +396,17 @@ struct AuthRegisterPayload: Encodable {
     let name: String?
     let googlePlaceId: String?
     let establishmentName: String?
+    let establishments: [AuthEstablishmentPayload]?
+}
+
+struct AuthEstablishmentPayload: Encodable {
+    let googlePlaceId: String
+    let establishmentName: String
+
+    enum CodingKeys: String, CodingKey {
+        case googlePlaceId = "google_place_id"
+        case establishmentName = "establishment_name"
+    }
 }
 
 // MARK: - Google Places (onboarding inscription, aligné SaaS)
@@ -438,6 +468,25 @@ struct CreateBusinessResponse: Decodable {
     let slug: String?
     let organizationName: String?
     let dashboardToken: String?
+}
+
+struct CreateBusinessFromPlacePayload: Encodable {
+    let establishmentName: String
+    let googlePlaceId: String
+
+    enum CodingKeys: String, CodingKey {
+        case establishmentName = "establishment_name"
+        case googlePlaceId = "google_place_id"
+    }
+}
+
+struct CreateBusinessFromPlaceResponse: Decodable {
+    let id: String?
+    let name: String?
+    let slug: String?
+    let organizationName: String?
+    let dashboardToken: String?
+    let businesses: [BusinessDTO]?
 }
 
 struct SimpleAPIOKResponse: Decodable {

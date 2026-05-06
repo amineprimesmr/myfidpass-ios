@@ -7,31 +7,34 @@
 
 import SwiftUI
 
-/// Pastille sur l’aperçu : indique où taper pour compléter un élément obligatoire (sans animation continue).
+/// Pastille sur l’aperçu : indique où taper pour compléter un élément obligatoire.
 struct CardPreviewConfiguratorPill: View {
+    @State private var isBlinking = false
+
     var body: some View {
-        HStack(spacing: 0) {
+        HStack(spacing: 5) {
             Image(systemName: "hand.tap.fill")
-                .font(.system(size: 9, weight: .bold))
+                .font(.system(size: 10, weight: .bold))
+            Text("Touchez")
+                .font(.system(size: 10, weight: .bold))
         }
         .foregroundStyle(.white)
-        .padding(.horizontal, 7)
-        .padding(.vertical, 5)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
         .background(
             Capsule(style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [Color(red: 0.95, green: 0.45, blue: 0.1), Color(red: 0.85, green: 0.25, blue: 0.08)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
+                .fill(Color.black.opacity(0.82))
         )
         .overlay(
             Capsule(style: .continuous)
-                .strokeBorder(Color.white.opacity(0.35), lineWidth: 1)
+                .strokeBorder(Color.white.opacity(0.34), lineWidth: 1)
         )
-        .shadow(color: .orange.opacity(0.32), radius: 4, y: 2)
+        .shadow(color: Color.black.opacity(0.35), radius: 8, y: 4)
+        .opacity(isBlinking ? 1 : 0.45)
+        .scaleEffect(isBlinking ? 1 : 0.96)
+        .animation(.easeInOut(duration: 0.75).repeatForever(autoreverses: true), value: isBlinking)
+        .onAppear { isBlinking = true }
+        .onDisappear { isBlinking = false }
     }
 }
 

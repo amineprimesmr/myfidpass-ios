@@ -7,13 +7,15 @@
 //
 
 import SwiftUI
+import UIKit
 
 // MARK: - Même cadrage que `MyCardView.previewSection` (hauteur mini + ombre).
 
 enum DashboardHomeCardChrome {
-    static let previewMinHeight: CGFloat = 438
+    /// La hauteur mini 438 forçait un rendu trop grand sur l'accueil.
+    static let previewMinHeight: CGFloat = 360
     /// Accueil : carte un peu plus compacte que « Ma carte » (pas le même cadrage plein écran).
-    static let homeCardScale: CGFloat = 0.80
+    static let homeCardScale: CGFloat = 0.66
 }
 
 // MARK: - Métriques alignement (scroll + section transactions)
@@ -23,8 +25,6 @@ enum DashboardHomeLayoutMetrics {
     static let scrollHorizontalPadding: CGFloat = 16
     /// Aligné sur le bloc carte (`AppTheme.Spacing.lg`) : même bord gauche/droit, plus d’étroitissement excessif du titre.
     static let transactionsSectionExtraHorizontal: CGFloat = AppTheme.Spacing.lg
-    /// Barre du haut alignée sur ce bloc : scroll + même extra que la section transactions (lg).
-    static var topBarHorizontalInset: CGFloat { scrollHorizontalPadding + transactionsSectionExtraHorizontal }
 }
 
 // MARK: - Pastilles type barre nav / fiche membre (Liquid Glass iOS 26)
@@ -280,69 +280,61 @@ struct FintechHomeLoyaltyCardBlock: View {
     let palette: DashboardRevolutPalette
 
     var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(AppTheme.Colors.shadow)
-                .blur(radius: 18)
-                .offset(y: 6)
-                .opacity(0.4)
-
-            Group {
-                if model.programType == "stamps" {
-                    CafeDesArtsCardPreview(
-                        displayName: model.displayName.isEmpty ? "Ma Carte Fidélité" : model.displayName,
-                        requiredStamps: model.requiredStamps,
-                        stampsCount: model.previewStampsCount,
-                        primaryColorHex: model.primaryHex,
-                        accentColorHex: model.accentHex,
-                        stripColorHex: nil,
-                        logoURL: model.logoURL,
-                        stripDisplayMode: model.stripDisplayMode,
-                        stripText: model.stripText.isEmpty ? nil : model.stripText,
-                        stampEmoji: model.stampEmoji,
-                        cardBackgroundImagePath: CardLogoStorage.resolvedDisplayPath(forStoredPath: model.cardBackgroundImagePath),
-                        cardBackgroundRemoteURL: model.cardBackgroundRemoteURL,
-                        labelColorHex: model.labelHex.trimmingCharacters(in: .whitespaces).isEmpty ? nil : model.labelHex,
-                        headerRightText: model.headerRightText,
-                        memberPreviewText: model.memberPreviewText,
-                        memberColumnTitle: model.memberColumnTitle,
-                        stampMidRewardLabel: model.stampMidRewardLabel,
-                        stampRewardLabel: model.stampRewardLabel,
-                        restantsCaption: model.labelRestants,
-                        compact: false,
-                        onEditZoneTap: nil,
-                        fidelityQRPayloadURL: model.fidelityQRPayloadURL
-                    )
-                } else {
-                    WalletCardPreview(
-                        displayName: model.displayName.isEmpty ? "Ma Carte Fidélité" : model.displayName,
-                        requiredStamps: model.requiredStamps,
-                        stampsCount: model.previewPointsCount,
-                        primaryColorHex: model.primaryHex,
-                        accentColorHex: model.accentHex,
-                        stripColorHex: nil,
-                        logoURL: model.logoURL,
-                        stripDisplayMode: model.stripDisplayMode,
-                        stripText: model.stripText.isEmpty ? nil : model.stripText,
-                        stampEmoji: model.stampEmoji,
-                        cardBackgroundImagePath: CardLogoStorage.resolvedDisplayPath(forStoredPath: model.cardBackgroundImagePath),
-                        cardBackgroundRemoteURL: model.cardBackgroundRemoteURL,
-                        labelColorHex: model.labelHex.trimmingCharacters(in: .whitespaces).isEmpty ? nil : model.labelHex,
-                        headerRightText: model.headerRightText,
-                        memberPreviewText: model.memberPreviewText,
-                        memberColumnTitle: model.memberColumnTitle,
-                        compact: false,
-                        onEditZoneTap: nil,
-                        fidelityQRPayloadURL: model.fidelityQRPayloadURL
-                    )
-                }
+        Group {
+            if model.programType == "stamps" {
+                CafeDesArtsCardPreview(
+                    displayName: model.displayName.isEmpty ? "Ma Carte Fidélité" : model.displayName,
+                    requiredStamps: model.requiredStamps,
+                    stampsCount: model.previewStampsCount,
+                    primaryColorHex: model.primaryHex,
+                    accentColorHex: model.accentHex,
+                    stripColorHex: nil,
+                    logoURL: model.logoURL,
+                    stripDisplayMode: model.stripDisplayMode,
+                    stripText: model.stripText.isEmpty ? nil : model.stripText,
+                    stampEmoji: model.stampEmoji,
+                    cardBackgroundImagePath: CardLogoStorage.resolvedDisplayPath(forStoredPath: model.cardBackgroundImagePath),
+                    cardBackgroundRemoteURL: model.cardBackgroundRemoteURL,
+                    labelColorHex: model.labelHex.trimmingCharacters(in: .whitespaces).isEmpty ? nil : model.labelHex,
+                    headerRightText: model.headerRightText,
+                    memberPreviewText: model.memberPreviewText,
+                    memberColumnTitle: model.memberColumnTitle,
+                    stampMidRewardLabel: model.stampMidRewardLabel,
+                    stampRewardLabel: model.stampRewardLabel,
+                    restantsCaption: model.labelRestants,
+                    compact: false,
+                    onEditZoneTap: nil,
+                    fidelityQRPayloadURL: model.fidelityQRPayloadURL
+                )
+            } else {
+                WalletCardPreview(
+                    displayName: model.displayName.isEmpty ? "Ma Carte Fidélité" : model.displayName,
+                    requiredStamps: model.requiredStamps,
+                    stampsCount: model.previewPointsCount,
+                    primaryColorHex: model.primaryHex,
+                    accentColorHex: model.accentHex,
+                    stripColorHex: nil,
+                    logoURL: model.logoURL,
+                    stripDisplayMode: model.stripDisplayMode,
+                    stripText: model.stripText.isEmpty ? nil : model.stripText,
+                    stampEmoji: model.stampEmoji,
+                    cardBackgroundImagePath: CardLogoStorage.resolvedDisplayPath(forStoredPath: model.cardBackgroundImagePath),
+                    cardBackgroundRemoteURL: model.cardBackgroundRemoteURL,
+                    labelColorHex: model.labelHex.trimmingCharacters(in: .whitespaces).isEmpty ? nil : model.labelHex,
+                    headerRightText: model.headerRightText,
+                    memberPreviewText: model.memberPreviewText,
+                    memberColumnTitle: model.memberColumnTitle,
+                    compact: false,
+                    onEditZoneTap: nil,
+                    fidelityQRPayloadURL: model.fidelityQRPayloadURL
+                )
             }
-            .padding(.horizontal, AppTheme.Spacing.lg)
-            .frame(minHeight: DashboardHomeCardChrome.previewMinHeight)
         }
-        .scaleEffect(DashboardHomeCardChrome.homeCardScale, anchor: .top)
-        .padding(.bottom, -22)
-        .padding(.vertical, AppTheme.Spacing.xs)
+        .padding(.horizontal, AppTheme.Spacing.lg)
+        .frame(minHeight: DashboardHomeCardChrome.previewMinHeight)
+        .scaleEffect(DashboardHomeCardChrome.homeCardScale, anchor: .center)
+        .padding(.top, 2)
+        .padding(.bottom, 0)
         .frame(maxWidth: .infinity)
     }
 }
@@ -444,8 +436,8 @@ struct FintechTransactionRow: View {
 
 struct FintechTransactionsSectionHeader: View {
     let palette: DashboardRevolutPalette
-    /// Tap sur le titre « Dernières / Transactions » → outils d’analyse (ou autre, selon l’appelant).
-    var onSeeAll: () -> Void
+    /// Action titre (optionnelle). Quand `nil`, le titre est purement informatif (aucun tap).
+    var onSeeAll: (() -> Void)? = nil
     /// Bouton scanner à droite.
     var onOpenScanner: () -> Void
     /// Transitions iOS 18+ : zoom depuis le titre vers la feuille stats (optionnel).
@@ -471,14 +463,19 @@ struct FintechTransactionsSectionHeader: View {
             .minimumScaleFactor(0.48)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
-        if let sid = statsTransitionSourceID, let ns = statsTransitionNamespace {
-            Button(action: onSeeAll) { label }
-                .buttonStyle(.plain)
-                .layoutPriority(1)
-                .zoomTransitionSource(id: sid, in: ns)
+        if let onSeeAll {
+            if let sid = statsTransitionSourceID, let ns = statsTransitionNamespace {
+                Button(action: onSeeAll) { label }
+                    .buttonStyle(.plain)
+                    .layoutPriority(1)
+                    .zoomTransitionSource(id: sid, in: ns)
+            } else {
+                Button(action: onSeeAll) { label }
+                    .buttonStyle(.plain)
+                    .layoutPriority(1)
+            }
         } else {
-            Button(action: onSeeAll) { label }
-                .buttonStyle(.plain)
+            label
                 .layoutPriority(1)
         }
     }
@@ -487,18 +484,18 @@ struct FintechTransactionsSectionHeader: View {
         HStack(alignment: .top, spacing: 8) {
             seeAllTitleButton
                 .accessibilityLabel("Dernières transactions")
-                .accessibilityHint("Ouvre les outils d’analyse (statistiques).")
+                .accessibilityHint(onSeeAll == nil ? "" : "Ouvre les outils d’analyse (statistiques).")
 
             scannerButton
                 .layoutPriority(0)
                 /// Légèrement plus haut et à gauche pour équilibrer le titre deux lignes + grossir le touch target.
                 .offset(x: Self.scannerVisualOffset.width, y: Self.scannerVisualOffset.height)
                 .onBoarding(2, cornerRadius: 50, visualOffset: Self.scannerVisualOffset) {
-                    VStack(spacing: 6) {
-                        Text("Scanner un QR code")
-                            .font(.headline)
+                    VStack(spacing: 8) {
+                        Text("Scanner les cartes de vos clients")
+                            .font(.title3.weight(.semibold))
                         Text("Scannez la carte Wallet d'un client pour enregistrer son passage ou créditer ses points.")
-                            .font(.caption)
+                            .font(.subheadline)
                             .multilineTextAlignment(.center)
                     }
                 }
@@ -527,30 +524,265 @@ struct FintechTransactionsSectionHeader: View {
 
 // MARK: - Barre haute minimaliste
 
+/// Inset vertical commun au-dessus du contenu scrollé pour s’aligner sur `DashboardHomeMinimalTopBar` (Accueil, Campagnes, stats Commerce).
+enum DashboardHomeMinimalTopBarLayout {
+    /// Inset réduit pour remonter nettement le haut des pages (Accueil / Notifications / Commerce).
+    static let scrollContentTopInset: CGFloat = 56
+}
+
 struct DashboardHomeMinimalTopBar: View {
-    let palette: DashboardRevolutPalette
-    var onOpenProfile: () -> Void
-    var onOpenScan: () -> Void
+    let title: String
+    var merchantName: String? = nil
+    var accountEmail: String? = nil
+    var notificationIconURL: String? = nil
+    var hasNotificationIcon: Bool = false
+    var businesses: [BusinessDTO] = []
+    var activeBusinessSlug: String? = nil
+    var canCreateBusiness: Bool = true
+    var onOpenSettings: (() -> Void)? = nil
+    var onSelectBusiness: ((String) -> Void)? = nil
+    var onAddCommerce: (() -> Void)? = nil
+    var onUpgradeCommerceQuota: (() -> Void)? = nil
+    @State private var showBusinessPopover = false
+    @State private var localSelectedBusinessSlug: String?
+    @State private var isSwitchingBusiness = false
+    @Namespace private var businessSwitcherAnimation
 
     var body: some View {
-        HStack(alignment: .center, spacing: 0) {
-            DashboardHomeGlassIconButton(
-                palette: palette,
-                systemName: "person.crop.circle.fill",
-                iconPointSize: 19,
-                accessibilityLabel: "Commerce",
-                action: onOpenProfile
-            )
-
-            Spacer(minLength: 12)
-
-            DashboardHomeGlassIconButton(
-                palette: palette,
-                systemName: "qrcode.viewfinder",
-                iconPointSize: 18,
-                accessibilityLabel: "Scanner un code QR",
-                action: onOpenScan
-            )
+        HStack(alignment: .center, spacing: 8) {
+            Text(title)
+                .font(.system(size: 20, weight: .bold, design: .default))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .layoutPriority(-1)
+            if let onOpenSettings {
+                settingsButton(action: onOpenSettings)
+            }
+            businessSwitcherButton
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 2)
+        .padding(.bottom, 6)
+        .background(Color.black)
+        .onChange(of: activeBusinessSlug) { _, newValue in
+            let incoming = newValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let local = localSelectedBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !incoming.isEmpty, incoming == local {
+                localSelectedBusinessSlug = nil
+            }
         }
     }
+
+    @ViewBuilder
+    private func settingsButton(action: @escaping () -> Void) -> some View {
+        if #available(iOS 26.0, *) {
+            Button(action: action) {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 16, weight: .semibold))
+            }
+            .buttonStyle(.glass)
+            .buttonBorderShape(.roundedRectangle(radius: 20))
+            .controlSize(.large)
+        } else {
+            Button(action: action) {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 16, weight: .semibold))
+                    .padding(.horizontal, 13)
+                    .padding(.vertical, 10)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 20, style: .continuous)
+                            .stroke(Color.white.opacity(0.28), lineWidth: 1)
+                    )
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    @ViewBuilder
+    private var businessSwitcherButton: some View {
+        Button {
+            showBusinessPopover.toggle()
+        } label: {
+            topBarBusinessAvatar(size: 34)
+        }
+        .buttonStyle(.plain)
+        .popover(isPresented: $showBusinessPopover, attachmentAnchor: .point(.bottom), arrowEdge: .top) {
+            businessSwitcherPopover
+                .presentationCompactAdaptation(.popover)
+        }
+        .accessibilityLabel("Commerce actif")
+        .accessibilityHint("Ouvre le menu du commerce.")
+    }
+
+    private var businessSwitcherPopover: some View {
+        VStack(spacing: 0) {
+            HStack(alignment: .top, spacing: 12) {
+                topBarBusinessAvatar(size: 42)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(activeBusinessNameForDisplay)
+                        .font(.system(size: 19, weight: .semibold))
+                        .foregroundStyle(Color.black.opacity(0.86))
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(resolvedAccountEmail)
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(Color.black.opacity(0.66))
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .background(Color.black.opacity(0.06), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .padding(.horizontal, 12)
+            .padding(.top, 12)
+            .padding(.bottom, 8)
+            .id(effectiveActiveBusinessSlug)
+            .transition(.asymmetric(insertion: .opacity.combined(with: .scale(scale: 0.98)), removal: .opacity))
+            .animation(.spring(response: 0.34, dampingFraction: 0.84), value: effectiveActiveBusinessSlug)
+
+            Button {
+                showBusinessPopover = false
+                onAddCommerce?()
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "plus.circle")
+                        .font(.system(size: 25, weight: .regular))
+                        .foregroundStyle(Color.black.opacity(0.7))
+                    Text("Ajouter un commerce")
+                        .font(.system(size: 20, weight: .medium))
+                        .foregroundStyle(Color.black.opacity(0.86))
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 18)
+                .padding(.vertical, 14)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .padding(.bottom, 8)
+
+            if !businesses.isEmpty {
+                Divider()
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 6)
+                ScrollView {
+                    VStack(spacing: 4) {
+                        ForEach(businesses, id: \.slug) { business in
+                            Button {
+                                guard business.slug != effectiveActiveBusinessSlug else {
+                                    showBusinessPopover = false
+                                    return
+                                }
+                                withAnimation(.spring(response: 0.36, dampingFraction: 0.82)) {
+                                    localSelectedBusinessSlug = business.slug
+                                    isSwitchingBusiness = true
+                                }
+                                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                                onSelectBusiness?(business.slug)
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.26) {
+                                    isSwitchingBusiness = false
+                                    showBusinessPopover = false
+                                }
+                            } label: {
+                                HStack(spacing: 10) {
+                                    Circle()
+                                        .fill(business.slug == effectiveActiveBusinessSlug ? Color.green.opacity(0.9) : Color.black.opacity(0.15))
+                                        .frame(width: 9, height: 9)
+                                        .overlay {
+                                            if business.slug == effectiveActiveBusinessSlug {
+                                                Circle()
+                                                    .stroke(Color.green.opacity(0.26), lineWidth: 6)
+                                                    .frame(width: 9, height: 9)
+                                                    .matchedGeometryEffect(id: "activeBusinessDot", in: businessSwitcherAnimation)
+                                            }
+                                        }
+                                    Text(business.name.isEmpty ? business.slug : business.name)
+                                        .font(.system(size: 16, weight: .medium))
+                                        .foregroundStyle(Color.black.opacity(0.85))
+                                        .lineLimit(1)
+                                    Spacer(minLength: 0)
+                                }
+                                .padding(.horizontal, 18)
+                                .padding(.vertical, 10)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .scaleEffect(business.slug == effectiveActiveBusinessSlug && isSwitchingBusiness ? 1.01 : 1)
+                            .animation(.spring(response: 0.32, dampingFraction: 0.84), value: effectiveActiveBusinessSlug)
+                        }
+                    }
+                }
+                .frame(maxHeight: 180)
+                .padding(.bottom, 10)
+            }
+        }
+        .frame(width: 360)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .padding(8)
+    }
+
+    @ViewBuilder
+    private func topBarBusinessAvatar(size: CGFloat) -> some View {
+        let appIconShape = RoundedRectangle(cornerRadius: max(10, size * 0.28), style: .continuous)
+        let icon = notificationIconURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if hasNotificationIcon, !icon.isEmpty {
+            BusinessLogoView(
+                logoURL: icon,
+                logoAssetContext: .campaignNotificationIcon,
+                size: size,
+                cornerRadius: max(10, size * 0.28)
+            )
+            .clipShape(appIconShape)
+        } else {
+            topBarBusinessAvatarFallback(size: size)
+        }
+    }
+
+    private func topBarBusinessAvatarFallback(size: CGFloat) -> some View {
+        RoundedRectangle(cornerRadius: max(10, size * 0.28), style: .continuous)
+            .fill(
+                LinearGradient(
+                    colors: [Color(red: 0.05, green: 0.16, blue: 0.45), Color(red: 0.41, green: 0.12, blue: 0.55)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+            .overlay {
+                Image(systemName: "storefront.fill")
+                    .font(.system(size: max(13, size * 0.34), weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.95))
+            }
+            .frame(width: size, height: size)
+    }
+
+    private var resolvedMerchantName: String {
+        let raw = (merchantName ?? title).trimmingCharacters(in: .whitespacesAndNewlines)
+        return raw.isEmpty ? "Commerce" : raw
+    }
+
+    private var effectiveActiveBusinessSlug: String? {
+        let local = localSelectedBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !local.isEmpty { return local }
+        let remote = activeBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return remote.isEmpty ? nil : remote
+    }
+
+    private var activeBusinessNameForDisplay: String {
+        if let slug = effectiveActiveBusinessSlug,
+           let b = businesses.first(where: { $0.slug == slug }) {
+            let name = b.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !name.isEmpty { return name }
+            return b.slug
+        }
+        return resolvedMerchantName
+    }
+
+    private var resolvedAccountEmail: String {
+        let raw = (accountEmail ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return raw.isEmpty ? "Compte connecté" : raw
+    }
+
 }

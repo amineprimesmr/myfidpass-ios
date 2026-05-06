@@ -54,26 +54,6 @@ final class SyncService: ObservableObject {
     /// Incrémenté à chaque échec de synchro (hors annulation) : l’UI peut réafficher le bandeau d’erreur.
     @Published private(set) var syncErrorRevision: Int = 0
 
-    /// Référence forte vers l’instance active du SyncService.
-    ///
-    /// POURQUOI FORTE et non faible :
-    /// En cas de lancement à froid depuis une notification push silencieuse, iOS appelle
-    /// `AppDelegate.didReceiveRemoteNotification` AVANT que SwiftUI ait eu le temps d’initialiser
-    /// les @StateObject (qui sont créés de façon lazy, au premier rendu du View). Avec une
-    /// référence `weak`, `remoteNotificationHook` est nil dans ce scénario → le push est ignoré
-    /// silencieusement → le tableau de bord ne se synchronise pas.
-    ///
-    /// La référence forte ne crée pas de rétention cyclique : SyncService ne pointe pas vers
-    /// AppDelegate, et SwiftUI reste le propriétaire principal (@StateObject). Cette variable
-    /// statique est simplement un alias vers la même instance, permettant à AppDelegate d’y accéder
-    /// sans passer par la hiérarchie de vues.
-    ///
-    /// Elle est mise à nil dans deinit pour éviter que des instances obsolètes (ex: après un
-    /// logout/reinit) restent accessibles.
-    /// `nonisolated(unsafe)` : `deinit` n’est pas isolé au MainActor ; seuls `init` / `deinit` et
-    /// `handleSilentDashboardPush` (Task @MainActor) touchent ce pointeur.
-    nonisolated(unsafe) private static var remoteNotificationHook: SyncService?
-
     private static let lastSyncKey = "myfidpass.sync.lastSyncDate"
     private static let templateLastSavedKey = "myfidpass.templateLastSavedAt"
     /// Dernière date d’envoi du logo depuis l’app (last-write-wins avec le SaaS).
@@ -86,68 +66,21 @@ final class SyncService: ObservableObject {
         self.container = container
         self.authService = authService
         self.lastSyncDate = UserDefaults.standard.object(forKey: Self.lastSyncKey) as? Date
-        Self.remoteNotificationHook = self
-        // Traiter immédiatement tout push silencieux reçu pendant un cold launch
-        // (avant que SwiftUI ait initialisé cette instance).
-        processPendingSilentSyncIfNeeded()
     }
 
-    deinit {
-        // Nettoie la référence statique si c'est bien CETTE instance qui est détruite
-        // (pas une instance recréée après un reinit ou un changement de compte).
-        if Self.remoteNotificationHook === self {
-            Self.remoteNotificationHook = nil
-        }
-    }
-
-    /// Clé UserDefaults pour signaler qu'une sync est attendue au prochain démarrage complet.
-    private static let pendingSilentSyncKey = "myfidpass.pendingSilentSync"
-
-    /// Push silencieux serveur → relance une sync complète sans bannière (voir backend `sendMerchantSilentDashboardSync`).
-    ///
-    /// CAS DU COLD LAUNCH : si l'app est lancée depuis un push silencieux (cold start),
-    /// iOS appelle cette méthode AVANT que SwiftUI ait rendu les vues et donc avant
-    /// que l'instance SyncService soit assignée. Dans ce cas, `remoteNotificationHook`
-    /// est nil. On sauvegarde un flag dans UserDefaults ; la sync sera déclenchée dès
-    /// que SyncService sera initialisé (voir la méthode `processPendingSilentSyncIfNeeded`).
+    /// Push silencieux serveur : désactivé volontairement en mode perf agressif.
     static func handleSilentDashboardPush(completion: @escaping (UIBackgroundFetchResult) -> Void) {
-        Task { @MainActor in
-            guard AuthStorage.isLoggedIn else {
-                completion(.noData)
-                return
-            }
-            guard let service = remoteNotificationHook else {
-                // Cold launch : l'instance n'est pas encore créée. Mémoriser pour traiter dès l'init.
-                UserDefaults.standard.set(true, forKey: pendingSilentSyncKey)
-                completion(.noData)
-                return
-            }
-            service.invalidateSyncThrottle()
-            await service.syncAfterServerMutation()
-            completion(.newData)
-        }
-    }
-
-    /// Appelé depuis init() pour traiter un push silencieux reçu pendant un cold launch.
-    /// Si le flag est présent, déclenche une sync complète immédiate.
-    private func processPendingSilentSyncIfNeeded() {
-        guard UserDefaults.standard.bool(forKey: Self.pendingSilentSyncKey) else { return }
-        UserDefaults.standard.removeObject(forKey: Self.pendingSilentSyncKey)
-        Task { @MainActor in
-            guard AuthStorage.isLoggedIn else { return }
-            self.invalidateSyncThrottle()
-            await self.syncAfterServerMutation()
-        }
+        completion(.noData)
     }
 
     private static let syncThrottleInterval: TimeInterval = 45
     /// L’API dashboard plafonne à 200 membres par page (`dashboard.js`).
     private static let membersAPIPageSize = 200
     private static let transactionsAPIPageSize = 100
-    /// Augmenté : gros carnets membres (les transactions sans carte importée sont ignorées côté merge).
-    private static let maxMemberPages = 50
-    /// `sort=desc` : pages = des blocs du plus récent au plus ancien (contrat API).
-    private static let maxTransactionPages = 24
+    /// Mode perf agressif : limite volontairement le volume synchronisé par passe.
+    private static let maxMemberPages = 4
+    /// `sort=desc` : on garde les transactions récentes en priorité.
+    private static let maxTransactionPages = 4
 
     private let syncSerialExecutor = SyncSerialExecutor()
 
@@ -178,7 +111,7 @@ final class SyncService: ObservableObject {
 
     /// Recharge serveur → Core Data après une mutation locale enregistrée côté API.
     func syncAfterServerMutation() async {
-        await syncIfNeeded(force: true)
+        await syncIfNeeded(force: false)
     }
 
     /// Récupère user + businesses, puis pour le commerce courant (slug) : settings, stats, membres, transactions.
@@ -229,7 +162,6 @@ final class SyncService: ObservableObject {
             if let slug = (resolvedSlug(from: me) ?? cachedSlug)?.trimmingCharacters(in: .whitespacesAndNewlines), !slug.isEmpty {
                 MerchantStatisticsDiskCache.removePeriod(slug: slug, period: Self.currentStatsMonthKey())
             }
-            NotificationCenter.default.post(name: .myfidpassRemoteSyncDidMerge, object: nil)
         } catch APIError.unauthorized {
             lastError = "Session expirée"
             AppState.shared.showError(lastError ?? "Session expirée")
@@ -254,7 +186,6 @@ final class SyncService: ObservableObject {
                 if let slug = resolvedSlug(from: meRetry)?.trimmingCharacters(in: .whitespacesAndNewlines), !slug.isEmpty {
                     MerchantStatisticsDiskCache.removePeriod(slug: slug, period: Self.currentStatsMonthKey())
                 }
-                NotificationCenter.default.post(name: .myfidpassRemoteSyncDidMerge, object: nil)
             } catch {
                 presentSyncFailure(error)
             }
@@ -354,6 +285,12 @@ final class SyncService: ObservableObject {
             changed = true
         }
 
+        /// Ne pas repasser à `false` ici : une sync en parallèle d’un enregistrement carte peut encore recevoir `has_stamp_icon` obsolète.
+        if settings.hasStampIcon == true, snap.hasServerStampIcon != true {
+            snap.hasServerStampIcon = true
+            changed = true
+        }
+
         // Réparer les snapshots anciens (hasLocalCardBackground = nil) : vérifier si le fichier est sur disque.
         if snap.hasLocalCardBackground == nil {
             let rel = CardLogoStorage.relativeCardBackgroundPath
@@ -407,7 +344,7 @@ final class SyncService: ObservableObject {
         var tierPoints: [String] = []
         var tierLabels: [String] = []
         if let tiers = settings.pointsRewardTiers {
-            for t in tiers.filter({ $0.points > 0 }).sorted(by: { $0.points < $1.points }).prefix(3) {
+            for t in tiers.filter({ $0.points > 0 }).sorted(by: { $0.points < $1.points }).prefix(5) {
                 tierPoints.append(String(t.points))
                 tierLabels.append(t.label.isEmpty ? "Récompense" : t.label)
             }
@@ -440,7 +377,8 @@ final class SyncService: ObservableObject {
             tierPoints: tierPoints.isEmpty ? nil : tierPoints,
             tierLabels: tierLabels.isEmpty ? nil : tierLabels,
             stampIconPendingBase64: nil,
-            stampIconWasRemoved: nil
+            stampIconWasRemoved: nil,
+            hasServerStampIcon: settings.hasStampIcon == true
         )
     }
 
@@ -597,6 +535,18 @@ fileprivate enum SyncCoreDataMerge {
         return formatter.date(from: s) ?? ISO8601DateFormatter().date(from: s)
     }
 
+    private static func normalizedTxnDedupKey(fromStampNote note: String?) -> String? {
+        let raw = note?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard raw.hasPrefix("txn:"), raw.count > 4 else { return nil }
+        let payload = raw.dropFirst(4)
+        if let pipe = payload.firstIndex(of: "|") {
+            let tid = String(payload[..<pipe]).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !tid.isEmpty else { return nil }
+            return "txn:\(tid)"
+        }
+        return raw
+    }
+
     static func apply(
         slug: String,
         settings: BusinessSettingsResponse,
@@ -616,6 +566,9 @@ fileprivate enum SyncCoreDataMerge {
         business.updatedAt = Date()
 
         let template = findOrCreateCardTemplate(business: business, context: context)
+        let existingCardsByMemberId = existingCardsIndex(for: template, context: context)
+        let existingCategoriesByServerId = existingCategoriesIndex(for: template, context: context)
+        var txnStampsByKey = existingTxnStampIndex(for: template, context: context)
         MerchantLogoAssetCache.applyMerchantLogoTimestamps(from: settings)
         if !skipTemplateOverwrite {
             template.displayName = settings.organizationName ?? "Ma Carte"
@@ -648,35 +601,58 @@ fileprivate enum SyncCoreDataMerge {
             template.updatedAt = Date()
         }
 
+        var categoryByServerId = existingCategoriesByServerId
         if let categories = categories {
             for (index, dto) in categories.categories.enumerated() {
-                let cat = findOrCreateCategory(template: template, serverId: dto.id, name: dto.name, colorHex: dto.colorHex, sortOrder: Int32(dto.sortOrder ?? index), context: context)
+                let cat = categoryByServerId[dto.id] ?? {
+                    let created = MemberCategory(context: context)
+                    created.serverId = dto.id
+                    created.template = template
+                    categoryByServerId[dto.id] = created
+                    return created
+                }()
                 cat.name = dto.name
                 cat.colorHex = dto.colorHex
                 cat.sortOrder = Int32(dto.sortOrder ?? index)
             }
         }
 
+        var cardsByMemberId = existingCardsByMemberId
         for m in members.members {
-            let card = findOrCreateClientCard(template: template, memberId: m.id, name: m.name, email: m.email, points: m.points ?? 0, context: context)
+            let card = cardsByMemberId[m.id] ?? {
+                let created = ClientCard(context: context)
+                created.id = UUID()
+                created.template = template
+                created.qrCodeValue = m.id
+                created.clientIdentifier = m.id
+                created.clientDisplayName = m.name ?? "Client"
+                created.clientEmail = m.email
+                created.stampsCount = Int32(m.points ?? 0)
+                created.createdAt = Date()
+                created.updatedAt = Date()
+                cardsByMemberId[m.id] = created
+                return created
+            }()
             card.stampsCount = Int32(m.points ?? 0)
             card.clientDisplayName = m.name ?? "Client"
             card.clientEmail = m.email
             card.updatedAt = parseISO8601(m.lastVisitAt) ?? card.updatedAt
             // Vague 2 de sync passe `categories: nil` : ne pas effacer les catégories déjà fusionnées en vague 1.
             if let categoryIds = m.categoryIds, categories != nil {
-                let cats = categoryIds.compactMap { findCategory(byServerId: $0, template: template, context: context) }
+                let cats = categoryIds.compactMap { categoryByServerId[$0] }
                 card.categories = NSSet(array: cats)
             }
         }
 
+        var txnStampKeys = Set(txnStampsByKey.keys)
         for t in transactions.transactions {
             guard let memberId = t.memberId else { continue }
-            let cardRequest = ClientCard.fetchRequest()
-            cardRequest.predicate = NSPredicate(format: "qrCodeValue == %@ AND template == %@", memberId, template)
-            cardRequest.fetchLimit = 1
-            guard let card = try context.fetch(cardRequest).first else { continue }
-            if let tid = t.id, findStamp(serverId: tid, context: context) != nil { continue }
+            guard let card = cardsByMemberId[memberId] else { continue }
+            if let tid = t.id {
+                let key = "txn:\(tid)"
+                if txnStampKeys.contains(key) { continue }
+                txnStampKeys.insert(key)
+            }
             let stamp = Stamp(context: context)
             stamp.id = UUID()
             stamp.clientCard = card
@@ -687,6 +663,7 @@ fileprivate enum SyncCoreDataMerge {
                     noteBody += "|p:\(p)"
                 }
                 stamp.note = noteBody
+                txnStampsByKey["txn:\(tid)"] = stamp
             } else {
                 stamp.note = t.metadata
             }
@@ -695,12 +672,52 @@ fileprivate enum SyncCoreDataMerge {
         // Rétrocompat : tampons déjà importés en `txn:<id>` seuls → ajout `|p:` quand l’API expose `points`.
         for t in transactions.transactions {
             guard let tid = t.id, let p = t.points else { continue }
-            guard let stamp = findStamp(serverId: tid, context: context) else { continue }
+            guard let stamp = txnStampsByKey["txn:\(tid)"] else { continue }
             let trimmed = stamp.note?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             guard trimmed.hasPrefix("txn:\(tid)") else { continue }
             if trimmed.contains("|p:") { continue }
             stamp.note = "txn:\(tid)|p:\(p)"
         }
+    }
+
+    private static func existingCardsIndex(for template: CardTemplate, context: NSManagedObjectContext) -> [String: ClientCard] {
+        let request = ClientCard.fetchRequest()
+        request.predicate = NSPredicate(format: "template == %@", template)
+        let cards = (try? context.fetch(request)) ?? []
+        var map: [String: ClientCard] = [:]
+        map.reserveCapacity(cards.count)
+        for card in cards {
+            guard let memberId = card.qrCodeValue?.trimmingCharacters(in: .whitespacesAndNewlines), !memberId.isEmpty else { continue }
+            map[memberId] = card
+        }
+        return map
+    }
+
+    private static func existingCategoriesIndex(for template: CardTemplate, context: NSManagedObjectContext) -> [String: MemberCategory] {
+        let request = MemberCategory.fetchRequest()
+        request.predicate = NSPredicate(format: "template == %@", template)
+        let categories = (try? context.fetch(request)) ?? []
+        var map: [String: MemberCategory] = [:]
+        map.reserveCapacity(categories.count)
+        for category in categories {
+            guard let sid = category.serverId?.trimmingCharacters(in: .whitespacesAndNewlines), !sid.isEmpty else { continue }
+            map[sid] = category
+        }
+        return map
+    }
+
+    private static func existingTxnStampIndex(for template: CardTemplate, context: NSManagedObjectContext) -> [String: Stamp] {
+        let request = Stamp.fetchRequest()
+        request.predicate = NSPredicate(format: "clientCard.template == %@ AND note BEGINSWITH %@", template, "txn:")
+        let stamps = (try? context.fetch(request)) ?? []
+        var map: [String: Stamp] = [:]
+        map.reserveCapacity(stamps.count)
+        for stamp in stamps {
+            if let key = normalizedTxnDedupKey(fromStampNote: stamp.note) {
+                map[key] = stamp
+            }
+        }
+        return map
     }
 
     private static func findOrCreateBusiness(slug: String, context: NSManagedObjectContext) -> Business {
@@ -734,47 +751,4 @@ fileprivate enum SyncCoreDataMerge {
         return t
     }
 
-    private static func findOrCreateClientCard(template: CardTemplate, memberId: String, name: String?, email: String?, points: Int, context: NSManagedObjectContext) -> ClientCard {
-        let request = ClientCard.fetchRequest()
-        request.predicate = NSPredicate(format: "qrCodeValue == %@ AND template == %@", memberId, template)
-        request.fetchLimit = 1
-        if let c = try? context.fetch(request).first { return c }
-        let c = ClientCard(context: context)
-        c.id = UUID()
-        c.template = template
-        c.qrCodeValue = memberId
-        c.clientIdentifier = memberId
-        c.clientDisplayName = name ?? "Client"
-        c.clientEmail = email
-        c.stampsCount = Int32(points)
-        c.createdAt = Date()
-        c.updatedAt = Date()
-        return c
-    }
-
-    private static func findStamp(serverId: String, context: NSManagedObjectContext) -> Stamp? {
-        let prefix = "txn:\(serverId)"
-        let request = Stamp.fetchRequest()
-        request.predicate = NSPredicate(format: "note == %@ OR note BEGINSWITH %@", prefix, "\(prefix)|")
-        request.fetchLimit = 1
-        return try? context.fetch(request).first
-    }
-
-    private static func findOrCreateCategory(template: CardTemplate, serverId: String, name: String, colorHex: String?, sortOrder: Int32, context: NSManagedObjectContext) -> MemberCategory {
-        if let existing = findCategory(byServerId: serverId, template: template, context: context) { return existing }
-        let cat = MemberCategory(context: context)
-        cat.serverId = serverId
-        cat.name = name
-        cat.colorHex = colorHex
-        cat.sortOrder = sortOrder
-        cat.template = template
-        return cat
-    }
-
-    private static func findCategory(byServerId serverId: String, template: CardTemplate, context: NSManagedObjectContext) -> MemberCategory? {
-        let request = MemberCategory.fetchRequest()
-        request.predicate = NSPredicate(format: "serverId == %@ AND template == %@", serverId, template)
-        request.fetchLimit = 1
-        return try? context.fetch(request).first
-    }
 }

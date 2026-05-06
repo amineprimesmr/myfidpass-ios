@@ -35,6 +35,11 @@ struct CardCustomizationBindPack {
     let previewPointsCount: Binding<Int>
     let stampEmoji: Binding<String>
     let stampIconPhotoItem: Binding<PhotosPickerItem?>
+    let stampIconPendingBase64: Binding<String?>
+    let stampIconWasRemoved: Binding<Bool>
+    /// URL renvoyée par l’API pour l’icône tampon (aperçu grille quand le brouillon a été enregistré).
+    let serverStampIconURL: String?
+    let serverHasStampIconAsset: Bool
     let stampRewardLabel: Binding<String>
     let stampMidRewardLabel: Binding<String>
     /// Palier « Début du jeu » (non modifiable côté seuil, récompense éditable). Commun aux modes points et tampons.
@@ -43,6 +48,9 @@ struct CardCustomizationBindPack {
     let backContact: Binding<String>
     let notificationTitleOverride: Binding<String>
     let notificationChangeMessage: Binding<String>
+    let welcomeBonusEnabled: Binding<Bool>
+    /// Nombre de points (mode points) offerts à l'inscription. Toujours 1 en mode tampons.
+    let welcomeBonusAmount: Binding<Int>
 }
 
 struct CardCustomizationActions {
@@ -63,6 +71,9 @@ struct CardElementCustomizationSheet: View {
     var dashboardSettingsHydrated: Bool
     /// État local pour la feuille de cadrage (évite les problèmes de présentation avec un `Binding` parent).
     @State private var cropEditorPayload: ImageCropPayload?
+    /// Logo sans fond persisté côté serveur (remove.bg) — proposé comme raccourci dans le sheet logo.
+    @State private var flyerNobgImage: UIImage?
+    @State private var flyerNobgLoading = false
     var onCropComplete: (UIImage, ImageCropSpec) async -> Void
 
     /// Même gabarit de feuille que le logo : pas de sélecteurs de couleur, hauteur initiale compacte.
@@ -94,8 +105,8 @@ struct CardElementCustomizationSheet: View {
             return [.height(430), .large]
         }
         if zone == .headerRight {
-            /// Récompenses (2 lignes tampons ou paliers points) ; `.large` si besoin.
-            return [.medium, .large]
+            /// Récompenses : 5 paliers points + début de jeu ; `.large` conseillé.
+            return [.large]
         }
         return [.medium, .large]
     }
@@ -130,6 +141,10 @@ struct CardElementCustomizationSheet: View {
             .background(AppTheme.Colors.background)
             .sheetHideNavigationBar()
         }
+        .task(id: zone) {
+            guard zone == .logoBand else { return }
+            await loadFlyerNobgImage()
+        }
         .presentationDetents(sheetPresentationDetents)
         .presentationDragIndicator(.hidden)
         .modifier(LiquidGlassSheetModifier())
@@ -146,6 +161,16 @@ struct CardElementCustomizationSheet: View {
                 }
             )
         }
+    }
+
+    private func loadFlyerNobgImage() async {
+        guard !flyerNobgLoading, flyerNobgImage == nil,
+              let slug = AuthStorage.currentBusinessSlug else { return }
+        flyerNobgLoading = true
+        defer { flyerNobgLoading = false }
+        guard let data = try? await APIClient.shared.requestData(.dashboardLogoNobg(slug: slug)),
+              !data.isEmpty, let img = UIImage(data: data) else { return }
+        flyerNobgImage = img
     }
 
     /// Galerie → cadrage : léger délai après fermeture du `PhotosPicker` pour que la feuille de cadrage s’affiche correctement.
@@ -240,12 +265,75 @@ struct CardElementCustomizationSheet: View {
 
     // MARK: - Logo (carrousel récents + liste d’actions type iOS)
 
+    @ViewBuilder
+    private var flyerNobgSection: some View {
+        if flyerNobgLoading {
+            HStack(spacing: 8) {
+                ProgressView()
+                    .scaleEffect(0.8)
+                Text("Logo flyer…")
+                    .font(.caption)
+                    .foregroundStyle(AppTheme.Colors.textSecondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 4)
+        } else if let img = flyerNobgImage {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Logo sans fond (flyer)")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(AppTheme.Colors.textSecondary)
+                    .padding(.horizontal, 4)
+                Button {
+                    Task { await presentCropFromUIImage(img, spec: .walletStripLogo) }
+                } label: {
+                    HStack(spacing: 14) {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(AppTheme.Colors.textSecondary.opacity(0.08))
+                                .frame(width: 48, height: 48)
+                            Image(uiImage: img)
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: 42, height: 42)
+                                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                        }
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Utiliser ce logo")
+                                .font(.body)
+                                .foregroundStyle(Color(red: 0, green: 0.48, blue: 1))
+                            Text("Fond supprimé automatiquement")
+                                .font(.caption)
+                                .foregroundStyle(AppTheme.Colors.textSecondary)
+                        }
+                        Spacer(minLength: 0)
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(AppTheme.Colors.textSecondary.opacity(0.5))
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                    .padding(.vertical, 12)
+                    .padding(.horizontal, 14)
+                }
+                .buttonStyle(.plain)
+                .background(AppTheme.Colors.cardBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .strokeBorder(Color(red: 0, green: 0.48, blue: 1).opacity(0.25), lineWidth: 1)
+                )
+                .accessibilityLabel(Text("Utiliser le logo sans fond issu du flyer"))
+            }
+        }
+    }
+
     private var logoBandBlock: some View {
         logoBandImageModeContent
     }
 
     private var logoBandImageModeContent: some View {
         VStack(alignment: .leading, spacing: 10) {
+            flyerNobgSection
             LogoRecentPhotosCarousel(
                 onSelectAsset: { asset in
                     Task { await presentCropFromPhotoAsset(asset, spec: .walletStripLogo) }
@@ -293,7 +381,95 @@ struct CardElementCustomizationSheet: View {
 
     private var headerRightBlock: some View {
         VStack(alignment: .leading, spacing: 14) {
+            rewardExamplesPresetSection
+            welcomeBonusSection
+            Divider()
             rewardRulesContent
+        }
+        .onAppear {
+            enforceWelcomeBonusDefaults()
+        }
+        .onChange(of: pack.programType.wrappedValue) { _, _ in
+            enforceWelcomeBonusDefaults()
+        }
+    }
+
+    /// Bonus d’inscription : toujours actif (10 pts en mode points, 1 tampon en mode tampons) — appliqué à l’ouverture et à l’enregistrement côté `MyCardView`.
+    private func enforceWelcomeBonusDefaults() {
+        pack.welcomeBonusEnabled.wrappedValue = true
+        if pack.programType.wrappedValue == "points" {
+            pack.welcomeBonusAmount.wrappedValue = 10
+        } else {
+            pack.welcomeBonusAmount.wrappedValue = 1
+        }
+    }
+
+    private var rewardExamplesPresetSection: some View {
+        Button {
+            applyRewardExamplePresets()
+        } label: {
+            Label("Appliquer les exemples", systemImage: "wand.and.stars")
+                .font(.subheadline.weight(.semibold))
+                .frame(maxWidth: .infinity)
+        }
+        .buttonBorderShape(.roundedRectangle(radius: 20))
+        .controlSize(.large)
+        .glassStyle()
+    }
+
+    private func applyRewardExamplePresets() {
+        if pack.programType.wrappedValue == "stamps" {
+            pack.startGameRewardLabel.wrappedValue = "Boisson offerte"
+            pack.stampMidRewardLabel.wrappedValue = "Dessert offert"
+            pack.stampRewardLabel.wrappedValue = "Menu offert"
+            return
+        }
+        let n = Self.pointsTierRowCount
+        pack.startGameRewardLabel.wrappedValue = "Boisson offerte"
+        let examplePoints = (0..<n).map { String(50 * ($0 + 1)) }
+        let exampleLabels = [
+            "Dessert offert",
+            "Cheese offert",
+            "Menu offert",
+            "Formule du jour offerte",
+            "-20 % sur l'addition",
+        ]
+        var pts = examplePoints
+        var labels = exampleLabels
+        while pts.count < n { pts.append("") }
+        while labels.count < n { labels.append("") }
+        pack.tierPoints.wrappedValue = Array(pts.prefix(n))
+        pack.tierLabels.wrappedValue = Array(labels.prefix(n))
+    }
+
+    // MARK: - Bonus d'inscription (affichage minimal : tampons uniquement ; points sans réglage — fixe 10 côté modèle)
+
+    @ViewBuilder
+    private var welcomeBonusSection: some View {
+        if pack.programType.wrappedValue == "stamps" {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "gift.fill")
+                    .font(.body)
+                    .foregroundStyle(AppTheme.Colors.primary)
+                    .frame(width: 28, alignment: .center)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Tampon de bienvenue")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(AppTheme.Colors.textPrimary)
+                    Text("1 tampon offert au 1er ajout Wallet")
+                        .font(.caption)
+                        .foregroundStyle(AppTheme.Colors.textSecondary)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.vertical, 12)
+            .padding(.horizontal, 14)
+            .background(AppTheme.Colors.cardBackground)
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(AppTheme.Colors.textSecondary.opacity(0.12), lineWidth: 1)
+            )
         }
     }
 
@@ -399,6 +575,10 @@ struct CardElementCustomizationSheet: View {
     private var stampsStyleSection: some View {
         let columns = Array(repeating: GridItem(.flexible(minimum: 34, maximum: 56), spacing: 8), count: 6)
         let selectedIconKey = StampIconCatalog.normalizeKey(pack.stampEmoji.wrappedValue)
+        let pending = pack.stampIconPendingBase64.wrappedValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let serverS = pack.serverStampIconURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let customOrServerActive = !pack.stampIconWasRemoved.wrappedValue
+            && (!pending.isEmpty || (pack.serverHasStampIconAsset && !serverS.isEmpty))
         return VStack(alignment: .leading, spacing: 8) {
             Text("Tampons")
                 .font(.subheadline.weight(.semibold))
@@ -423,6 +603,32 @@ struct CardElementCustomizationSheet: View {
                         )
                 }
                 .buttonStyle(.plain)
+                if customOrServerActive {
+                    let remoteResolved: URL? = {
+                        if !pending.isEmpty { return nil }
+                        guard !serverS.isEmpty else { return nil }
+                        return APIResourceURL.resolved(from: serverS)
+                    }()
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(AppTheme.Colors.cardBackground)
+                        .frame(height: 48)
+                        .overlay {
+                            StampIconDisplayView(
+                                dataURL: pending.isEmpty ? nil : pending,
+                                remoteURL: remoteResolved,
+                                catalogEmoji: pack.stampEmoji.wrappedValue,
+                                size: 40,
+                                tint: AppTheme.Colors.textPrimary
+                            )
+                        }
+                        .frame(maxWidth: .infinity)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .strokeBorder(AppTheme.Colors.primary.opacity(0.55), lineWidth: 2)
+                        )
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(Text("Image importée, utilisée comme picto tampon"))
+                }
 
                 ForEach(StampIconCatalog.selectableKeys, id: \.self) { iconKey in
                     Button {
@@ -433,7 +639,7 @@ struct CardElementCustomizationSheet: View {
                             .frame(height: 48)
                             .frame(maxWidth: .infinity)
                             .background(
-                                (selectedIconKey == iconKey ? AppTheme.Colors.primary.opacity(0.2) : Color.clear)
+                                (!customOrServerActive && selectedIconKey == iconKey ? AppTheme.Colors.primary.opacity(0.2) : Color.clear)
                             )
                             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     }
@@ -452,7 +658,7 @@ struct CardElementCustomizationSheet: View {
     private var cardAppearanceBlock: some View {
         VStack(alignment: .leading, spacing: 16) {
             if !cardImageSuggestedColors.isEmpty {
-                Text("Pastilles tout à gauche (après +) = couleurs tirées du logo et du fond ; à droite, palette générale.")
+                Text("D’abord les couleurs détectées (logo, fond), puis la palette vive (même grille que le flyer).")
                     .font(.caption)
                     .foregroundStyle(AppTheme.Colors.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -466,19 +672,21 @@ struct CardElementCustomizationSheet: View {
     private var pointsRulesContent: some View {
         VStack(alignment: .leading, spacing: 12) {
             startGameRewardRow
-            /// 3 paliers modifiables (hors « Début du jeu ») — ex. 30 € / 60 € / 100 €.
+            /// 5 paliers modifiables (hors « 10 pts » alignés sur le bonus d’inscription).
             ForEach(0..<Self.pointsTierRowCount, id: \.self) { i in
                 pointsTierRow(index: i)
             }
         }
     }
 
-    /// Palier « Début du jeu » (1ʳᵉ récompense) : seuil verrouillé, libellé de récompense modifiable par le commerçant.
+    /// Palier « Début du jeu » (1ʳᵉ récompense) : seuil verrouillé à 10 pts (bonus d’inscription fixe), libellé modifiable.
     private var startGameRewardRow: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Text("Début du jeu")
+        let isPoints = pack.programType.wrappedValue == "points"
+        let seuil = isPoints ? "10 pts" : "Début du jeu"
+        return HStack(alignment: .top, spacing: 10) {
+            Text(seuil)
                 .font(.subheadline.weight(.semibold))
-                .foregroundStyle(AppTheme.Colors.textPrimary)
+                .foregroundStyle(isPoints ? AppTheme.Colors.primary : AppTheme.Colors.textPrimary)
                 .multilineTextAlignment(.center)
                 .lineLimit(2)
                 .minimumScaleFactor(0.75)
@@ -513,13 +721,14 @@ struct CardElementCustomizationSheet: View {
     }
 
     private static let startGameRewardPlaceholder = "Boisson offerte"
-    private static let pointsTierRowCount = 3
-    /// Seuils (points) — ex. 30 / 60 / 100, librement modifiables.
-    private static let tierSeuilExamples = ["30", "60", "100"]
+    private static let pointsTierRowCount = 5
+    private static let tierSeuilExamples = ["50", "100", "150", "200", "250"]
     private static let tierRewardExamples = [
         "Dessert offert",
-        "Sandwich au choix",
-        "Menu + dessert offert"
+        "Cheese offert",
+        "Menu offert",
+        "Formule du jour",
+        "Réduction sur l'addition",
     ]
 
     private static let stamp5PassageRewardPlaceholder = "-50% sur l’addition"

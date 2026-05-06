@@ -112,7 +112,7 @@ enum LogoColorExtractor {
         let sorted = bucket.sorted { $0.value > $1.value }.prefix(maxColors)
         return sorted.map { key, _ in
             let parts = key.split(separator: ",").compactMap { Int($0) }
-            guard parts.count == 3 else { return "2563EB" }
+            guard parts.count == 3 else { return "304FFE" }
             let r = min(255, parts[0]), g = min(255, parts[1]), b = min(255, parts[2])
             return String(format: "%02X%02X%02X", r, g, b)
         }

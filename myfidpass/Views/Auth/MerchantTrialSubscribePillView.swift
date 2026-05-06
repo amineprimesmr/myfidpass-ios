@@ -23,7 +23,7 @@ struct MerchantTrialSubscribePillView: View {
             HStack {
                 Spacer(minLength: 0)
                 HStack(alignment: .center, spacing: 9) {
-                    Text("Accès offert en cours")
+                    Text("Profitez du mois à 1€")
                         .font(.system(size: 14, weight: .medium, design: .default))
                         .foregroundStyle(.white)
                         .lineLimit(1)
@@ -56,7 +56,7 @@ struct MerchantTrialSubscribePillView: View {
             }
         }
         .buttonStyle(PressableSubscribePillStyle())
-        .accessibilityLabel("Accès offert en cours. \(remaining). Touchez pour choisir l’abonnement.")
+        .accessibilityLabel("Profitez du mois à 1€. \(remaining). Touchez pour choisir l’abonnement.")
     }
 
     /// Pastille intérieure type capture (gris anthracite, distinct du fond noir).

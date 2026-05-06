@@ -70,8 +70,10 @@ struct GroupedSettingsCard<Content: View>: View {
             content()
         }
         .background(cardFill, in: RoundedRectangle(cornerRadius: GroupedSettingsMetrics.cardCornerRadius, style: .continuous))
-        .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.45 : 0.10), radius: 14, x: 0, y: 5)
-        .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.2 : 0.04), radius: 4, x: 0, y: 1)
+        .overlay(
+            RoundedRectangle(cornerRadius: GroupedSettingsMetrics.cardCornerRadius, style: .continuous)
+                .strokeBorder(Color(UIColor.separator).opacity(colorScheme == .dark ? 0.22 : 0.16), lineWidth: 0.5)
+        )
     }
 
     @Environment(\.colorScheme) private var colorScheme
@@ -154,6 +156,13 @@ struct GroupedSettingsInfoRow: View {
     let title: String
     var value: String
     var valueMultiline: Bool = false
+    /// Si non-nil, remplace la limite dérivée de `valueMultiline` (ex. e-mail : 2 lignes max).
+    var valueLineLimit: Int? = nil
+
+    private var resolvedValueLineLimit: Int {
+        if let valueLineLimit { return valueLineLimit }
+        return valueMultiline ? 4 : 1
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -161,15 +170,21 @@ struct GroupedSettingsInfoRow: View {
             Text(title)
                 .font(.body.weight(.medium))
                 .foregroundStyle(Color(UIColor.label))
-                .frame(maxWidth: .infinity, alignment: .leading)
-            Text(value)
-                .font(.body)
-                .foregroundStyle(Color(UIColor.secondaryLabel))
-                .multilineTextAlignment(.trailing)
-                .lineLimit(valueMultiline ? 4 : 1)
+                .fixedSize(horizontal: true, vertical: false)
+            valueText
         }
         .padding(.horizontal, GroupedSettingsMetrics.horizontalPadding)
         .padding(.vertical, GroupedSettingsMetrics.rowVerticalPadding)
+    }
+
+    @ViewBuilder
+    private var valueText: some View {
+        Text(value)
+            .font(.body)
+            .foregroundStyle(Color(UIColor.secondaryLabel))
+            .multilineTextAlignment(.trailing)
+            .lineLimit(resolvedValueLineLimit)
+            .frame(maxWidth: .infinity, alignment: .trailing)
     }
 }
 

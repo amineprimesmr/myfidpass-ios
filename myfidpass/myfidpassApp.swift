@@ -14,18 +14,14 @@ struct myfidpassApp: App {
     let persistenceController = PersistenceController.shared
     @StateObject private var authService: AuthService
     @StateObject private var syncService: SyncService
-    @StateObject private var revenueCatSubscriptionState: RevenueCatSubscriptionState
     @StateObject private var appState = AppState.shared
 
     init() {
-        RevenueCatBootstrap.configureIfNeeded()
-
         let auth = AuthService()
         _authService = StateObject(wrappedValue: auth)
         _syncService = StateObject(
             wrappedValue: SyncService(container: PersistenceController.shared.container, authService: auth)
         )
-        _revenueCatSubscriptionState = StateObject(wrappedValue: RevenueCatSubscriptionState())
     }
 
     var body: some Scene {
@@ -34,18 +30,9 @@ struct myfidpassApp: App {
                 .overlay(alignment: .top) { errorBanner }
             .environmentObject(authService)
             .environmentObject(syncService)
-            .environmentObject(revenueCatSubscriptionState)
             .environmentObject(appState)
             .environment(\.managedObjectContext, persistenceController.container.viewContext)
             .preferredColorScheme(.light)
-            .task(id: authService.currentScreen) {
-                switch authService.currentScreen {
-                case .welcome:
-                    await revenueCatSubscriptionState.logOutRevenueCat()
-                case .authenticated:
-                    await revenueCatSubscriptionState.syncWithAppAccount()
-                }
-            }
         }
     }
 

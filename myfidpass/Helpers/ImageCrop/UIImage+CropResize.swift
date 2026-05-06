@@ -7,17 +7,24 @@ import UIKit
 
 extension UIImage {
     /// Découpe dans l’espace **points** de l’image (`UIImage.size`).
+    /// Utilise `UIGraphicsImageRenderer` + `draw(in:)` pour respecter `imageOrientation` — contrairement à
+    /// `cgImage.cropping`, qui travaille dans l’espace pixel brut et produit une bande verticale pour les
+    /// photos `.right` / `.left` (EXIF rotation iPhone paysage).
     func myfid_crop(to rectInPoints: CGRect) -> UIImage? {
-        guard let cg = cgImage else { return nil }
-        let s = scale
-        let px = CGRect(
-            x: rectInPoints.origin.x * s,
-            y: rectInPoints.origin.y * s,
-            width: rectInPoints.size.width * s,
-            height: rectInPoints.size.height * s
-        ).integral
-        guard let cropped = cg.cropping(to: px) else { return nil }
-        return UIImage(cgImage: cropped, scale: s, orientation: imageOrientation)
+        guard size.width > 0, size.height > 0,
+              rectInPoints.width > 0.5, rectInPoints.height > 0.5 else { return nil }
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = scale
+        format.opaque = false
+        let renderer = UIGraphicsImageRenderer(size: rectInPoints.size, format: format)
+        return renderer.image { _ in
+            draw(in: CGRect(
+                x: -rectInPoints.origin.x,
+                y: -rectInPoints.origin.y,
+                width: size.width,
+                height: size.height
+            ))
+        }
     }
 
     /// Redimensionne vers une **taille de canevas** fixe **sans déformer** l’image (échelle uniforme + centrage).

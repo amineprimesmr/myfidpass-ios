@@ -32,7 +32,7 @@ enum AuthStorage {
         static let pendingOpenMerchantSubscriptionSheetAfterSignup = "myfidpass.auth.pendingOpenMerchantSubscriptionSheetAfterSignup"
         /// Après sortie du paywall post-inscription : relancer le tutoriel commerçant.
         static let pendingShowMerchantHomeTutorialAfterSignup = "myfidpass.auth.pendingShowMerchantHomeTutorialAfterSignup"
-        /// Identifiant utilisateur API (`GET /me` → `user.id`) — RevenueCat `logIn` (stable par compte).
+        /// Identifiant utilisateur API (`GET /me` → `user.id`).
         static let userId = "myfidpass.auth.userId"
         /// Dernier `MerchantWorkspaceRole` connu (affichage au cold start avant `GET /me`).
         static let merchantWorkspaceRole = "myfidpass.auth.merchantWorkspaceRole"
@@ -59,7 +59,7 @@ enum AuthStorage {
         set { defaults.set(newValue, forKey: Key.userPhone) }
     }
 
-    /// Id utilisateur renvoyé par l’API (préféré pour RevenueCat `Purchases.logIn`).
+    /// Id utilisateur renvoyé par l’API (`GET /me`).
     static var userId: String? {
         get {
             let s = defaults.string(forKey: Key.userId)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -72,18 +72,6 @@ enum AuthStorage {
                 defaults.removeObject(forKey: Key.userId)
             }
         }
-    }
-
-    /// Identifiant stable pour RevenueCat : `userId` API sinon email en minuscules.
-    static var revenueCatAppUserID: String? {
-        if let id = userId { return id }
-        if let em = userEmail?.trimmingCharacters(in: .whitespacesAndNewlines), !em.isEmpty {
-            return em.lowercased()
-        }
-        if let s = userStaffLogin?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty {
-            return "staff:\(s.lowercased())"
-        }
-        return nil
     }
 
     static var authProvider: AuthProvider {

@@ -143,9 +143,9 @@ enum MyCardCompletionRequirements {
         return serverHasStampIcon
     }
 
-    private static let pointsRewardTierCount = 3
+    private static let pointsRewardTierCount = 5
 
-    /// Tous les paliers points (3 + ligne « Début du jeu » à part), ou toutes les récompenses tampons requises (mi-parcours si > 5 tampons + finale).
+    /// Tous les paliers points (5 + ligne « Début du jeu » à part), ou toutes les récompenses tampons requises (mi-parcours si > 5 tampons + finale).
     static func hasRecompensesCompletes(
         programType: String,
         tierPoints: [String],

@@ -87,12 +87,13 @@ final class ImageCropScrollCoordinator: NSObject, UIScrollViewDelegate {
             return CGRect(x: x, y: y, width: cropW, height: cropH)
         }
 
-        // Carré / icône : ne pas occuper toute la largeur — marges pour voir l’image hors cadre (assombrie).
-        let maxSide = min(w, h) * 0.82
-        let cropW = maxSide
+        // Portrait (fond flyer) : cadre plus large (moins de marges latérales), donc plus de contenu vertical utile.
+        // Carré / icône : garder des marges confortables pour manipuler précisément.
+        let widthFactor: CGFloat = aspectRatio < 0.9 ? 0.92 : 0.82
+        let cropW = w * widthFactor
         let cropH = cropW / aspectRatio
         let x = (w - cropW) * 0.5
-        let y = (h - cropH) * 0.5
+        let y = max(0, (h - cropH) * 0.5)
         return CGRect(x: x, y: y, width: cropW, height: cropH)
     }
 

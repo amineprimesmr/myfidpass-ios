@@ -161,9 +161,10 @@ struct AppleNotificationPreviewView: View {
     }
 
     var body: some View {
-        IPhoneNotificationPreviewShell(statusBarTime: statusBarTime) {
-            notificationCard
-        }
+        notificationCard
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 2)
+            .shadow(color: .black.opacity(0.22), radius: 18, y: 10)
     }
 
     private var notificationCard: some View {
@@ -229,6 +230,89 @@ struct AppleNotificationPreviewView: View {
     }
 }
 
+// MARK: - Aperçu îlot (lecture seule)
+
+/// Bannière style îlot / riche : texte **lecture seule** (pas de champ), icône notif nette.
+struct ManualRichNotificationReadOnlyPreview: View {
+    let senderTitle: String
+    let messageBody: String
+    let appDisplayNameFallback: String
+    let logoURL: String?
+    /// Masque la ligne titre commerce + « maintenant » (ex. pop-up choix du logo notification).
+    var hidesSenderTitleRow: Bool = false
+    /// Corps affiché tel quel, sans repli sur le libellé par défaut quand non vide.
+    var messageCopyOverride: String? = nil
+
+    private let iconSide: CGFloat = 52
+    private let iconCorner: CGFloat = 12
+
+    private var displayTitle: String {
+        let t = senderTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !t.isEmpty { return t }
+        return appDisplayNameFallback.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var displayBody: String {
+        if let o = messageCopyOverride?.trimmingCharacters(in: .whitespacesAndNewlines), !o.isEmpty {
+            return o
+        }
+        let b = messageBody.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !b.isEmpty { return b }
+        return "Votre message apparaîtra ici pour les clients."
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 14) {
+            notificationIconBlock
+            VStack(alignment: .leading, spacing: 3) {
+                if !hidesSenderTitleRow {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(displayTitle)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(Color.black)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                        Spacer(minLength: 4)
+                        Text("maintenant")
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(Color.black.opacity(0.45))
+                    }
+                }
+                Text(displayBody)
+                    .font(.subheadline.weight(.regular))
+                    .foregroundStyle(Color.black.opacity(0.88))
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.vertical, 14)
+        .padding(.horizontal, 14)
+        .glassEffect(.regular, cornerRadius: 22)
+        .shadow(color: .clear, radius: 0, y: 0)
+        .preferredColorScheme(.light)
+    }
+
+    private var notificationIconBlock: some View {
+        Group {
+            if let raw = logoURL?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty {
+                BusinessLogoView(
+                    logoURL: raw,
+                    logoAssetContext: .campaignNotificationIcon,
+                    size: iconSide,
+                    cornerRadius: iconCorner
+                )
+            } else {
+                Image("logonotif")
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: iconSide, height: iconSide)
+                    .clipShape(RoundedRectangle(cornerRadius: iconCorner, style: .continuous))
+            }
+        }
+    }
+}
+
 // MARK: - Édition inline
 
 /// Champs éditables (focus partagé avec la barre clavier sur l’écran parent).
@@ -249,11 +333,26 @@ struct AppleNotificationCampaignEditorPreview: View {
     var focusedField: FocusState<CampaignNotificationEditorField?>.Binding
     /// Sauvegarde immédiate (barre « Enregistrer » + touche retour titre).
     var onSaveTexts: () async -> Void
+    @State private var messageHintVisibleCount = 0
+    @State private var messageHintAnimationTask: Task<Void, Never>?
+    @State private var iconBlinkOn = false
+    @State private var iconBlinkTask: Task<Void, Never>?
+    private let messageHintFullText = "Ecrivez votre message..."
+
+    private var hasCustomNotificationLogo: Bool {
+        let raw = logoURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return !raw.isEmpty
+    }
+
+    private var isMessageEmpty: Bool {
+        messageBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 
     var body: some View {
-        IPhoneNotificationPreviewShell(statusBarTime: statusBarTime) {
-            editableNotificationCard
-        }
+        editableNotificationCard
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 0)
+            .shadow(color: .black.opacity(0.2), radius: 16, y: 8)
     }
 
     private var editableNotificationCard: some View {
@@ -285,7 +384,7 @@ struct AppleNotificationCampaignEditorPreview: View {
                         .foregroundStyle(.white.opacity(0.5))
                 }
 
-                TextField("", text: $messageBody, prompt: Text("Message…").foregroundStyle(.white.opacity(0.42)), axis: .vertical)
+                TextField("", text: $messageBody, axis: .vertical)
                     .textFieldStyle(.plain)
                     .font(.subheadline.weight(.regular))
                     .foregroundStyle(.white)
@@ -294,25 +393,107 @@ struct AppleNotificationCampaignEditorPreview: View {
                     .focused(focusedField, equals: .message)
                     /// Multiligne : pas de `onSubmit` fiable — sauvegarde auto côté écran parent (debounce) + flush avant envoi.
                     .accessibilityLabel("Message de la notification")
+                    .overlay(alignment: .leading) {
+                        if isMessageEmpty {
+                            Text(animatedMessageHintText)
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.white.opacity(0.5))
+                                .allowsHitTesting(false)
+                        }
+                    }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.vertical, 14)
-        .padding(.horizontal, 16)
+        .padding(.vertical, 20)
+        .padding(.horizontal, 20)
         .background {
             RoundedRectangle(cornerRadius: IOSNotificationMetrics.cardCornerRadius, style: .continuous)
-                .fill(.ultraThinMaterial)
-                .environment(\.colorScheme, .dark)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color(red: 0.14, green: 0.14, blue: 0.17),
+                            Color(red: 0.19, green: 0.19, blue: 0.22),
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
         }
         .overlay(
             RoundedRectangle(cornerRadius: IOSNotificationMetrics.cardCornerRadius, style: .continuous)
                 .strokeBorder(Color.white.opacity(0.14), lineWidth: 0.5)
         )
+        .onAppear {
+            restartMessageHintAnimationIfNeeded()
+            restartIconBlinkIfNeeded()
+        }
+        .onChange(of: isMessageEmpty) { _, _ in
+            restartMessageHintAnimationIfNeeded()
+        }
+        .onChange(of: focusedField.wrappedValue) { _, _ in
+            restartMessageHintAnimationIfNeeded()
+        }
+        .onDisappear {
+            stopMessageHintAnimation()
+            stopIconBlink()
+        }
+    }
+
+    private func stopMessageHintAnimation() {
+        messageHintAnimationTask?.cancel()
+        messageHintAnimationTask = nil
+        messageHintVisibleCount = 0
+    }
+
+    private var animatedMessageHintText: String {
+        let total = messageHintFullText.count
+        let clamped = max(0, min(total, messageHintVisibleCount))
+        return String(messageHintFullText.prefix(clamped))
+    }
+
+    /// Animation continue lettre par lettre quand le champ message est vide et non focus.
+    private func restartMessageHintAnimationIfNeeded() {
+        stopMessageHintAnimation()
+        guard isMessageEmpty, focusedField.wrappedValue != .message else { return }
+        messageHintAnimationTask = Task { @MainActor in
+            let total = messageHintFullText.count
+            while !Task.isCancelled {
+                for i in 1...total {
+                    guard !Task.isCancelled else { return }
+                    messageHintVisibleCount = i
+                    try? await Task.sleep(nanoseconds: 55_000_000)
+                }
+                try? await Task.sleep(nanoseconds: 650_000_000)
+                guard !Task.isCancelled else { return }
+                messageHintVisibleCount = 0
+                try? await Task.sleep(nanoseconds: 230_000_000)
+            }
+        }
+    }
+
+    private func stopIconBlink() {
+        iconBlinkTask?.cancel()
+        iconBlinkTask = nil
+        iconBlinkOn = false
+    }
+
+    private func restartIconBlinkIfNeeded() {
+        stopIconBlink()
+        guard !isUploadingIcon, !hasCustomNotificationLogo else { return }
+        iconBlinkTask = Task { @MainActor in
+            while !Task.isCancelled {
+                withAnimation(.easeInOut(duration: 0.55)) { iconBlinkOn = true }
+                try? await Task.sleep(nanoseconds: 560_000_000)
+                guard !Task.isCancelled else { return }
+                withAnimation(.easeInOut(duration: 0.55)) { iconBlinkOn = false }
+                try? await Task.sleep(nanoseconds: 560_000_000)
+            }
+        }
     }
 
     private var notificationIconPickerArea: some View {
         PhotosPicker(selection: $iconPhotoItem, matching: .images, photoLibrary: .shared()) {
-            ZStack(alignment: .bottomTrailing) {
+            ZStack {
                 Group {
                     if let raw = logoURL?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty {
                         BusinessLogoView(
@@ -340,9 +521,17 @@ struct AppleNotificationCampaignEditorPreview: View {
                         .scaleEffect(0.9)
                 }
             }
+            .frame(width: IOSNotificationMetrics.iconSide, height: IOSNotificationMetrics.iconSide)
+            .opacity((hasCustomNotificationLogo || isUploadingIcon) ? 1 : (iconBlinkOn ? 1 : 0.58))
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Changer l’icône de notification")
+        .onChange(of: isUploadingIcon) { _, _ in
+            restartIconBlinkIfNeeded()
+        }
+        .onChange(of: logoURL) { _, _ in
+            restartIconBlinkIfNeeded()
+        }
     }
 }
 

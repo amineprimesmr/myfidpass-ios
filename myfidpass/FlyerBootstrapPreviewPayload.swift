@@ -26,6 +26,10 @@ struct FlyerBootstrapPreviewPayload: Encodable {
     let flyerPrefs: Inner
     let updatedAt: String?
     let shareUrl: String
+    /// Marqueur local uniquement : présent (`true`) quand le fond est affiché en `UIImage` natif sous la WebView.
+    /// Ignoré par le JS (`_nbg` n’est pas lu par `app-flyer-qr-draw`), mais change le base64 du bootstrap
+    /// quand le fond passe de absent → présent, forçant une ré-injection complète du canvas (canvas cleared + redrawn).
+    let nativeBgActive: Bool?
 
     struct Inner: Encodable {
         let state: FlyerStateDTO
@@ -41,10 +45,26 @@ struct FlyerBootstrapPreviewPayload: Encodable {
         }
     }
 
+    init(flyerPrefs: Inner, updatedAt: String?, shareUrl: String, nativeBgActive: Bool? = nil) {
+        self.flyerPrefs = flyerPrefs
+        self.updatedAt = updatedAt
+        self.shareUrl = shareUrl
+        self.nativeBgActive = nativeBgActive
+    }
+
     enum CodingKeys: String, CodingKey {
         case flyerPrefs = "flyer_prefs"
         case updatedAt = "updated_at"
         case shareUrl = "share_url"
+        case nativeBgActive = "_nbg"
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(flyerPrefs, forKey: .flyerPrefs)
+        try c.encodeIfPresent(updatedAt, forKey: .updatedAt)
+        try c.encode(shareUrl, forKey: .shareUrl)
+        try c.encodeIfPresent(nativeBgActive, forKey: .nativeBgActive)
     }
 }
 
@@ -66,6 +86,28 @@ enum FlyerBootstrapPreviewPayloadBuilder {
         } catch {
             return nil
         }
+    }
+
+    /// Extrait `custom_bg_data_url` depuis un bootstrap base64 quand le champ cache séparé est absent.
+    static func customBgDataURLFromBootstrapBase64(_ b64: String) -> String? {
+        let trimmed = b64.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let data = Data(base64Encoded: trimmed),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let fp = root["flyer_prefs"] as? [String: Any],
+              let raw = fp["custom_bg_data_url"] as? String else { return nil }
+        let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return t.isEmpty ? nil : t
+    }
+
+    static func updatedAtFromBootstrapBase64(_ b64: String?) -> String? {
+        let trimmed = b64?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty,
+              let data = Data(base64Encoded: trimmed),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let raw = root["updated_at"] as? String
+        else { return nil }
+        let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? nil : value
     }
 
     /// Met à jour uniquement le mode de rendu roue dans un bootstrap existant (cache disque) pour matcher l’éditeur.

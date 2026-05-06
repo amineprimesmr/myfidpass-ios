@@ -15,7 +15,7 @@ enum FlyerEmbedWarmup {
 
     private static var poolViews: [WKWebView] = []
     private static var readyViews: [WKWebView] = []
-    /// 1 vue préchauffée (revenir à 1 : pool=2 a coïncidé avec des régressions d’affichage embed côté certains parcours).
+    /// Pool minimal pour réduire le cold-start sans réintroduire du churn lourd.
     private static let maxPool = 1
     private static let warmupDelegate = WarmupNavigationDelegate()
     private static var delayedStartWorkItem: DispatchWorkItem?
@@ -78,6 +78,38 @@ enum FlyerEmbedWarmup {
                 /// Même correctif `atob` + UTF-8 que `FlyerPreviewWebView` (le pool ne passait pas par `makeUIView`).
                 FlyerEmbedAtobUTF8Patch.addTo(config)
                 FlyerEmbedSpinflyerSrcPatch.addTo(config)
+                let noisyResourceBlocker = WKUserScript(
+                    source: """
+                    (function(){
+                      function isBlocked(u){
+                        try {
+                          var s = String(u || '').toLowerCase();
+                          return s.indexOf('default.csv') >= 0;
+                        } catch(e) { return false; }
+                      }
+                      var _fetch = window.fetch;
+                      if (typeof _fetch === 'function') {
+                        window.fetch = function(input, init){
+                          var u = (typeof input === 'string') ? input : (input && input.url);
+                          if (isBlocked(u)) {
+                            return Promise.resolve(new Response('', { status: 204, statusText: 'No Content' }));
+                          }
+                          return _fetch.call(this, input, init);
+                        };
+                      }
+                      var _open = XMLHttpRequest.prototype.open;
+                      XMLHttpRequest.prototype.open = function(method, url){
+                        if (isBlocked(url)) {
+                          return _open.call(this, method, 'about:blank');
+                        }
+                        return _open.apply(this, arguments);
+                      };
+                    })();
+                    """,
+                    injectionTime: .atDocumentStart,
+                    forMainFrameOnly: false
+                )
+                config.userContentController.addUserScript(noisyResourceBlocker)
                 let wv = WKWebView(
                     frame: CGRect(x: -20, y: -20, width: 2, height: 2),
                     configuration: config
@@ -90,7 +122,7 @@ enum FlyerEmbedWarmup {
                 window.addSubview(wv)
                 let req = URLRequest(
                     url: APIConfig.flyerEmbedURL,
-                    cachePolicy: .returnCacheDataElseLoad,
+                    cachePolicy: .reloadRevalidatingCacheData,
                     timeoutInterval: 60
                 )
                 wv.load(req)
@@ -108,4 +140,15 @@ private final class WarmupNavigationDelegate: NSObject, WKNavigationDelegate {
     }
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {}
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {}
+    func webView(
+        _ webView: WKWebView,
+        decidePolicyFor navigationAction: WKNavigationAction,
+        decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
+    ) {
+        if navigationAction.request.url?.lastPathComponent.lowercased() == "default.csv" {
+            decisionHandler(.cancel)
+            return
+        }
+        decisionHandler(.allow)
+    }
 }

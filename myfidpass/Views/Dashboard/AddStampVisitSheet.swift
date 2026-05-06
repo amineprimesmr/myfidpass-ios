@@ -46,21 +46,47 @@ struct AddStampVisitSheet: View {
     let data: ScanStampSheetData
     @Binding var isSubmitting: Bool
     var onDismiss: () -> Void
-    var onConfirm: () async -> Bool
+    var onConfirm: () async -> ScanResponse?
+    var onRedeemFinalReward: () async -> RedeemResponse?
 
     @Environment(\.colorScheme) private var colorScheme
 
     private let topChrome = StampVisitTopChrome()
+    @State private var currentStamps: Int
+    @State private var unlockedRewardMessage: String?
+    @State private var canRedeemFinalNow: Bool = false
 
     private var model: DashboardHomeCardModel { data.cardModel }
+    private var requiredStampsInt: Int { max(1, Int(model.requiredStamps)) }
+    private var midRewardLabelTrimmed: String {
+        model.stampMidRewardLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    private var finalRewardLabelTrimmed: String {
+        model.stampRewardLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    init(
+        data: ScanStampSheetData,
+        isSubmitting: Binding<Bool>,
+        onDismiss: @escaping () -> Void,
+        onConfirm: @escaping () async -> ScanResponse?,
+        onRedeemFinalReward: @escaping () async -> RedeemResponse?
+    ) {
+        self.data = data
+        self._isSubmitting = isSubmitting
+        self.onDismiss = onDismiss
+        self.onConfirm = onConfirm
+        self.onRedeemFinalReward = onRedeemFinalReward
+        _currentStamps = State(initialValue: min(max(0, Int(data.cardModel.previewStampsCount)), max(1, Int(data.cardModel.requiredStamps))))
+    }
 
     private var stampCaption: String {
-        let total = max(1, Int(model.requiredStamps))
-        let filled = min(max(0, Int(model.previewStampsCount)), total)
+        let total = requiredStampsInt
+        let filled = min(max(0, currentStamps), total)
         if total > 1, filled == total - 1 {
             return "Dernier tampon avant la récompense : la carte repart à zéro après ce passage."
         }
-        return "Solde avant cette visite : \(filled) / \(total) tampons"
+        return "Solde actuel : \(filled) / \(total) tampons"
     }
 
     var body: some View {
@@ -124,7 +150,7 @@ struct AddStampVisitSheet: View {
                         CafeDesArtsCardPreview(
                             displayName: model.displayName.isEmpty ? "Ma Carte Fidélité" : model.displayName,
                             requiredStamps: model.requiredStamps,
-                            stampsCount: model.previewStampsCount,
+                            stampsCount: Int32(currentStamps),
                             primaryColorHex: model.primaryHex,
                             accentColorHex: model.accentHex,
                             stripColorHex: nil,
@@ -143,7 +169,8 @@ struct AddStampVisitSheet: View {
                             restantsCaption: model.labelRestants,
                             compact: true,
                             onEditZoneTap: nil,
-                            fidelityQRPayloadURL: model.fidelityQRPayloadURL
+                            fidelityQRPayloadURL: model.fidelityQRPayloadURL,
+                            stampsOnly: true
                         )
                         .padding(.horizontal, AppTheme.Spacing.lg)
                         .padding(.top, 4)
@@ -175,6 +202,9 @@ struct AddStampVisitSheet: View {
 
                             VStack(spacing: 0) {
                                 Spacer(minLength: 0)
+                                rewardUnlockedPanel
+                                    .padding(.horizontal, 16)
+                                    .padding(.bottom, 10)
                                 confirmStampButton
                                     .padding(.horizontal, 16)
                                     .padding(.bottom, bottomPad + 10)
@@ -254,7 +284,24 @@ struct AddStampVisitSheet: View {
         return Button {
             UINotificationFeedbackGenerator().notificationOccurred(.success)
             Task {
-                _ = await onConfirm()
+                guard let response = await onConfirm() else { return }
+                let newServerBalance = response.member?.points ?? response.newBalance
+                let fallback = min(requiredStampsInt, currentStamps + 1)
+                let resolvedBalance = max(0, newServerBalance ?? fallback)
+                await MainActor.run {
+                    currentStamps = min(resolvedBalance, requiredStampsInt)
+                    if response.stampCycleCompleted == true || currentStamps >= requiredStampsInt {
+                        let rewardText = finalRewardLabelTrimmed.isEmpty ? "Récompense finale disponible" : finalRewardLabelTrimmed
+                        unlockedRewardMessage = "Recompense debloquee: \(rewardText)"
+                        canRedeemFinalNow = true
+                    } else if requiredStampsInt >= 5, currentStamps >= 5, !midRewardLabelTrimmed.isEmpty {
+                        unlockedRewardMessage = "Recompense 5e tampon: \(midRewardLabelTrimmed)"
+                        canRedeemFinalNow = false
+                    } else {
+                        unlockedRewardMessage = nil
+                        canRedeemFinalNow = false
+                    }
+                }
             }
         } label: {
             Text("Ajouter un tampon")
@@ -273,6 +320,49 @@ struct AddStampVisitSheet: View {
         .opacity(isSubmitting ? 0.45 : 1)
         .accessibilityLabel("Ajouter un tampon")
         .accessibilityHint("Enregistre une visite et crédite un tampon sur la carte du client.")
+    }
+
+    @ViewBuilder
+    private var rewardUnlockedPanel: some View {
+        if let msg = unlockedRewardMessage {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    Image(systemName: "gift.fill")
+                        .foregroundStyle(AppTheme.Colors.success)
+                    Text(msg)
+                        .font(.system(size: 14, weight: .semibold, design: .default))
+                        .foregroundStyle(AppTheme.Colors.textPrimary)
+                }
+                if canRedeemFinalNow {
+                    Button {
+                        Task {
+                            guard let response = await onRedeemFinalReward() else { return }
+                            await MainActor.run {
+                                currentStamps = max(0, min(requiredStampsInt, response.newPoints ?? 0))
+                                unlockedRewardMessage = "Recompense appliquee. Carte remise a \(currentStamps)/\(requiredStampsInt)."
+                                canRedeemFinalNow = false
+                            }
+                        }
+                    } label: {
+                        Label("Activer la recompense maintenant", systemImage: "checkmark.seal.fill")
+                            .font(.system(size: 14, weight: .semibold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 11)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(AppTheme.Colors.success)
+                    .disabled(isSubmitting)
+                }
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.white)
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(AppTheme.Colors.textSecondary.opacity(0.18), lineWidth: 1)
+            )
+        }
     }
 }
 
@@ -353,7 +443,8 @@ private func stampVisitDarkRadialBackground(width: CGFloat, height: CGFloat) -> 
         ),
         isSubmitting: .constant(false),
         onDismiss: {},
-        onConfirm: { true }
+        onConfirm: { nil },
+        onRedeemFinalReward: { nil }
     )
 }
 #endif
