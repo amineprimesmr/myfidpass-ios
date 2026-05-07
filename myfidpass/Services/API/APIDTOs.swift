@@ -1844,9 +1844,3 @@ struct WorkspaceTeamStaffAccountResponse: Decodable {
     }
 }
 
-
-struct DevSimulatePaymentResponse: Decodable {
-    let simulated: Bool
-    let active: Bool?
-    let status: String?
-}

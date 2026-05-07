@@ -2,7 +2,7 @@
 //  MerchantTrialSubscribePillView.swift
 //  myfidpass
 //
-//  Bandeau flottant au-dessus du tab bar : CTA abonnement + temps restant sur l’accès offert (compte, pas l’App Store).
+//  Bandeau flottant au-dessus du tab bar : CTA abonnement + temps restant sur l’accès offert (compte serveur, pas le renouvellement facturé).
 //
 
 import SwiftUI

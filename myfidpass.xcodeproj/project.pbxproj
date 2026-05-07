@@ -7,7 +7,6 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		67473A0B2F94E30E00A490E0 /* StoreKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 67473A0A2F94E30E00A490E0 /* StoreKit.framework */; };
 		677770B52F51B695009FC324 /* HomeScannerActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 677770AD2F51B695009FC324 /* HomeScannerActivityAttributes.swift */; };
 		677770B62F51B695009FC324 /* MyFidpassHomeScanExtension.swift in Sources */ = {isa = PBXBuildFile; fileRef = 677770B22F51B695009FC324 /* MyFidpassHomeScanExtension.swift */; };
 		677770B72F51B695009FC324 /* HomeScannerLiveActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 677770B32F51B695009FC324 /* HomeScannerLiveActivity.swift */; };
@@ -50,7 +49,6 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
-		67473A0A2F94E30E00A490E0 /* StoreKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = StoreKit.framework; path = System/Library/Frameworks/StoreKit.framework; sourceTree = SDKROOT; };
 		676750BB2F51B695009FC324 /* myfidpass.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = myfidpass.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		677770A22F51B695009FC324 /* MyFidpassHomeScanExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = MyFidpassHomeScanExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		677770AD2F51B695009FC324 /* HomeScannerActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeScannerActivityAttributes.swift; sourceTree = "<group>"; };
@@ -76,7 +74,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				67473A0B2F94E30E00A490E0 /* StoreKit.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -97,21 +94,12 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-		67473A092F94E30E00A490E0 /* Frameworks */ = {
-			isa = PBXGroup;
-			children = (
-				67473A0A2F94E30E00A490E0 /* StoreKit.framework */,
-			);
-			name = Frameworks;
-			sourceTree = "<group>";
-		};
 		676750B22F51B695009FC324 = {
 			isa = PBXGroup;
 			children = (
 				676750BD2F51B695009FC324 /* myfidpass */,
 				677770A32F51B695009FC324 /* MyFidpassHomeScanExtension */,
 				6B0007002F51B695009FC324 /* MyfidpassNotificationServiceExtension */,
-				67473A092F94E30E00A490E0 /* Frameworks */,
 				676750BC2F51B695009FC324 /* Products */,
 			);
 			sourceTree = "<group>";

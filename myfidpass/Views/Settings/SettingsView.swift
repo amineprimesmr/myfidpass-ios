@@ -27,9 +27,6 @@ struct SettingsView: View {
     @State private var isDeletingAccount = false
     @State private var deleteAccountError: String?
     @State private var inAppSafariURL: URL?
-    @State private var isSimulatingPayment = false
-    @State private var devSimulateError: String?
-    @State private var isDevSimulationActive: Bool? = nil
 
     private var appVersionShort: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
@@ -49,6 +46,16 @@ struct SettingsView: View {
 
     private var shouldShowTrialPromoBanner: Bool {
         authService.isMerchantTrialPeriodActive && authService.merchantTrialEndsAt != nil
+    }
+
+    private var needsFlyerSetupBadge: Bool {
+        guard let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !slug.isEmpty else { return false }
+        CommerceFlyerStore.shared.hydrateFromDiskIfNeeded(slug: slug)
+        guard let cached = CommerceFlyerStore.shared.snapshot(for: slug) else { return true }
+        let hasBootstrap = !(cached.bootstrapPreviewB64 ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasCustomBg = !(cached.customBgDataURL ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return !(cached.flyerRegistered || hasBootstrap || hasCustomBg)
     }
 
     var body: some View {
@@ -140,24 +147,6 @@ struct SettingsView: View {
                 }
             }
 
-            GroupedSettingsCard {
-                NavigationLink {
-                    AccountSettingsDetailView()
-                        .environmentObject(authService)
-                        .environmentObject(syncService)
-                        .environment(\.managedObjectContext, viewContext)
-                } label: {
-                    GroupedSettingsNavigationRow(
-                        icon: "person.crop.circle.fill",
-                        title: "Compte",
-                        subtitle: nil,
-                        value: nil,
-                        showsChevron: true
-                    )
-                }
-                .buttonStyle(.plain)
-            }
-
             if authService.canManageMerchantTeam {
                 GroupedSettingsCard {
                     NavigationLink {
@@ -186,14 +175,33 @@ struct SettingsView: View {
                     } label: {
                         GroupedSettingsNavigationRow(
                             icon: "doc.richtext",
-                            title: "Flyer & programme",
-                            subtitle: "Éditeur, export, QR",
+                            title: "Flyer",
+                            subtitle: nil,
                             value: nil,
-                            showsChevron: true
+                            showsChevron: true,
+                            showsAttentionDot: needsFlyerSetupBadge
                         )
                     }
                     .buttonStyle(.plain)
                 }
+            }
+
+            GroupedSettingsCard {
+                NavigationLink {
+                    AccountSettingsDetailView()
+                        .environmentObject(authService)
+                        .environmentObject(syncService)
+                        .environment(\.managedObjectContext, viewContext)
+                } label: {
+                    GroupedSettingsNavigationRow(
+                        icon: "person.crop.circle.fill",
+                        title: "Compte",
+                        subtitle: nil,
+                        value: nil,
+                        showsChevron: true
+                    )
+                }
+                .buttonStyle(.plain)
             }
 
             GroupedSettingsCard {
@@ -266,9 +274,6 @@ struct SettingsView: View {
                 GroupedSettingsDestructiveRow(title: "Supprimer mon compte", action: { showDeleteAccountConfirmation = true })
             }
 
-            // ── Bouton dev : simulation de paiement ──
-            devSimulatePaymentCard
-
             Text("Version \(appVersionShort)")
                 .font(.caption)
                 .foregroundStyle(Color(UIColor.secondaryLabel).opacity(0.9))
@@ -303,75 +308,6 @@ struct SettingsView: View {
         }
         .padding(.horizontal, GroupedSettingsMetrics.horizontalPadding)
         .padding(.vertical, GroupedSettingsMetrics.rowVerticalPadding)
-    }
-
-    // MARK: - Dev simulate payment
-
-    @ViewBuilder
-    private var devSimulatePaymentCard: some View {
-        let simulated = isDevSimulationActive ?? false
-        VStack(alignment: .leading, spacing: 10) {
-            Label("Mode développeur", systemImage: "bolt.fill")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(Color.orange)
-            Text(simulated
-                 ? "Simulation active — toutes les fonctionnalités payantes sont accessibles."
-                 : "Simule un abonnement actif sans passer par Stripe.")
-                .font(.caption)
-                .foregroundStyle(Color(UIColor.secondaryLabel))
-            Button {
-                Task { await toggleDevSimulatePayment(activate: !simulated) }
-            } label: {
-                HStack(spacing: 6) {
-                    if isSimulatingPayment || isDevSimulationActive == nil {
-                        ProgressView().scaleEffect(0.8).tint(.white)
-                    }
-                    Text(simulated ? "Désactiver la simulation" : "Simuler le paiement")
-                        .font(.subheadline.weight(.semibold))
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 10)
-                .background(simulated ? Color.gray : Color.orange)
-                .foregroundStyle(.white)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-            }
-            .disabled(isSimulatingPayment || isDevSimulationActive == nil)
-            if let err = devSimulateError {
-                Text(err).font(.caption).foregroundStyle(.red)
-            }
-        }
-        .padding(14)
-        .background(Color.orange.opacity(0.08))
-        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.orange.opacity(0.35), lineWidth: 1.5))
-        .clipShape(RoundedRectangle(cornerRadius: 14))
-        .task { await fetchDevSimulationState() }
-    }
-
-    private func fetchDevSimulationState() async {
-        guard let slug = authService.businesses.first?.slug else { return }
-        do {
-            let r: DevSimulatePaymentResponse = try await APIClient.shared.request(.devSimulatePaymentStatus(slug: slug))
-            await MainActor.run { isDevSimulationActive = r.simulated }
-        } catch {
-            await MainActor.run { isDevSimulationActive = false }
-        }
-    }
-
-    private func toggleDevSimulatePayment(activate: Bool) async {
-        guard let slug = authService.businesses.first?.slug else { return }
-        await MainActor.run { isSimulatingPayment = true; devSimulateError = nil }
-        defer { Task { @MainActor in isSimulatingPayment = false } }
-        do {
-            let _: EmptyResponse = try await APIClient.shared.request(.devSimulatePayment(slug: slug, activate: activate))
-            // Clear le flag post-inscription qui bloque l'accès même avec Stripe actif
-            if activate {
-                await MainActor.run { authService.clearMandatoryPaywallAfterSignupPending() }
-            }
-            await authService.refreshBusinessesIfNeeded(force: true)
-            await MainActor.run { isDevSimulationActive = activate }
-        } catch {
-            await MainActor.run { devSimulateError = error.localizedDescription }
-        }
     }
 
     private func performDeleteAccount() async {

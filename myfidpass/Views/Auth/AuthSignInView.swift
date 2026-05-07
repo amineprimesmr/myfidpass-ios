@@ -57,26 +57,12 @@ struct AuthSignInView: View {
         !email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    private var canSubmit: Bool {
-        !isLoading && isIdentifierValid && !password.isEmpty
+    private var shouldRevealPasswordField: Bool {
+        hasStartedIdentifierTyping || focusedField == .email || focusedField == .password
     }
 
-    private static let authSheetTopFadeHeight: CGFloat = 52
-
-    /// Dégradé au-dessus du bloc formulaire (carousel visible en transparence) — pas derrière les champs.
-    private static var authSheetTopFade: some View {
-        LinearGradient(
-            stops: [
-                .init(color: Color.white.opacity(0), location: 0),
-                .init(color: Color.white.opacity(0.55), location: 0.55),
-                .init(color: Color.white, location: 1)
-            ],
-            startPoint: .top,
-            endPoint: .bottom
-        )
-        .frame(height: authSheetTopFadeHeight)
-        .frame(maxWidth: .infinity)
-        .allowsHitTesting(false)
+    private var canSubmit: Bool {
+        !isLoading && isIdentifierValid && !password.isEmpty
     }
 
     /// Fond **opaque** des champs (pas tertiarySystemFill, trop translucide sur le dégradé).
@@ -88,6 +74,7 @@ struct AuthSignInView: View {
         GeometryReader { geo in
             let fullW = geo.size.width
             let fullH = geo.size.height
+            let heroHeight = fullH * 0.82
             let topSafe = geo.safeAreaInsets.top
             let bottomSafe = max(geo.safeAreaInsets.bottom, 12)
 
@@ -99,19 +86,22 @@ struct AuthSignInView: View {
                         Image(Self.heroAssets[i])
                             .resizable()
                             .scaledToFill()
-                            .frame(width: fullW, height: fullH, alignment: .top)
+                            .frame(width: fullW, height: heroHeight, alignment: .top)
                             .clipped()
                             .tag(i)
                     }
                 }
                 .tabViewStyle(.page(indexDisplayMode: .never))
-                .frame(width: fullW, height: fullH)
+                .frame(width: fullW, height: heroHeight, alignment: .top)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .clipped()
+                .offset(y: -8)
                 .scaleEffect(heroAppeared ? 1 : 1.02)
                 .opacity(heroAppeared ? 1 : 0)
                 .ignoresSafeArea(edges: .top)
 
                 VStack(spacing: 0) {
-                    Self.authSheetTopFade
+                    Spacer(minLength: 0)
 
                     ScrollView(showsIndicators: false) {
                         VStack(alignment: .leading, spacing: 0) {
@@ -141,7 +131,7 @@ struct AuthSignInView: View {
                                 }
                             }
 
-                            if hasStartedIdentifierTyping {
+                            if shouldRevealPasswordField {
                                 SecureField(
                                     "",
                                     text: $password,
@@ -163,9 +153,9 @@ struct AuthSignInView: View {
                                 ))
                             }
                         }
-                        .animation(.spring(response: 0.38, dampingFraction: 0.86), value: hasStartedIdentifierTyping)
+                        .animation(.spring(response: 0.38, dampingFraction: 0.86), value: shouldRevealPasswordField)
 
-                        if !hasStartedIdentifierTyping {
+                        if !shouldRevealPasswordField {
                             VStack(spacing: 12) {
                                 googleButton
                                 appleButton
@@ -181,38 +171,34 @@ struct AuthSignInView: View {
                                 .fixedSize(horizontal: false, vertical: true)
                         }
 
-                        primaryButton(
-                            title: "Se connecter",
-                            enabled: canSubmit,
-                            loading: isLoading
-                        ) {
-                            Task { await submit() }
+                        if shouldRevealPasswordField {
+                            primaryButton(
+                                title: "Se connecter",
+                                enabled: canSubmit,
+                                loading: isLoading
+                            ) {
+                                Task { await submit() }
+                            }
+                            .padding(.top, 14)
+                            .transition(.asymmetric(
+                                insertion: .opacity.combined(with: .move(edge: .bottom)),
+                                removal: .opacity
+                            ))
                         }
-                        .padding(.top, 20)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .opacity(contentAppeared ? 1 : 0)
                     .padding(.horizontal, 24)
-                    .padding(.top, 14)
+                    .padding(.top, 0)
                     .padding(.bottom, keyboardHeight > 0 ? 8 : bottomSafe)
-                    .background(Color.white)
+                    .background(Color.clear)
                 }
                 .scrollDismissesKeyboard(.interactively)
                 .frame(maxWidth: .infinity)
                 .fixedSize(horizontal: false, vertical: true)
-                .background(Color.white)
+                    .background(Color.clear)
                 }
-                .background(Color.white)
-                .clipShape(
-                    UnevenRoundedRectangle(
-                        topLeadingRadius: 28,
-                        bottomLeadingRadius: 0,
-                        bottomTrailingRadius: 0,
-                        topTrailingRadius: 28,
-                        style: .continuous
-                    )
-                )
-                .shadow(color: Color.black.opacity(0.06), radius: 14, y: -6)
+                .padding(.top, 10)
                 .padding(.bottom, keyboardHeight)
                 .ignoresSafeArea(edges: .bottom)
             }
@@ -229,7 +215,7 @@ struct AuthSignInView: View {
                 .controlSize(.regular)
                 .liquidGlassButtonAppearance(.adaptive, cornerRadius: 18)
                 .accessibilityLabel("Retour")
-                .padding(EdgeInsets(top: topSafe + 8, leading: 16, bottom: 0, trailing: 0))
+                .padding(EdgeInsets(top: max(topSafe, 44) + 8, leading: 16, bottom: 0, trailing: 0))
             }
             .animation(.easeOut(duration: 0.22), value: keyboardHeight)
             .frame(width: fullW, height: fullH)
@@ -341,8 +327,8 @@ struct AuthSignInView: View {
             .padding(.vertical, 16)
             .foregroundStyle((enabled || loading) ? Color.black : Color.black.opacity(0.42))
         }
-        .buttonBorderShape(.roundedRectangle(radius: 26))
-        .liquidGlassButtonAppearance(.adaptive, cornerRadius: 26)
+        .buttonBorderShape(.capsule)
+        .liquidGlassButtonAppearance(.adaptive, cornerRadius: 999)
         .disabled(!enabled || loading)
     }
 

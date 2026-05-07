@@ -97,27 +97,30 @@ private struct WelcomeFlow: View {
 struct RootView: View {
     @EnvironmentObject var authService: AuthService
     @Environment(\.managedObjectContext) private var viewContext
+    @AppStorage(AuthStorage.Key.isLoggedIn) private var isLoggedIn = false
+
+    private var shouldShowAuthenticatedApp: Bool {
+        authService.currentScreen == .authenticated && isLoggedIn
+    }
 
     var body: some View {
-        Group {
-            switch authService.currentScreen {
-            case .welcome:
+        ZStack {
+            if !shouldShowAuthenticatedApp {
                 WelcomeFlow()
-            case .authenticated:
+                    .transition(.asymmetric(insertion: .opacity.combined(with: .scale(scale: 0.985)), removal: .opacity))
+            } else {
                 Group {
-                    Group {
-                        if authService.isPlatformAdmin && !authService.adminShowsMerchantWorkspace {
-                            PlatformAdminRootView()
-                        } else {
-                            ContentView()
-                        }
+                    if authService.isPlatformAdmin && !authService.adminShowsMerchantWorkspace {
+                        PlatformAdminRootView()
+                    } else {
+                        ContentView()
                     }
-                    .environment(\.managedObjectContext, viewContext)
                 }
+                .environment(\.managedObjectContext, viewContext)
+                .transition(.asymmetric(insertion: .opacity.combined(with: .move(edge: .trailing)), removal: .opacity))
             }
         }
-        // Pas d’animation implicite entre welcome et authentifié : évite flash / mélange des deux racines.
-        .animation(nil, value: authService.currentScreen)
+        .animation(.easeInOut(duration: 0.32), value: shouldShowAuthenticatedApp)
         .onReceive(NotificationCenter.default.publisher(for: .myfidpassSessionInvalidated)) { _ in
             // Reset serveur / compte supprimé : les JWT sont morts mais `isLoggedIn` restait vrai sans cette étape.
             authService.logout()

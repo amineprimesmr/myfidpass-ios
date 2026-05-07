@@ -164,13 +164,13 @@ struct MyfidpassMerchantOnboardingRootView: View {
                     Button(action: handleContinueTap) {
                         Text("CONTINUER")
                             .font(.system(size: 20, weight: .black))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(.black)
                             .transition(.opacity.combined(with: .scale(scale: 0.9)))
                             .frame(maxWidth: .infinity)
                             .frame(height: 50)
                     }
                     .buttonBorderShape(.roundedRectangle(radius: 50))
-                    .liquidGlassButtonAppearance(.regularTint(LiquidGlassNativeTint.darkRegular), cornerRadius: 50)
+                    .liquidGlassButtonAppearance(.adaptive, cornerRadius: 50)
                     .padding(.horizontal, 40)
                     .disabled(!canContinueNow)
                     .opacity(canContinueNow ? 1.0 : 0.5)
@@ -194,11 +194,11 @@ struct MyfidpassMerchantOnboardingRootView: View {
                             }) {
                                 Image(systemName: "chevron.left")
                                     .font(.system(size: 13, weight: .semibold))
-                                    .foregroundStyle(.white)
+                                    .foregroundStyle(Color.primary.opacity(0.88))
                                     .frame(width: 34, height: 34)
                             }
                             .buttonBorderShape(.circle)
-                            .liquidGlassButtonAppearance(.regularTint(LiquidGlassNativeTint.darkRegular), cornerRadius: 17)
+                            .liquidGlassButtonAppearance(.adaptive, cornerRadius: 17)
                         } else {
                             Spacer()
                                 .frame(width: 34, height: 34)
@@ -216,7 +216,7 @@ struct MyfidpassMerchantOnboardingRootView: View {
                         LanguageSelectorView()
                     }
                     .padding(.horizontal, 20)
-                    .padding(.top, 50)
+                    .padding(.top, max(topSafeInset, 44) + 8)
 
                     Spacer()
                 }
@@ -257,6 +257,12 @@ struct MyfidpassMerchantOnboardingRootView: View {
     }
 
     private var continueButtonBottomOffset: CGFloat { 50 }
+    private var topSafeInset: CGFloat {
+        (UIApplication.shared.connectedScenes.first as? UIWindowScene)?
+            .windows
+            .first(where: { $0.isKeyWindow })?
+            .safeAreaInsets.top ?? 0
+    }
     private var continueButtonsBottomInset: CGFloat {
         if keyboardHeight > 0 {
             // Place les actions juste au-dessus du clavier.

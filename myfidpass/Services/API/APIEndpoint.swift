@@ -75,10 +75,6 @@ enum APIEndpoint {
     case paymentPortalSession
     /// Paiement Stripe dédié au commerce actif (mode carte séparée par commerce).
     case paymentBusinessCheckoutSession(businessSlug: String, interval: String?)
-    /// Dev uniquement : simule un abonnement actif sans Stripe (POST=activer, DELETE=désactiver).
-    case devSimulatePayment(slug: String, activate: Bool)
-    /// Dev uniquement : statut de la simulation (GET).
-    case devSimulatePaymentStatus(slug: String)
 
     // MARK: - Sync (dashboard / slug)
     case businessSettings(slug: String)
@@ -229,8 +225,6 @@ enum APIEndpoint {
         case .paymentReconcileSubscription: return "/api/payment/reconcile-subscription"
         case .paymentPortalSession: return "/api/payment/create-portal-session"
         case .paymentBusinessCheckoutSession: return "/api/payment/create-business-checkout-session"
-        case .devSimulatePayment(let slug, _): return "/api/businesses/\(pathSegment(slug))/dashboard/dev-simulate-payment"
-        case .devSimulatePaymentStatus(let slug): return "/api/businesses/\(pathSegment(slug))/dashboard/dev-simulate-payment"
         case .businessSettings(let slug): return "/api/businesses/\(pathSegment(slug))/dashboard/settings"
         case .businessStats(let slug, _): return "/api/businesses/\(pathSegment(slug))/dashboard/stats"
         case .businessStatsTraffic(let slug, _): return "/api/businesses/\(pathSegment(slug))/dashboard/stats/traffic"
@@ -359,8 +353,6 @@ enum APIEndpoint {
             return "PATCH"
         case .deleteCategory, .authDeleteAccount, .deleteDashboardMember, .businessTeamRevoke:
             return "DELETE"
-        case .devSimulatePayment(_, let activate):
-            return activate ? "POST" : "DELETE"
         case .dashboardGameRewardsPut, .dashboardFlyerPut:
             return "PUT"
         default:

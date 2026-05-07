@@ -116,7 +116,7 @@ struct BorderBeamManualNotificationComposerView: View {
     let keepManualMessageFieldClearedAfterSend: Bool
 
     let hasSlug: Bool
-    /// `true` tant que l’abonnement payant (Stripe / IAP) n’est pas actif : pas d’envoi manuel.
+    /// `true` tant que l’abonnement payant (Stripe web) n’est pas actif : pas d’envoi manuel.
     var sendingLocked: Bool = false
     let isSending: Bool
     let isUploadingNotificationIcon: Bool

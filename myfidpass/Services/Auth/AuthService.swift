@@ -226,9 +226,10 @@ final class AuthService: NSObject, ObservableObject {
     }
 
     func markMandatoryPaywallAfterSignupPending() {
-        AuthStorage.pendingOpenMerchantSubscriptionSheetAfterSignup = true
+        // Flux simplifié: après création de compte, accès direct à l'app (plus de paywall bloquant).
+        AuthStorage.pendingOpenMerchantSubscriptionSheetAfterSignup = false
         AuthStorage.pendingShowMerchantHomeTutorialAfterSignup = true
-        pendingMandatoryPaywallAfterSignup = true
+        pendingMandatoryPaywallAfterSignup = false
         pendingHomeTutorialAfterSignup = true
     }
 
@@ -1067,37 +1068,29 @@ final class AuthService: NSObject, ObservableObject {
         currentScreen = .welcome
     }
 
-    /// Supprime définitivement le compte (appel API + déconnexion).
+    /// Supprime définitivement le compte (API source de vérité), puis purge locale + retour welcome.
+    /// Si l'API échoue (réseau/serveur), on garde la session et on remonte l'erreur.
     func deleteAccount() async throws {
-        var shouldFinalizeLocalReset = false
         do {
-            _ = try await withLoadingBootstrapTimeout(seconds: 12) {
+            _ = try await withLoadingBootstrapTimeout(seconds: 15) {
                 try await APIClient.shared.request(APIEndpoint.authDeleteAccount) as EmptyResponse
             }
-            shouldFinalizeLocalReset = true
-        } catch APIError.unauthorized {
-            // Compte possiblement déjà invalide côté serveur : on force la purge locale pour débloquer l'utilisateur.
-            shouldFinalizeLocalReset = true
-        } catch APIError.notFound {
-            // Même stratégie si le compte n'existe déjà plus.
-            shouldFinalizeLocalReset = true
-        } catch APIError.server {
-            // Le backend a répondu mais l'état est potentiellement déjà partiellement supprimé :
-            // on force le reset local pour éviter de bloquer l'utilisateur sur l'accueil connecté.
-            shouldFinalizeLocalReset = true
-        } catch APIError.network {
-            // Anti-blocage UX : même sans confirmation serveur, on repart au tout début.
-            // Le backend reste la source de vérité; un échec réseau n'a plus le droit de laisser l'app coincée.
-            shouldFinalizeLocalReset = true
-        } catch AuthLoadingBootstrapTimeout.exceeded {
-            // Timeout suppression : on force aussi le reset local pour éviter l'écran figé.
-            shouldFinalizeLocalReset = true
-        } catch {
-            // Défensif : en cas d'erreur non typée (décodage, etc.), on préfère débloquer l'UX.
-            shouldFinalizeLocalReset = true
-        }
-        if shouldFinalizeLocalReset {
             finalizeLocalStateAfterAccountDeletion()
+        } catch APIError.unauthorized {
+            // Le token n'est plus valide / compte déjà invalidé côté serveur.
+            finalizeLocalStateAfterAccountDeletion()
+        } catch APIError.notFound {
+            // Le compte est déjà supprimé côté serveur.
+            finalizeLocalStateAfterAccountDeletion()
+        } catch APIError.server(_, let message) {
+            let trimmed = message?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            throw AuthError.apiMessage(trimmed.isEmpty ? "La suppression a échoué côté serveur. Réessayez." : trimmed)
+        } catch APIError.network {
+            throw AuthError.apiMessage("Connexion instable : suppression non confirmée. Réessayez.")
+        } catch AuthLoadingBootstrapTimeout.exceeded {
+            throw AuthError.apiMessage("Le serveur met trop de temps à répondre. Réessayez.")
+        } catch {
+            throw AuthError.apiMessage("Impossible de supprimer le compte pour le moment. Réessayez.")
         }
     }
 

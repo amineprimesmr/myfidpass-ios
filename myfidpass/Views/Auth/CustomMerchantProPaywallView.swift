@@ -2,7 +2,7 @@
 //  CustomMerchantProPaywallView.swift
 //  myfidpass
 //
-//  Paywall PRO maison : frise d’essai (timeline) + souscription Stripe (Checkout hébergé).
+//  Paywall PRO maison : frise d’essai + souscription via **myfidpass.fr/paiement** (Stripe embarqué, pas d’IAP).
 //
 
 import SwiftUI

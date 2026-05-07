@@ -51,21 +51,8 @@ struct AuthSignUpView: View {
         !email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    private static let authSheetTopFadeHeight: CGFloat = 52
-
-    private static var authSheetTopFade: some View {
-        LinearGradient(
-            stops: [
-                .init(color: Color.white.opacity(0), location: 0),
-                .init(color: Color.white.opacity(0.55), location: 0.55),
-                .init(color: Color.white, location: 1)
-            ],
-            startPoint: .top,
-            endPoint: .bottom
-        )
-        .frame(height: authSheetTopFadeHeight)
-        .frame(maxWidth: .infinity)
-        .allowsHitTesting(false)
+    private var shouldRevealPasswordField: Bool {
+        hasStartedEmailTyping || focusedField == .email || focusedField == .password
     }
 
     private var fieldChromeBackground: Color {
@@ -76,6 +63,7 @@ struct AuthSignUpView: View {
         GeometryReader { geo in
             let fullW = geo.size.width
             let fullH = geo.size.height
+            let heroHeight = fullH * 0.82
             let topSafe = geo.safeAreaInsets.top
             let bottomSafe = max(geo.safeAreaInsets.bottom, 12)
 
@@ -87,19 +75,22 @@ struct AuthSignUpView: View {
                         Image(Self.heroAssets[i])
                             .resizable()
                             .scaledToFill()
-                            .frame(width: fullW, height: fullH, alignment: .top)
+                            .frame(width: fullW, height: heroHeight, alignment: .top)
                             .clipped()
                             .tag(i)
                     }
                 }
                 .tabViewStyle(.page(indexDisplayMode: .never))
-                .frame(width: fullW, height: fullH)
+                .frame(width: fullW, height: heroHeight, alignment: .top)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .clipped()
+                .offset(y: -8)
                 .scaleEffect(heroAppeared ? 1 : 1.02)
                 .opacity(heroAppeared ? 1 : 0)
                 .ignoresSafeArea(edges: .top)
 
                 VStack(spacing: 0) {
-                    Self.authSheetTopFade
+                    Spacer(minLength: 0)
 
                     ScrollView(showsIndicators: false) {
                         VStack(alignment: .leading, spacing: 0) {
@@ -129,7 +120,7 @@ struct AuthSignUpView: View {
                                     }
                                 }
 
-                                if hasStartedEmailTyping {
+                                if shouldRevealPasswordField {
                                     SecureField(
                                         "",
                                         text: $password,
@@ -150,9 +141,9 @@ struct AuthSignUpView: View {
                                     ))
                                 }
                             }
-                            .animation(.spring(response: 0.38, dampingFraction: 0.86), value: hasStartedEmailTyping)
+                            .animation(.spring(response: 0.38, dampingFraction: 0.86), value: shouldRevealPasswordField)
 
-                            if !hasStartedEmailTyping {
+                            if !shouldRevealPasswordField {
                                 VStack(spacing: 12) {
                                     googleButton
                                     appleButton
@@ -168,49 +159,45 @@ struct AuthSignUpView: View {
                                     .fixedSize(horizontal: false, vertical: true)
                             }
 
-                            Button {
-                                Task { await submit() }
-                            } label: {
-                                Group {
-                                    if isLoading {
-                                        ProgressView().tint(.black).scaleEffect(1.02)
-                                    } else {
-                                        Text("CREER MON COMPTE")
-                                            .font(.system(size: 20, weight: .black))
-                                            .foregroundStyle(canSubmit ? Color.black : Color.black.opacity(0.42))
+                            if shouldRevealPasswordField {
+                                Button {
+                                    Task { await submit() }
+                                } label: {
+                                    Group {
+                                        if isLoading {
+                                            ProgressView().tint(.black).scaleEffect(1.02)
+                                        } else {
+                                            Text("CREER MON COMPTE")
+                                                .font(.system(size: 20, weight: .black))
+                                                .foregroundStyle(canSubmit ? Color.black : Color.black.opacity(0.42))
+                                        }
                                     }
+                                    .frame(maxWidth: .infinity)
+                                    .frame(height: 50)
                                 }
-                                .frame(maxWidth: .infinity)
-                                .frame(height: 50)
+                                .buttonBorderShape(.capsule)
+                                .liquidGlassButtonAppearance(.adaptive, cornerRadius: 999)
+                                .padding(.top, 14)
+                                .disabled(!canSubmit || isLoading)
+                                .transition(.asymmetric(
+                                    insertion: .opacity.combined(with: .move(edge: .bottom)),
+                                    removal: .opacity
+                                ))
                             }
-                            .buttonBorderShape(.roundedRectangle(radius: 50))
-                            .liquidGlassButtonAppearance(.adaptive, cornerRadius: 50)
-                            .padding(.top, 20)
-                            .disabled(!canSubmit || isLoading)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .opacity(formVisible ? 1 : 0)
                         .padding(.horizontal, 24)
-                        .padding(.top, 14)
+                        .padding(.top, 0)
                         .padding(.bottom, keyboardHeight > 0 ? 8 : bottomSafe)
-                        .background(Color.white)
+                        .background(Color.clear)
                     }
                     .scrollDismissesKeyboard(.interactively)
                     .frame(maxWidth: .infinity)
                     .fixedSize(horizontal: false, vertical: true)
-                    .background(Color.white)
+                    .background(Color.clear)
                 }
-                .background(Color.white)
-                .clipShape(
-                    UnevenRoundedRectangle(
-                        topLeadingRadius: 28,
-                        bottomLeadingRadius: 0,
-                        bottomTrailingRadius: 0,
-                        topTrailingRadius: 28,
-                        style: .continuous
-                    )
-                )
-                .shadow(color: Color.black.opacity(0.06), radius: 14, y: -6)
+                .padding(.top, 10)
                 .padding(.bottom, keyboardHeight)
                 .ignoresSafeArea(edges: .bottom)
             }
@@ -227,7 +214,7 @@ struct AuthSignUpView: View {
                 .controlSize(.regular)
                 .liquidGlassButtonAppearance(.adaptive, cornerRadius: 18)
                 .accessibilityLabel("Retour")
-                .padding(EdgeInsets(top: topSafe + 8, leading: 16, bottom: 0, trailing: 0))
+                .padding(EdgeInsets(top: max(topSafe, 44) + 8, leading: 16, bottom: 0, trailing: 0))
             }
             .animation(.easeOut(duration: 0.22), value: keyboardHeight)
             .frame(width: fullW, height: fullH)

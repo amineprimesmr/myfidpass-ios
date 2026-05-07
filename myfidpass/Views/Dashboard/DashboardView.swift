@@ -124,10 +124,6 @@ private struct DashboardSetupHeroCarousel: View {
                     carouselCard(for: imageNames[index])
                         .frame(width: slot.width, height: slot.height)
                         .clipShape(RoundedRectangle(cornerRadius: heroClipCornerRadius, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: heroClipCornerRadius, style: .continuous)
-                                .stroke(Color.white.opacity(0.24), lineWidth: 1)
-                        )
                         .shadow(color: .black.opacity(0.38), radius: 14, y: 8)
                         .scaleEffect(rank == 0 ? 1.0 : (rank == 1 ? 0.94 : 0.89))
                         .rotationEffect(.degrees(fanRotationDegrees(rank: rank)))
@@ -208,20 +204,23 @@ private struct DashboardSetupHeroCarousel: View {
 
 private struct HomeSetupGlassButtonModifier: ViewModifier {
     func body(content: Content) -> some View {
-        if #available(iOS 26.0, *) {
-            content
-                /// `.large` gonflait trop ces CTA dans « Finalisez votre lancement » ; `regular` garde le verre sans masse excessive.
-                .controlSize(.regular)
-                .buttonBorderShape(.capsule)
-                .buttonStyle(.glass)
-        } else {
-            content
-                .background(.ultraThinMaterial, in: Capsule(style: .continuous))
-                .overlay(
-                    Capsule(style: .continuous)
-                        .stroke(Color.white.opacity(0.28), lineWidth: 1)
-                )
-        }
+        content
+            .background(
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.14, green: 0.15, blue: 0.18),
+                        Color(red: 0.05, green: 0.06, blue: 0.08),
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                ),
+                in: Capsule(style: .continuous)
+            )
+            .overlay(
+                Capsule(style: .continuous)
+                    .stroke(Color.white.opacity(0.46), lineWidth: 1.35)
+            )
+            .shadow(color: .black.opacity(0.28), radius: 8, y: 3)
     }
 }
 
@@ -327,9 +326,16 @@ struct DashboardView: View {
         return missing.isEmpty
     }
 
+    /// Détection "mission carte faite" plus tolérante : si un snapshot carte existe déjà,
+    /// on considère la mission démarrée/faite pour masquer le bloc onboarding accueil.
+    private var homeCardMissionDone: Bool {
+        guard let slug = currentBusinessSlug else { return false }
+        return CardPreviewDisplaySnapshotStore.load(slug: slug) != nil
+    }
+
     private var shouldShowSimpleHomeSetup: Bool {
-        guard merchantWorkspaceMode != .staff, homeSetupStateResolved else { return false }
-        return !homeCardConfigured || !homeFlyerAvailable
+        // Désactivation temporaire demandée du mode "Finalisez votre lancement".
+        false
     }
 
     private var isHomeSetupMode: Bool {
@@ -384,6 +390,7 @@ struct DashboardView: View {
                         businesses: authService.businesses,
                         activeBusinessSlug: AuthStorage.currentBusinessSlug,
                         canCreateBusiness: authService.canCreateBusiness,
+                        showSettingsAttentionDot: !homeFlyerAvailable,
                         onOpenSettings: {
                             NotificationCenter.default.post(name: .myfidpassOpenGlobalSettingsSheet, object: nil)
                         },
@@ -634,6 +641,7 @@ struct DashboardView: View {
     // MARK: - Accueil type fintech (carte + transactions)
 
     private var showHomeCardTapHint: Bool { !merchantHomeCardOpenedFromHome }
+    private var shouldShowHomeCardSetupBadge: Bool { !homeCardConfigured }
 
     @ViewBuilder
     private func merchantHomeCardPreviewButton<Label: View>(@ViewBuilder label: () -> Label) -> some View {
@@ -682,12 +690,15 @@ struct DashboardView: View {
                         .accessibilityHidden(true)
                     homeSimpleSetupSection
                         .padding(.top, 12)
+                        .transition(.asymmetric(insertion: .move(edge: .top).combined(with: .opacity), removal: .opacity))
                 } else {
                     fintechHomeTopAndCardOwner
                     fintechTransactionsSection
                         .padding(.top, 8)
+                        .transition(.asymmetric(insertion: .opacity.combined(with: .move(edge: .bottom)), removal: .opacity))
                 }
             }
+            .animation(.easeInOut(duration: 0.28), value: shouldShowSimpleHomeSetup)
         }
     }
 
@@ -723,7 +734,7 @@ struct DashboardView: View {
                 .kerning(-0.2)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Text("Créez d’abord votre carte. Le flyer (QR, téléchargement) se gère ensuite dans Réglages → « Flyer & programme », ou touchez la carte ci‑dessous tant qu’il n’est pas prêt.")
+            Text("Commencez par votre carte et votre flyer de jeu : deux étapes suffisent pour être prêt à l’emploi")
                 .font(.system(size: 17, weight: .medium))
                 .foregroundStyle(Color(red: 0.37, green: 0.47, blue: 0.63))
                 .lineSpacing(3)
@@ -737,8 +748,8 @@ struct DashboardView: View {
                     carouselImageNames: ["cartefid1", "cartefid2", "cartefid3"],
                     fallbackCarouselImage: nil,
                     isReady: homeCardConfigured,
-                    readyLabel: "Carte créée",
-                    pendingLabel: "Créez votre carte"
+                    readyLabel: "Commencer",
+                    pendingLabel: "Commencer"
                 ) {
                     merchantHomeCardOpenedFromHome = true
                     showMyCardFullScreen = true
@@ -746,13 +757,13 @@ struct DashboardView: View {
 
                 homeSimpleSetupCard(
                     title: "Créez votre flyer",
-                    useHeroCarousel: false,
+                    useHeroCarousel: true,
                     carouselKind: .flyerPortrait9x16,
-                    carouselImageNames: [],
+                    carouselImageNames: ["flyerfid1", "flyerfid2", "flyerfid3", "flyerfid4"],
                     fallbackCarouselImage: homeFlyerCompositeSnapshot ?? homeFlyerUnderlayUIImage,
                     isReady: homeFlyerAvailable,
-                    readyLabel: "Flyer créé",
-                    pendingLabel: "Créez votre flyer"
+                    readyLabel: "Commencer",
+                    pendingLabel: "Commencer"
                 ) {
                     openFlyerHubFromHome()
                 }
@@ -841,39 +852,40 @@ struct DashboardView: View {
                     )
                     .padding(9)
                     .overlay {
-                        HStack(alignment: .center, spacing: 6) {
+                        HStack(alignment: .top, spacing: 8) {
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(headline.0)
-                                    .font(.system(size: 21, weight: .heavy))
+                                    .font(.system(size: 27, weight: .black))
                                     .foregroundStyle(.white.opacity(0.96))
                                     .lineLimit(1)
                                     .minimumScaleFactor(0.8)
                                 if !headline.1.isEmpty {
                                     Text(headline.1)
-                                        .font(.system(size: 23, weight: .heavy))
+                                        .font(.system(size: 27, weight: .black))
                                         .foregroundStyle(.white.opacity(0.96))
                                         .lineLimit(1)
                                         .minimumScaleFactor(0.8)
                                         .padding(.top, -1)
                                 }
                                 Button(action: action) {
-                                    HStack(spacing: 5) {
+                                    HStack(spacing: 10) {
                                         Circle()
                                             .stroke(Color.white.opacity(0.55), lineWidth: 1.2)
-                                            .frame(width: 6, height: 6)
+                                            .frame(width: 10, height: 10)
                                         Text(isReady ? readyLabel : pendingLabel)
-                                            .font(.system(size: 12.5, weight: .semibold))
+                                            .font(.system(size: 20, weight: .bold))
                                             .lineLimit(1)
                                             .minimumScaleFactor(0.72)
                                     }
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 6)
+                                    .frame(width: 232)
+                                    .padding(.horizontal, 26)
+                                    .padding(.vertical, 14)
                                 }
                                 .disabled(isReady)
                                 .opacity(isReady ? 0.58 : 1)
                                 .allowsHitTesting(!isReady)
                                 .modifier(HomeSetupGlassButtonModifier())
-                                .padding(.top, 5)
+                                .padding(.top, 10)
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .layoutPriority(1)
@@ -892,9 +904,9 @@ struct DashboardView: View {
                                 }
                             }
                         }
-                        .padding(.leading, 14)
+                        .padding(.leading, 22)
                         .padding(.trailing, 8)
-                        .padding(.vertical, 12)
+                        .padding(.vertical, 10)
                     }
             }
             .frame(height: 244)
@@ -927,37 +939,47 @@ struct DashboardView: View {
                 Group {
                     if let model = DashboardHomeCardModel.resolve(dataService: dataService) {
                         merchantHomeCardPreviewButton {
-                            FintechHomeLoyaltyCardBlock(
-                                model: model,
-                                palette: palette
-                            )
-                            .modifier(MerchantHomeCardFirstVisitShakeModifier(active: showHomeCardTapHint))
+                            ZStack {
+                                FintechHomeLoyaltyCardBlock(
+                                    model: model,
+                                    palette: palette
+                                )
+                                .modifier(MerchantHomeCardFirstVisitShakeModifier(active: showHomeCardTapHint))
+                                if shouldShowHomeCardSetupBadge {
+                                    HomeCardTouchHintPill()
+                                }
+                            }
                         }
                     } else {
                         merchantHomeCardPreviewButton {
-                            RoundedRectangle(cornerRadius: 36, style: .continuous)
-                                .fill(palette.card)
-                                .frame(height: homeTopPreviewCardHeight)
-                                .overlay(
-                                    VStack(spacing: 10) {
-                                        Image(systemName: "creditcard")
-                                            .font(.largeTitle)
-                                            .foregroundStyle(palette.tertiaryText)
-                                        Text("Synchronisez pour afficher votre carte")
-                                            .font(.subheadline.weight(.medium))
-                                            .foregroundStyle(palette.secondaryText)
-                                            .multilineTextAlignment(.center)
-                                        Text("Ouvrir Ma carte")
-                                            .font(.subheadline.weight(.semibold))
-                                            .foregroundStyle(palette.accentBlue)
-                                    }
-                                    .padding()
-                                )
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 36, style: .continuous)
-                                        .strokeBorder(palette.cardStroke, lineWidth: 1)
-                                )
-                                .modifier(MerchantHomeCardFirstVisitShakeModifier(active: showHomeCardTapHint))
+                            ZStack {
+                                RoundedRectangle(cornerRadius: 36, style: .continuous)
+                                    .fill(palette.card)
+                                    .frame(height: homeTopPreviewCardHeight)
+                                    .overlay(
+                                        VStack(spacing: 10) {
+                                            Image(systemName: "creditcard")
+                                                .font(.largeTitle)
+                                                .foregroundStyle(palette.tertiaryText)
+                                            Text("Synchronisez pour afficher votre carte")
+                                                .font(.subheadline.weight(.medium))
+                                                .foregroundStyle(palette.secondaryText)
+                                                .multilineTextAlignment(.center)
+                                            Text("Ouvrir Ma carte")
+                                                .font(.subheadline.weight(.semibold))
+                                                .foregroundStyle(palette.accentBlue)
+                                        }
+                                        .padding()
+                                    )
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 36, style: .continuous)
+                                            .strokeBorder(palette.cardStroke, lineWidth: 1)
+                                    )
+                                    .modifier(MerchantHomeCardFirstVisitShakeModifier(active: showHomeCardTapHint))
+                                if shouldShowHomeCardSetupBadge {
+                                    HomeCardTouchHintPill()
+                                }
+                            }
                         }
                     }
                 }
@@ -1112,6 +1134,38 @@ struct DashboardView: View {
                     return
                 }
             }
+        }
+    }
+
+    private struct HomeCardTouchHintPill: View {
+        @State private var blink = false
+
+        var body: some View {
+            HStack(spacing: 8) {
+                Image(systemName: "hand.tap.fill")
+                    .font(.system(size: 15, weight: .black))
+                Text("Touchez")
+                    .font(.system(size: 16, weight: .black))
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(
+                Capsule()
+                    .fill(Color.black.opacity(0.86))
+            )
+            .overlay(
+                Capsule()
+                    .strokeBorder(Color.white.opacity(0.42), lineWidth: 1.2)
+            )
+            .shadow(color: Color.black.opacity(0.4), radius: 10, y: 5)
+            .opacity(blink ? 1 : 0.52)
+            .scaleEffect(blink ? 1.03 : 0.95)
+            .animation(.easeInOut(duration: 0.68).repeatForever(autoreverses: true), value: blink)
+            .onAppear { blink = true }
+            .onDisappear { blink = false }
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
         }
     }
 

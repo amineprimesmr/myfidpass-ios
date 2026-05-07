@@ -30,7 +30,13 @@ struct MerchantSaasPaymentWebContent: UIViewRepresentable {
         return wv
     }
 
-    func updateUIView(_ uiView: WKWebView, context: Context) {}
+    func updateUIView(_ uiView: WKWebView, context: Context) {
+        let current = uiView.url?.absoluteString
+        let next = url.absoluteString
+        if current != next {
+            uiView.load(URLRequest(url: url))
+        }
+    }
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
         /// Liens `target="_blank"` : même WebView (CTA Stripe).
@@ -60,7 +66,9 @@ struct MerchantSaasPaymentWebContent: UIViewRepresentable {
                 decisionHandler(.cancel)
                 return
             }
-            // Checkout Stripe : Safari pour 3DS / Apple Pay / wallet (WKWebView limité).
+            // Paiement hébergé Stripe (Payment Link, etc.) : Safari si besoin.
+            // Ne pas inclure js.stripe.com : Stripe Elements charge `m-outer-…` dans la WebView ; l’ouvrir
+            // dans Safari annule le chargement ici → écran blanc hors app (voir decidePolicyFor + .cancel).
             if Self.shouldOpenStripeOrPaymentInSafari(url) {
                 DispatchQueue.main.async {
                     UIApplication.shared.open(url, options: [:], completionHandler: nil)
@@ -73,6 +81,9 @@ struct MerchantSaasPaymentWebContent: UIViewRepresentable {
 
         private static func shouldOpenStripeOrPaymentInSafari(_ url: URL) -> Bool {
             guard let host = url.host?.lowercased() else { return false }
+            // Iframes / scripts Stripe.js — doivent rester dans la même WKWebView que myfidpass.fr.
+            if host == "js.stripe.com" { return false }
+            if host == "m.stripe.network" { return false }
             if host == "buy.stripe.com" { return true }
             if host.hasSuffix(".stripe.com") || host == "stripe.com" { return true }
             if host.hasSuffix(".link.co") { return true }
@@ -94,7 +105,7 @@ struct MerchantSaasPaymentWebView: View {
     @State private var isCloseButtonRevealed = false
 
     private var paymentURL: URL {
-        LegalURLs.merchantSaasProPaymentPage
+        buildPaymentURLWithAuthHandoff(base: LegalURLs.merchantSaasProPaymentPage)
     }
 
     var body: some View {
@@ -135,6 +146,23 @@ struct MerchantSaasPaymentWebView: View {
             }
             isCloseButtonRevealed = true
         }
+    }
+
+    /// Handoff explicite des tokens via hash pour que `myfidpass.fr/paiement` restaure
+    /// la session web sans redemander la connexion.
+    private func buildPaymentURLWithAuthHandoff(base: URL) -> URL {
+        var pathWithQuery = base.absoluteString
+        if let access = AuthStorage.authToken?.trimmingCharacters(in: .whitespacesAndNewlines), !access.isEmpty {
+            let refresh = AuthStorage.refreshToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let accessEncoded = access.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? access
+            let refreshEncoded = refresh.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? refresh
+            var fragment = "fid_auth=\(accessEncoded)"
+            if !refreshEncoded.isEmpty {
+                fragment += "&fid_refresh=\(refreshEncoded)"
+            }
+            pathWithQuery += "#\(fragment)"
+        }
+        return URL(string: pathWithQuery) ?? base
     }
 }
 

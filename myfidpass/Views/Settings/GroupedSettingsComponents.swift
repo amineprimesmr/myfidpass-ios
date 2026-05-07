@@ -117,14 +117,23 @@ struct GroupedSettingsNavigationRow: View {
     var subtitle: String?
     var value: String?
     var showsChevron: Bool = true
+    var showsAttentionDot: Bool = false
 
     var body: some View {
         HStack(alignment: subtitle == nil ? .center : .top, spacing: 12) {
             GroupedSettingsIconBox(systemName: icon)
             VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.body.weight(.medium))
-                    .foregroundStyle(Color(UIColor.label))
+                HStack(spacing: 6) {
+                    Text(title)
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(Color(UIColor.label))
+                    if showsAttentionDot {
+                        Circle()
+                            .fill(Color.red)
+                            .frame(width: 9, height: 9)
+                            .accessibilityHidden(true)
+                    }
+                }
                 if let subtitle, !subtitle.isEmpty {
                     Text(subtitle)
                         .font(.subheadline)

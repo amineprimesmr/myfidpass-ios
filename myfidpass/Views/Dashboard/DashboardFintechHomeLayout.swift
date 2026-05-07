@@ -539,6 +539,7 @@ struct DashboardHomeMinimalTopBar: View {
     var businesses: [BusinessDTO] = []
     var activeBusinessSlug: String? = nil
     var canCreateBusiness: Bool = true
+    var showSettingsAttentionDot: Bool = false
     var onOpenSettings: (() -> Void)? = nil
     var onSelectBusiness: ((String) -> Void)? = nil
     var onAddCommerce: (() -> Void)? = nil
@@ -579,23 +580,39 @@ struct DashboardHomeMinimalTopBar: View {
     private func settingsButton(action: @escaping () -> Void) -> some View {
         if #available(iOS 26.0, *) {
             Button(action: action) {
-                Image(systemName: "gearshape")
-                    .font(.system(size: 16, weight: .semibold))
+                ZStack(alignment: .topTrailing) {
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 16, weight: .semibold))
+                    if showSettingsAttentionDot {
+                        Circle()
+                            .fill(Color.red)
+                            .frame(width: 10, height: 10)
+                            .offset(x: 4, y: -4)
+                    }
+                }
             }
             .buttonStyle(.glass)
             .buttonBorderShape(.roundedRectangle(radius: 20))
             .controlSize(.large)
         } else {
             Button(action: action) {
-                Image(systemName: "gearshape")
-                    .font(.system(size: 16, weight: .semibold))
-                    .padding(.horizontal, 13)
-                    .padding(.vertical, 10)
-                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 20, style: .continuous)
-                            .stroke(Color.white.opacity(0.28), lineWidth: 1)
-                    )
+                ZStack(alignment: .topTrailing) {
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 16, weight: .semibold))
+                        .padding(.horizontal, 13)
+                        .padding(.vertical, 10)
+                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                                .stroke(Color.white.opacity(0.28), lineWidth: 1)
+                        )
+                    if showSettingsAttentionDot {
+                        Circle()
+                            .fill(Color.red)
+                            .frame(width: 10, height: 10)
+                            .offset(x: 2, y: -2)
+                    }
+                }
             }
             .buttonStyle(.plain)
         }

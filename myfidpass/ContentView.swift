@@ -16,6 +16,8 @@ struct ContentView: View {
     @StateObject private var tabRouter = MainTabRouter()
     @State private var showMerchantSubscriptionSheet = false
     @State private var showGlobalSettingsSheet = false
+    @State private var autoOpenPaymentTask: Task<Void, Never>?
+    @State private var didAutoOpenPaymentSheet = false
     /// Pastille « Synchronisé » après une sync réussie (masquée si une nouvelle sync démarre).
     @State private var showSyncSuccessChip = false
     @State private var syncSuccessHideTask: Task<Void, Never>?
@@ -35,20 +37,11 @@ struct ContentView: View {
     @AppStorage("myfidpass.homeTutorial.v1") private var homeTutorialCompleted = false
 
     var body: some View {
-        Group {
-            if merchantMustCompleteSubscriptionPaywall {
-                MerchantSubscriptionGateView(isMandatory: true)
-                    .environmentObject(authService)
-                    .environment(\.managedObjectContext, viewContext)
-            } else {
-                mainMerchantTabStack
-            }
-        }
+        mainMerchantTabStack
         .onReceive(NotificationCenter.default.publisher(for: .myfidpassOpenMerchantSubscriptionSheet)) { _ in
             guard !authService.isMerchantStaffUser else { return }
             showMerchantSubscriptionSheet = true
         }
-        /// Ancienne notif « essai → Safari Stripe » : ouvre le paywall natif.
         .onReceive(NotificationCenter.default.publisher(for: .myfidpassOpenMerchantTrialStripePaymentLink)) { _ in
             guard !authService.isMerchantStaffUser else { return }
             showMerchantSubscriptionSheet = true
@@ -60,7 +53,6 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .myfidpassOpenGlobalSettingsSheet)) { _ in
             showGlobalSettingsSheet = true
         }
-        /// Paywall depuis la pastille d’essai / Réglages / notif : **feuille** (sheet). Le flux post-création de compte reste une **page pleine** (`merchantMustCompleteSubscriptionPaywall` → `isMandatory: true` ci-dessus).
         .sheet(isPresented: $showMerchantSubscriptionSheet) {
             MerchantSubscriptionGateView(isMandatory: false)
                 .environmentObject(authService)
@@ -75,25 +67,12 @@ struct ContentView: View {
                     .environment(\.managedObjectContext, viewContext)
             }
         }
-        .onChange(of: showMerchantSubscriptionSheet) { _, isShowing in
-            if !isShowing {
-                Task { await runPostPaywallRefreshPipeline() }
-            }
-        }
-        .onChange(of: merchantMustCompleteSubscriptionPaywall) { wasBlocking, isBlocking in
-            guard wasBlocking && !isBlocking else { return }
-            processPendingPostSignupHomeTutorial()
-        }
         .task {
             await authService.reconcileStripeSubscriptionFromServer(force: true)
         }
-    }
-
-    /// Commerçant : accès aux onglets **uniquement** avec essai actif ou abonnement Stripe reflété par l’API.
-    private var merchantMustCompleteSubscriptionPaywall: Bool {
-        authService.merchantSubscriptionEligibilityResolved
-            && !authService.isPlatformAdmin
-            && !authService.subscriptionAccessUnlocked()
+        .onAppear {
+            scheduleAutoOpenPaymentSheetIfNeeded()
+        }
     }
 
     /// Après inscription : marqueur « lancer le tutoriel une fois l’écran débloqué » (paywall ou accès direct).
@@ -184,6 +163,9 @@ struct ContentView: View {
             }
             .onChange(of: authService.currentScreen) { _, screen in
                 guard screen != .authenticated else { return }
+                showGlobalSettingsSheet = false
+                showMerchantSubscriptionSheet = false
+                autoOpenPaymentTask?.cancel()
                 showSyncSuccessChip = false
                 syncSuccessHideTask?.cancel()
                 syncSuccessHideTask = nil
@@ -201,11 +183,7 @@ struct ContentView: View {
                 handleScanDeepLink(url: url)
             }
             .overlay(alignment: .bottom) {
-                // Pendant le tutoriel d’accueil, la pastille est **au-dessus** de MainTabView : elle
-                // recevait les touchers (ou la fenêtre 2) → ouverture paywall. Masquée tant que le
-                // tutoriel n’est pas terminé.
-                if homeTutorialCompleted || HomeTutorialTemporaryDisable.isOn,
-                   shouldShowTrialSubscribePillInCurrentTab,
+                if shouldShowTrialSubscribePillInCurrentTab,
                    !showMerchantSubscriptionSheet,
                    !showGlobalSettingsSheet,
                    let trialEnd = authService.merchantTrialEndsAt {
@@ -219,8 +197,24 @@ struct ContentView: View {
             }
     }
 
-    /// Attend la fin de l'animation de fermeture du paywall avant de déclencher la charge réseau,
-    /// sinon l'animation peut sembler "cassée" ou saccadée.
+    /// Ouvre la page de paiement 5 s après l'arrivée dans l'app (comme un tap sur la pastille).
+    @MainActor
+    private func scheduleAutoOpenPaymentSheetIfNeeded() {
+        guard !didAutoOpenPaymentSheet else { return }
+        guard !authService.isMerchantStaffUser else { return }
+        guard !authService.isPlatformAdmin else { return }
+        didAutoOpenPaymentSheet = true
+        autoOpenPaymentTask?.cancel()
+        autoOpenPaymentTask = Task {
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard !showGlobalSettingsSheet else { return }
+                showMerchantSubscriptionSheet = true
+            }
+        }
+    }
+
     @MainActor
     private func runPostPaywallRefreshPipeline() async {
         syncService.invalidateSyncThrottle()
@@ -244,20 +238,12 @@ struct ContentView: View {
         return window.safeAreaInsets.bottom + tabBarApprox + gap
     }
 
-    /// Pastille essai affichée sur Accueil + Notifs (pas sur Commerce où un bandeau dédié existe déjà).
+    /// Pastille visible sur Accueil, Notif et Commerce.
     private var shouldShowTrialSubscribePillInCurrentTab: Bool {
         guard !authService.isMerchantStaffUser else { return false }
         guard authService.isMerchantTrialPeriodActive, authService.merchantTrialEndsAt != nil else { return false }
         guard !floatingOverlaysSuppressed else { return false }
-        if tabRouter.selectedTab == 0 {
-            // Ne jamais afficher tant que l'accueil n'a pas publié explicitement son mode setup.
-            guard tabRouter.hasResolvedDashboardSetupMode else { return false }
-            // Mode configuration accueil : ne jamais afficher la pastille paiement.
-            if tabRouter.isDashboardSetupMode { return false }
-            // Filet de sécurité pour éviter un flash pendant le tout premier montage.
-            if !tabRouter.isDashboardAtRoot { return false }
-        }
-        return tabRouter.selectedTab == 0 || tabRouter.selectedTab == 1
+        return tabRouter.selectedTab == 0 || tabRouter.selectedTab == 1 || tabRouter.selectedTab == 2
     }
 
     private var syncBannerTopPadding: CGFloat { 10 }
