@@ -101,6 +101,8 @@ struct MerchantSaasPaymentWebView: View {
     var onCloseRequested: (() -> Void)? = nil
     var headerExtraTopPadding: CGFloat = 4
     var closeButtonRevealDelay: TimeInterval = 5
+    /// Décale le contenu web sous le bord arrondi de la **sheet** iOS (WKWebView ignorait tout le safe area).
+    var webContentExtraTopInset: CGFloat = 18
 
     @State private var isCloseButtonRevealed = false
 
@@ -111,6 +113,7 @@ struct MerchantSaasPaymentWebView: View {
     var body: some View {
         ZStack(alignment: .topTrailing) {
             MerchantSaasPaymentWebContent(url: paymentURL)
+                .padding(.top, webContentExtraTopInset)
                 .ignoresSafeArea()
 
             if allowsCloseButton, isCloseButtonRevealed {
@@ -128,7 +131,7 @@ struct MerchantSaasPaymentWebView: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .padding(.top, headerExtraTopPadding + 8)
+                .padding(.top, headerExtraTopPadding + 8 + webContentExtraTopInset)
                 .padding(.trailing, 12)
                 .accessibilityLabel("Fermer")
             }
@@ -151,7 +154,12 @@ struct MerchantSaasPaymentWebView: View {
     /// Handoff explicite des tokens via hash pour que `myfidpass.fr/paiement` restaure
     /// la session web sans redemander la connexion.
     private func buildPaymentURLWithAuthHandoff(base: URL) -> URL {
-        var pathWithQuery = base.absoluteString
+        guard var components = URLComponents(url: base, resolvingAgainstBaseURL: false) else { return base }
+        var items = components.queryItems ?? []
+        if !items.contains(where: { $0.name == "app_embed" }) {
+            items.append(URLQueryItem(name: "app_embed", value: "1"))
+        }
+        components.queryItems = items
         if let access = AuthStorage.authToken?.trimmingCharacters(in: .whitespacesAndNewlines), !access.isEmpty {
             let refresh = AuthStorage.refreshToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let accessEncoded = access.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? access
@@ -160,9 +168,9 @@ struct MerchantSaasPaymentWebView: View {
             if !refreshEncoded.isEmpty {
                 fragment += "&fid_refresh=\(refreshEncoded)"
             }
-            pathWithQuery += "#\(fragment)"
+            components.fragment = fragment
         }
-        return URL(string: pathWithQuery) ?? base
+        return components.url ?? base
     }
 }
 

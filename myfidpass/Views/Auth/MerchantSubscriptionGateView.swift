@@ -29,7 +29,8 @@ struct MerchantSubscriptionGateView: View {
                 allowsCloseButton: showsPaywallCloseButton,
                 onCloseRequested: showsPaywallCloseButton ? { finishMerchantSubscriptionGate() } : nil,
                 headerExtraTopPadding: isMandatory ? 4 : 28,
-                closeButtonRevealDelay: (isMandatory && showsPaywallCloseButton) ? 0 : 5
+                closeButtonRevealDelay: (isMandatory && showsPaywallCloseButton) ? 0 : 5,
+                webContentExtraTopInset: isMandatory ? 10 : 22
             )
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
