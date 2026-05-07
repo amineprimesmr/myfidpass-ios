@@ -45,7 +45,9 @@ struct SettingsView: View {
     }
 
     private var shouldShowTrialPromoBanner: Bool {
-        authService.isMerchantTrialPeriodActive && authService.merchantTrialEndsAt != nil
+        !authService.hasPaidStripeSubscription
+            && authService.isMerchantTrialPeriodActive
+            && authService.merchantTrialEndsAt != nil
     }
 
     private var needsFlyerSetupBadge: Bool {

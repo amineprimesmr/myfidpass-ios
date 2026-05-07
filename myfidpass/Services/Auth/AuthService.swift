@@ -333,7 +333,9 @@ final class AuthService: NSObject, ObservableObject {
     func reconcileStripeSubscriptionFromServer(force: Bool = false) async {
         guard AuthStorage.isLoggedIn else { return }
         guard APIClient.shared.authToken != nil, !(APIClient.shared.authToken ?? "").isEmpty else { return }
-        if hasActiveMerchantSubscription { return }
+        // Ne pas court-circuiter sur l’accès « essai » : `has_active_subscription` peut être vrai sans ligne Stripe
+        // encore propagée — après paiement dans la WebView, il faut quand même appeler `/payment/reconcile-subscription`.
+        if hasPaidStripeSubscription { return }
         if !force {
             if let last = UserDefaults.standard.object(forKey: Self.stripeReconcileThrottleKey) as? Date,
                Date().timeIntervalSince(last) < Self.stripeReconcileMinInterval {

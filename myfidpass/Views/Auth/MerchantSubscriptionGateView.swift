@@ -12,6 +12,9 @@ struct MerchantSubscriptionGateView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var authService: AuthService
 
+    /// Plusieurs `onChange` peuvent appeler la fermeture dans le même cycle ; une seule notif « paiement OK ».
+    @State private var didEmitPaidNotificationThisPresentation = false
+
     /// `true` : écran racine après connexion sans abonnement.
     /// `false` : feuille modale (sheet) — fermeture par glissement uniquement.
     var isMandatory: Bool = false
@@ -34,6 +37,9 @@ struct MerchantSubscriptionGateView: View {
             )
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear {
+            didEmitPaidNotificationThisPresentation = false
+        }
         .task {
             await authService.reconcileStripeSubscriptionFromServer(force: true)
         }
@@ -56,6 +62,10 @@ struct MerchantSubscriptionGateView: View {
     /// Ferme la feuille modale ; le flag post-inscription est nettoyé pour compatibilité.
     @MainActor
     private func finishMerchantSubscriptionGate() {
+        if shouldDismissGateAsSubscribed && !didEmitPaidNotificationThisPresentation {
+            didEmitPaidNotificationThisPresentation = true
+            NotificationCenter.default.post(name: .myfidpassSubscriptionPaymentCompleted, object: nil)
+        }
         authService.clearMandatoryPaywallAfterSignupPending()
         if !isMandatory {
             dismiss()

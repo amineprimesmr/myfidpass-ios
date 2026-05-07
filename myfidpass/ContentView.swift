@@ -35,43 +35,68 @@ struct ContentView: View {
     @State private var suppressTrialPillUntil: Date = .distantPast
     /// Masque le bandeau sync pendant le tutoriel (le snapshot du tutoriel ne doit pas capturer ce bandeau).
     @AppStorage("myfidpass.homeTutorial.v1") private var homeTutorialCompleted = false
+    /// Merci écran plein après paiement (deep link ou fermeture gate).
+    @State private var showPaymentThankYouOverlay = false
+    @State private var subscriptionPaidThankYouEpoch = 0
 
     var body: some View {
-        mainMerchantTabStack
-        .onReceive(NotificationCenter.default.publisher(for: .myfidpassOpenMerchantSubscriptionSheet)) { _ in
-            guard !authService.isMerchantStaffUser else { return }
-            showMerchantSubscriptionSheet = true
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .myfidpassOpenMerchantTrialStripePaymentLink)) { _ in
-            guard !authService.isMerchantStaffUser else { return }
-            showMerchantSubscriptionSheet = true
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .myfidpassSubscriptionPaymentCompleted)) { _ in
-            showMerchantSubscriptionSheet = false
-            Task { await runPostPaywallRefreshPipeline() }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .myfidpassOpenGlobalSettingsSheet)) { _ in
-            showGlobalSettingsSheet = true
-        }
-        .sheet(isPresented: $showMerchantSubscriptionSheet) {
-            MerchantSubscriptionGateView(isMandatory: false)
-                .environmentObject(authService)
-                .presentationDetents([.large])
-                .presentationDragIndicator(.hidden)
-        }
-        .sheet(isPresented: $showGlobalSettingsSheet) {
-            NavigationStack {
-                SettingsView()
-                    .environmentObject(authService)
-                    .environmentObject(syncService)
-                    .environment(\.managedObjectContext, viewContext)
+        ZStack {
+            mainMerchantTabStack
+                .onReceive(NotificationCenter.default.publisher(for: .myfidpassOpenMerchantSubscriptionSheet)) { _ in
+                    guard !authService.isMerchantStaffUser else { return }
+                    showMerchantSubscriptionSheet = true
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .myfidpassOpenMerchantTrialStripePaymentLink)) { _ in
+                    guard !authService.isMerchantStaffUser else { return }
+                    showMerchantSubscriptionSheet = true
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .myfidpassSubscriptionPaymentCompleted)) { _ in
+                    subscriptionPaidThankYouEpoch += 1
+                    let epoch = subscriptionPaidThankYouEpoch
+                    withAnimation(.easeOut(duration: 0.32)) {
+                        showMerchantSubscriptionSheet = false
+                        showPaymentThankYouOverlay = true
+                    }
+                    Task {
+                        await runPostPaywallRefreshPipeline()
+                        try? await Task.sleep(for: .milliseconds(2400))
+                        await MainActor.run {
+                            guard epoch == subscriptionPaidThankYouEpoch else { return }
+                            withAnimation(.easeInOut(duration: 0.45)) {
+                                showPaymentThankYouOverlay = false
+                            }
+                        }
+                    }
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .myfidpassOpenGlobalSettingsSheet)) { _ in
+                    showGlobalSettingsSheet = true
+                }
+                .sheet(isPresented: $showMerchantSubscriptionSheet) {
+                    MerchantSubscriptionGateView(isMandatory: false)
+                        .environmentObject(authService)
+                        .presentationDetents([.large])
+                        .presentationDragIndicator(.hidden)
+                }
+                .sheet(isPresented: $showGlobalSettingsSheet) {
+                    NavigationStack {
+                        SettingsView()
+                            .environmentObject(authService)
+                            .environmentObject(syncService)
+                            .environment(\.managedObjectContext, viewContext)
+                    }
+                }
+                .task {
+                    await authService.reconcileStripeSubscriptionFromServer(force: true)
+                }
+                .onAppear {
+                    scheduleAutoOpenPaymentSheetIfNeeded()
+                }
+
+            if showPaymentThankYouOverlay {
+                paymentThankYouOverlay
+                    .transition(.opacity.combined(with: .scale(scale: 0.98)))
+                    .zIndex(200)
             }
-        }
-        .task {
-            await authService.reconcileStripeSubscriptionFromServer(force: true)
-        }
-        .onAppear {
-            scheduleAutoOpenPaymentSheetIfNeeded()
         }
     }
 
@@ -241,9 +266,31 @@ struct ContentView: View {
     /// Pastille visible sur Accueil, Notif et Commerce.
     private var shouldShowTrialSubscribePillInCurrentTab: Bool {
         guard !authService.isMerchantStaffUser else { return false }
+        guard !authService.hasPaidStripeSubscription else { return false }
         guard authService.isMerchantTrialPeriodActive, authService.merchantTrialEndsAt != nil else { return false }
         guard !floatingOverlaysSuppressed else { return false }
         return tabRouter.selectedTab == 0 || tabRouter.selectedTab == 1 || tabRouter.selectedTab == 2
+    }
+
+    /// Confirmation plein écran après paiement (par‑dessus les onglets).
+    private var paymentThankYouOverlay: some View {
+        ZStack {
+            Color.white.ignoresSafeArea()
+            VStack(spacing: 20) {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 56))
+                    .foregroundStyle(Color.green)
+                    .symbolEffect(.bounce, options: .nonRepeating, value: showPaymentThankYouOverlay)
+                Text("Merci pour votre confiance !")
+                    .font(.system(size: 22, weight: .semibold, design: .default))
+                    .foregroundStyle(.black)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 28)
+            }
+        }
+        .allowsHitTesting(true)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Merci pour votre confiance")
     }
 
     private var syncBannerTopPadding: CGFloat { 10 }
