@@ -2,7 +2,7 @@
 //  MainTabView.swift
 //  myfidpass
 //
-//  Navigation principale : Accueil, Campagnes, Commerce. (Flyer : Réglages ou hub depuis Accueil)
+//  Navigation principale : Accueil, Campagnes, Commerce. (Flyer : Compte ou hub depuis Accueil)
 //
 
 import SwiftUI

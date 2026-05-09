@@ -34,55 +34,13 @@ private struct WelcomeFlow: View {
             switch stage {
             case .entry:
                 AuthLaunchEntryView(
-                    onCreateAccount: {
-                        authEntryPath = .signUp
-                        FirstLaunchOnboarding.rewindToMerchantPremisesSelectionForFreshCommercePick()
-                        withAnimation(.easeInOut(duration: 0.25)) {
-                            needsMerchantPremises = true
-                            stage = .merchantPremises
-                        }
-                    },
-                    onSignIn: {
-                        authEntryPath = .signIn
-                        FirstLaunchOnboarding.markRelaxPlaceRequirementForExistingAccountFlow()
-                        withAnimation(.easeInOut(duration: 0.25)) {
-                            needsMerchantPremises = false
-                            stage = .authChoice
-                        }
-                    }
+                    onCreateAccount: handleCreateAccountEntry,
+                    onSignIn: handleSignInEntry
                 )
             case .merchantPremises:
-                FirstLaunchOnboardingView(onComplete: {
-                    withAnimation(.easeInOut(duration: 0.25)) {
-                        needsMerchantPremises = false
-                        stage = .authChoice
-                    }
-                }, onAlreadyHaveAccount: {
-                    // Retour explicite depuis "Quel est votre commerce ?":
-                    // revenir à l'écran d'entrée sans basculer dans la création de compte.
-                    FirstLaunchOnboarding.rewindToMerchantPremisesSelectionForFreshCommercePick()
-                    withAnimation(.easeInOut(duration: 0.25)) {
-                        needsMerchantPremises = true
-                        authEntryPath = .signUp
-                        stage = .entry
-                    }
-                })
+                FirstLaunchOnboardingView(onComplete: handleMerchantPremisesComplete, onAlreadyHaveAccount: handleMerchantPremisesAlreadyHaveAccount)
             case .authChoice:
-                Group {
-                    if authEntryPath == .signIn {
-                        AuthSignInView(onBack: {
-                            withAnimation(.easeInOut(duration: 0.22)) {
-                                stage = .entry
-                            }
-                        })
-                    } else {
-                        AuthSignUpView(onBack: {
-                            withAnimation(.easeInOut(duration: 0.22)) {
-                                stage = .entry
-                            }
-                        })
-                    }
-                }
+                authChoiceContent
             }
         }
         .id("welcome-flow-\(authService.firstLaunchOnboardingRestartEpoch)")
@@ -90,6 +48,58 @@ private struct WelcomeFlow: View {
             needsMerchantPremises = !FirstLaunchOnboarding.hasCompleted
             authEntryPath = .signUp
             stage = .entry
+        }
+    }
+
+    private func handleCreateAccountEntry() {
+        authEntryPath = .signUp
+        FirstLaunchOnboarding.rewindToMerchantPremisesSelectionForFreshCommercePick()
+        withAnimation(.easeInOut(duration: 0.25)) {
+            needsMerchantPremises = true
+            stage = .merchantPremises
+        }
+    }
+
+    private func handleSignInEntry() {
+        authEntryPath = .signIn
+        FirstLaunchOnboarding.markRelaxPlaceRequirementForExistingAccountFlow()
+        withAnimation(.easeInOut(duration: 0.25)) {
+            needsMerchantPremises = false
+            stage = .authChoice
+        }
+    }
+
+    private func handleMerchantPremisesComplete() {
+        withAnimation(.easeInOut(duration: 0.25)) {
+            needsMerchantPremises = false
+            stage = .authChoice
+        }
+    }
+
+    private func handleMerchantPremisesAlreadyHaveAccount() {
+        FirstLaunchOnboarding.rewindToMerchantPremisesSelectionForFreshCommercePick()
+        withAnimation(.easeInOut(duration: 0.25)) {
+            needsMerchantPremises = true
+            authEntryPath = .signUp
+            stage = .entry
+        }
+    }
+
+    private func handleAuthScreensBack() {
+        withAnimation(.easeInOut(duration: 0.22)) {
+            stage = .entry
+        }
+    }
+
+    @ViewBuilder
+    private var authChoiceContent: some View {
+        switch authEntryPath {
+        case .signIn:
+            AuthSignInView(onBack: handleAuthScreensBack)
+                .environmentObject(authService)
+        case .signUp:
+            AuthSignUpView(onBack: handleAuthScreensBack)
+                .environmentObject(authService)
         }
     }
 }
@@ -107,6 +117,7 @@ struct RootView: View {
         ZStack {
             if !shouldShowAuthenticatedApp {
                 WelcomeFlow()
+                    .environmentObject(authService)
                     .transition(.asymmetric(insertion: .opacity.combined(with: .scale(scale: 0.985)), removal: .opacity))
             } else {
                 Group {

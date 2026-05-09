@@ -17,4 +17,9 @@ enum APIConfig {
     static var flyerEmbedURL: URL {
         URL(string: "https://www.myfidpass.fr/flyer-embed.html")!
     }
+
+    /// Page statique `qr-game-embed.html` : écran jeu QR après scan (aperçu sous la palette — pas le poster flyer).
+    static var qrGameEmbedURL: URL {
+        URL(string: "https://www.myfidpass.fr/qr-game-embed.html")!
+    }
 }

@@ -44,7 +44,7 @@ final class MerchantTeamManagementViewModel: ObservableObject {
             let r: WorkspaceTeamListResponse = try await APIClient.shared.request(.businessTeamList(slug: slug))
             members = r.members
         } catch let e as APIError {
-            if case .notFound = e {
+            if e.isHTTPResourceMissing {
                 errorMessage = "Service équipe indisponible (404). Déployez l’API `GET .../dashboard/team` (voir le contrat d’intégration)."
             } else {
                 errorMessage = e.errorDescription

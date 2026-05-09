@@ -15,13 +15,6 @@ private enum MerchantOBStep: Int, CaseIterable {
     case establishmentSearch = 0
 }
 
-private struct MerchantOBEstablishment: Codable, Equatable {
-    let placeId: String
-    let description: String
-    let mainText: String
-    let secondaryText: String?
-}
-
 @MainActor
 private final class MerchantOBViewModel: ObservableObject {
     @Published var currentStep: Int = 0
@@ -30,7 +23,6 @@ private final class MerchantOBViewModel: ObservableObject {
     @Published var selectedPlaceId: String?
     @Published var selectedPlaceDescription: String?
     @Published var relaxEstablishmentRequirement = false
-    @Published var selectedEstablishments: [MerchantOBEstablishment] = []
 
     let flowStepCount: Int = MerchantOBStep.allCases.count
 
@@ -49,37 +41,15 @@ private final class MerchantOBViewModel: ObservableObject {
     func canContinue(for step: MerchantOBStep) -> Bool {
         switch step {
         case .establishmentSearch:
-            return selectedPlaceId != nil || !selectedEstablishments.isEmpty || relaxEstablishmentRequirement
+            return selectedPlaceId != nil || relaxEstablishmentRequirement
         }
     }
 
     func persistSelectionsToUserDefaults() {
         let d = UserDefaults.standard
-        var establishmentsToPersist = selectedEstablishments
-        if let pidRaw = selectedPlaceId?.trimmingCharacters(in: .whitespacesAndNewlines),
-           let descRaw = selectedPlaceDescription?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !pidRaw.isEmpty, !descRaw.isEmpty,
-           !establishmentsToPersist.contains(where: { $0.placeId == pidRaw }) {
-            establishmentsToPersist.append(
-                MerchantOBEstablishment(
-                    placeId: pidRaw,
-                    description: descRaw,
-                    mainText: descRaw.split(separator: ",", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? descRaw,
-                    secondaryText: nil
-                )
-            )
-        }
-        if let first = establishmentsToPersist.first {
-            d.set(first.placeId, forKey: "myfidpass.ob.placeId")
-            d.set(first.description, forKey: "myfidpass.ob.placeDescription")
-            if let data = try? JSONEncoder().encode(establishmentsToPersist),
-               let raw = String(data: data, encoding: .utf8) {
-                d.set(raw, forKey: "myfidpass.ob.establishments")
-            }
-            MerchantLinkedPlaceCache.save(placeId: first.placeId, description: first.description)
-        } else if let pid = selectedPlaceId?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  let desc = selectedPlaceDescription?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  !pid.isEmpty, !desc.isEmpty {
+        if let pid = selectedPlaceId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           let desc = selectedPlaceDescription?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !pid.isEmpty, !desc.isEmpty {
             d.set(pid, forKey: "myfidpass.ob.placeId")
             d.set(desc, forKey: "myfidpass.ob.placeDescription")
             d.removeObject(forKey: "myfidpass.ob.establishments")
@@ -107,6 +77,7 @@ struct MyfidpassMerchantOnboardingRootView: View {
     /// Passer à l’écran connexion / inscription sans renseigner l’établissement (compte existant).
     var onAlreadyHaveAccount: (() -> Void)? = nil
 
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @StateObject private var viewModel = MerchantOBViewModel()
     @StateObject private var hapticManager = HapticManager.shared
     @State private var keyboardHeight: CGFloat = 0
@@ -161,20 +132,25 @@ struct MyfidpassMerchantOnboardingRootView: View {
                 VStack {
                     Spacer()
 
-                    Button(action: handleContinueTap) {
-                        Text("CONTINUER")
-                            .font(.system(size: 20, weight: .black))
-                            .foregroundStyle(.black)
-                            .transition(.opacity.combined(with: .scale(scale: 0.9)))
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 50)
+                    HStack(spacing: 0) {
+                        Spacer(minLength: 0)
+                        Button(action: handleContinueTap) {
+                            Text("CONTINUER")
+                                .font(.system(size: 20, weight: .black))
+                                .foregroundStyle(.black)
+                                .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 50)
+                        }
+                        .buttonBorderShape(.roundedRectangle(radius: 50))
+                        .liquidGlassButtonAppearance(.adaptive, cornerRadius: 50)
+                        .frame(maxWidth: horizontalSizeClass == .regular ? 520 : .infinity)
+                        .disabled(!canContinueNow)
+                        .opacity(canContinueNow ? 1.0 : 0.5)
+                        .allowsHitTesting(canContinueNow)
+                        Spacer(minLength: 0)
                     }
-                    .buttonBorderShape(.roundedRectangle(radius: 50))
-                    .liquidGlassButtonAppearance(.adaptive, cornerRadius: 50)
-                    .padding(.horizontal, 40)
-                    .disabled(!canContinueNow)
-                    .opacity(canContinueNow ? 1.0 : 0.5)
-                    .allowsHitTesting(canContinueNow)
+                    .padding(.horizontal, horizontalSizeClass == .regular ? 32 : 40)
 
                     Spacer()
                         .frame(height: continueButtonsBottomInset)
@@ -308,7 +284,6 @@ struct MyfidpassMerchantOnboardingRootView: View {
                 selectedPlaceId: $viewModel.selectedPlaceId,
                 selectedDescription: $viewModel.selectedPlaceDescription,
                 relaxRequirement: $viewModel.relaxEstablishmentRequirement,
-                selectedEstablishments: $viewModel.selectedEstablishments,
                 isPredictionsVisible: $isEstablishmentPredictionsVisible
             )
         }
@@ -318,23 +293,30 @@ struct MyfidpassMerchantOnboardingRootView: View {
 // MARK: - Recherche établissement (même API que l’inscription)
 
 private struct MerchantOBEstablishmentSearchContent: View {
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Binding var selectedPlaceId: String?
     @Binding var selectedDescription: String?
     @Binding var relaxRequirement: Bool
-    @Binding var selectedEstablishments: [MerchantOBEstablishment]
     @Binding var isPredictionsVisible: Bool
-    @State private var addCommerceRequestToken: Int = 0
+
+    private var establishmentSearchTopReserved: CGFloat {
+        if horizontalSizeClass == .regular {
+            return 56
+        }
+        return MyfidpassOnboardingConstants.titleAreaHeight
+            + MyfidpassOnboardingConstants.titleToContentSpacing
+            + MyfidpassOnboardingConstants.processStyleFieldExtraSpacing
+    }
+
+    private var horizontalGutter: CGFloat {
+        horizontalSizeClass == .regular ? 40 : 16
+    }
 
     var body: some View {
         ZStack {
             VStack(spacing: 0) {
                 Spacer()
-                    .frame(height: MyfidpassOnboardingConstants.titleAreaHeight)
-                Spacer()
-                    .frame(
-                        height: MyfidpassOnboardingConstants.titleToContentSpacing
-                            + MyfidpassOnboardingConstants.processStyleFieldExtraSpacing
-                    )
+                    .frame(height: establishmentSearchTopReserved)
 
                 ScrollView(showsIndicators: false) {
                     VStack(spacing: 0) {
@@ -344,80 +326,11 @@ private struct MerchantOBEstablishmentSearchContent: View {
                             relaxRequirement: $relaxRequirement,
                             compactIntro: true,
                             processEstablishmentStyle: true,
-                            onAddSelectedCommerce: { placeId, description, mainText, secondaryText in
-                                let normalized = placeId.trimmingCharacters(in: .whitespacesAndNewlines)
-                                guard !normalized.isEmpty else { return false }
-                                if selectedEstablishments.contains(where: { $0.placeId == normalized }) {
-                                    return false
-                                }
-                                selectedEstablishments.append(
-                                    MerchantOBEstablishment(
-                                        placeId: normalized,
-                                        description: description,
-                                        mainText: mainText,
-                                        secondaryText: secondaryText
-                                    )
-                                )
-                                return true
-                            },
-                            alreadyAddedPlaceIds: Set(selectedEstablishments.map(\.placeId)),
-                            addCommerceRequestToken: addCommerceRequestToken,
                             onPredictionsVisibilityChanged: { visible in
                                 isPredictionsVisible = visible
                             }
                         )
-                        .padding(.horizontal, 16)
-
-                        if !selectedEstablishments.isEmpty && !isPredictionsVisible {
-                            VStack(spacing: 10) {
-                                ForEach(Array(selectedEstablishments.enumerated()), id: \.element.placeId) { _, item in
-                                    GroupedSettingsCard {
-                                        HStack(alignment: .top, spacing: 12) {
-                                            GroupedSettingsIconBox(systemName: "building.2")
-                                            VStack(alignment: .leading, spacing: 4) {
-                                                Text(item.mainText)
-                                                    .font(.body.weight(.semibold))
-                                                    .foregroundStyle(Color(UIColor.label))
-                                                if let sub = item.secondaryText, !sub.isEmpty {
-                                                    Text(sub)
-                                                        .font(.subheadline)
-                                                        .foregroundStyle(Color(UIColor.secondaryLabel))
-                                                }
-                                            }
-                                            Spacer(minLength: 10)
-                                        }
-                                        .padding(.horizontal, GroupedSettingsMetrics.horizontalPadding)
-                                        .padding(.vertical, GroupedSettingsMetrics.rowVerticalPadding)
-                                    }
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: GroupedSettingsMetrics.cardCornerRadius, style: .continuous)
-                                            .strokeBorder(Color.black.opacity(0.06), lineWidth: 1)
-                                    )
-                                }
-                            }
-                            .padding(.horizontal, 16)
-                            .padding(.top, 8)
-                        }
-
-                        if (selectedPlaceId != nil || !selectedEstablishments.isEmpty) && !isPredictionsVisible {
-                            Button {
-                                addCommerceRequestToken += 1
-                            } label: {
-                                HStack(spacing: 8) {
-                                    Image(systemName: "plus.circle")
-                                        .font(.system(size: 14, weight: .semibold))
-                                    Text("Ajouter un commerce")
-                                        .font(.subheadline.weight(.semibold))
-                                }
-                                .foregroundStyle(AppTheme.Colors.textSecondary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 6)
-                            }
-                            .buttonStyle(.plain)
-                            .padding(.horizontal, 20)
-                            .padding(.top, 10)
-                        }
+                        .padding(.horizontal, horizontalGutter)
                     }
                     .padding(.bottom, 24)
                 }

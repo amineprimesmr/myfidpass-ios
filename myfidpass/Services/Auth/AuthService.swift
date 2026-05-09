@@ -1040,8 +1040,10 @@ final class AuthService: NSObject, ObservableObject {
         CardPreviewDisplaySnapshotStore.clearAllSnapshots()
         CommerceFlyerRasterCache.clearAll()
         CommerceFlyerStateCache.clearAll()
-        // Conserver l’historique local d’envois (UserDefaults) + cache stats disque par slug : mêmes données
-        // qu’avant reconnexion — la purge est réservée à `deleteAccount()`.
+        // Mémoire + accusés checklist : sinon un **même slug** après nouveau compte réaffiche l’ancien flyer / étapes cochées.
+        CommerceFlyerStore.shared.clearAll()
+        MerchantSetupProgressCalculator.clearAllFlyerDisplayedAcknowledgementsFromUserDefaults()
+        // L’historique local d’envois de campagnes (`NotificationSendLocalHistoryStore`) est conservé au logout simple ; `deleteAccount()` le vide avant cette étape.
         // Vider le cache CoreData pour éviter qu'un ancien commerce réapparaisse sur un nouveau compte
         DataService.clearAllLocalData(context: PersistenceController.shared.container.viewContext)
         // Effacer l'établissement pour forcer la re-sélection au prochain lancement (WelcomeFlow)
@@ -1081,7 +1083,7 @@ final class AuthService: NSObject, ObservableObject {
         } catch APIError.unauthorized {
             // Le token n'est plus valide / compte déjà invalidé côté serveur.
             finalizeLocalStateAfterAccountDeletion()
-        } catch APIError.notFound {
+        } catch let e as APIError where e.isHTTPResourceMissing {
             // Le compte est déjà supprimé côté serveur.
             finalizeLocalStateAfterAccountDeletion()
         } catch APIError.server(_, let message) {

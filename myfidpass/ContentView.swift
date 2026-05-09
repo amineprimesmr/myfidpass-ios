@@ -16,8 +16,6 @@ struct ContentView: View {
     @StateObject private var tabRouter = MainTabRouter()
     @State private var showMerchantSubscriptionSheet = false
     @State private var showGlobalSettingsSheet = false
-    @State private var autoOpenPaymentTask: Task<Void, Never>?
-    @State private var didAutoOpenPaymentSheet = false
     /// Pastille « Synchronisé » après une sync réussie (masquée si une nouvelle sync démarre).
     @State private var showSyncSuccessChip = false
     @State private var syncSuccessHideTask: Task<Void, Never>?
@@ -27,7 +25,7 @@ struct ContentView: View {
     @State private var syncRunStartedAt: Date?
     @State private var syncBannerDismissedUntil: Date = .distantPast
     @State private var syncBannerDragOffset: CGFloat = 0
-    /// Bandeau d’erreur sync : l’utilisateur peut masquer sans effacer `lastError` (détail dans Réglages).
+    /// Bandeau d’erreur sync : l’utilisateur peut masquer sans effacer `lastError` (détail dans Compte).
     @State private var dismissedSyncErrorBanner = false
     @State private var isSoftwareKeyboardVisible = false
     @State private var softwareKeyboardHeight: CGFloat = 0
@@ -38,6 +36,8 @@ struct ContentView: View {
     /// Merci écran plein après paiement (deep link ou fermeture gate).
     @State private var showPaymentThankYouOverlay = false
     @State private var subscriptionPaidThankYouEpoch = 0
+    /// Force le recalcul de la pastille essai (checklist lancement complétée, etc.).
+    @State private var merchantTrialChromeRevision = 0
 
     var body: some View {
         ZStack {
@@ -71,6 +71,17 @@ struct ContentView: View {
                 .onReceive(NotificationCenter.default.publisher(for: .myfidpassOpenGlobalSettingsSheet)) { _ in
                     showGlobalSettingsSheet = true
                 }
+                .onReceive(NotificationCenter.default.publisher(for: .myfidpassCloseGlobalSettingsSheet)) { _ in
+                    showGlobalSettingsSheet = false
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .myfidpassMerchantSetupProgressUpdated)) { _ in
+                    merchantTrialChromeRevision &+= 1
+                }
+                .onChange(of: showGlobalSettingsSheet) { _, isOpen in
+                    if !isOpen {
+                        merchantTrialChromeRevision &+= 1
+                    }
+                }
                 .sheet(isPresented: $showMerchantSubscriptionSheet) {
                     MerchantSubscriptionGateView(isMandatory: false)
                         .environmentObject(authService)
@@ -87,9 +98,6 @@ struct ContentView: View {
                 }
                 .task {
                     await authService.reconcileStripeSubscriptionFromServer(force: true)
-                }
-                .onAppear {
-                    scheduleAutoOpenPaymentSheetIfNeeded()
                 }
 
             if showPaymentThankYouOverlay {
@@ -190,17 +198,17 @@ struct ContentView: View {
                 guard screen != .authenticated else { return }
                 showGlobalSettingsSheet = false
                 showMerchantSubscriptionSheet = false
-                autoOpenPaymentTask?.cancel()
                 showSyncSuccessChip = false
                 syncSuccessHideTask?.cancel()
                 syncSuccessHideTask = nil
             }
+            .onReceive(NotificationCenter.default.publisher(for: .myfidpassCardPreviewDisplayDidChange)) { _ in
+                merchantTrialChromeRevision &+= 1
+                Task { await NotificationsService.shared.refreshMerchantCardSetupReminder() }
+            }
             .environmentObject(tabRouter)
             .environment(\.managedObjectContext, viewContext)
             .onAppear {
-                Task { await NotificationsService.shared.refreshMerchantCardSetupReminder() }
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .myfidpassCardPreviewDisplayDidChange)) { _ in
                 Task { await NotificationsService.shared.refreshMerchantCardSetupReminder() }
             }
             .onOpenURL { url in
@@ -220,24 +228,6 @@ struct ContentView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
-    }
-
-    /// Ouvre la page de paiement 5 s après l'arrivée dans l'app (comme un tap sur la pastille).
-    @MainActor
-    private func scheduleAutoOpenPaymentSheetIfNeeded() {
-        guard !didAutoOpenPaymentSheet else { return }
-        guard !authService.isMerchantStaffUser else { return }
-        guard !authService.isPlatformAdmin else { return }
-        didAutoOpenPaymentSheet = true
-        autoOpenPaymentTask?.cancel()
-        autoOpenPaymentTask = Task {
-            try? await Task.sleep(nanoseconds: 5_000_000_000)
-            guard !Task.isCancelled else { return }
-            await MainActor.run {
-                guard !showGlobalSettingsSheet else { return }
-                showMerchantSubscriptionSheet = true
-            }
-        }
     }
 
     @MainActor
@@ -265,11 +255,28 @@ struct ContentView: View {
 
     /// Pastille visible sur Accueil, Notif et Commerce.
     private var shouldShowTrialSubscribePillInCurrentTab: Bool {
+        _ = merchantTrialChromeRevision
         guard !authService.isMerchantStaffUser else { return false }
         guard !authService.hasPaidStripeSubscription else { return false }
         guard authService.isMerchantTrialPeriodActive, authService.merchantTrialEndsAt != nil else { return false }
         guard !floatingOverlaysSuppressed else { return false }
+        guard merchantLaunchChecklistCompleteForTrialChrome else { return false }
         return tabRouter.selectedTab == 0 || tabRouter.selectedTab == 1 || tabRouter.selectedTab == 2
+    }
+
+    /// Aligné SaaS web : pas d’incitation 1 € tant que les 4 étapes « lancement » ne sont pas cochées.
+    private var merchantLaunchChecklistCompleteForTrialChrome: Bool {
+        guard let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines), !slug.isEmpty else {
+            return false
+        }
+        CommerceFlyerStore.shared.hydrateFromDiskIfNeeded(slug: slug)
+        let flyerCustom = MerchantSetupProgressCalculator.flyerLooksCustomizedFromDisk(slug: slug)
+        let settings = ScanFlowSettingsCache.cached(for: slug)
+        return MerchantSetupProgressCalculator.compute(
+            settings: settings,
+            slug: slug,
+            flyerLooksCustomized: flyerCustom,
+        ).allDone
     }
 
     /// Confirmation plein écran après paiement (par‑dessus les onglets).

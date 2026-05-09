@@ -142,13 +142,25 @@ enum FlyerBootstrapPreviewPayloadBuilder {
     }
 
     /// Bootstrap base64 pour `FlyerPreviewWebView` (composite : roue, QR, textes — pas seulement le fond IA).
-    static func base64(from response: DashboardFlyerGetResponse, businessSlug: String) -> String? {
+    /// - Parameter fallbackStateIfMissing: quand le GET omet `flyer_prefs.state` (JSON partiel / sync), réutiliser l’état
+    ///   du dernier bootstrap disque au lieu de `FlyerStateDTO.default` — sinon un `loadProfileFromServer` écrase le cache
+    ///   Commerce avec le gabarit par défaut (couleurs roue / bandeau / CADEAU perdues à la réouverture du flyer).
+    static func base64(from response: DashboardFlyerGetResponse, businessSlug: String, fallbackStateIfMissing: FlyerStateDTO? = nil) -> String? {
         guard let fp = response.flyerPrefs else { return nil }
-        /// Anciens comptes / JSON partiel : sans `state` explicite on reprend le défaut (sinon checklist Commerce sans aperçu composite).
-        var state = fp.state ?? FlyerStateDTO.default
         let slug = businessSlug.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !slug.isEmpty else { return nil }
-        state = FlyerWheelWebEmbedPreviewMigration.normalizedStateForPreview(state, businessSlug: slug)
+        let state: FlyerStateDTO
+        if let s = fp.state {
+            var merged = s
+            merged.normalizeClamps()
+            state = FlyerWheelWebEmbedPreviewMigration.normalizedStateForPreview(merged, businessSlug: slug)
+        } else if let fb = fallbackStateIfMissing {
+            var merged = fb
+            merged.normalizeClamps()
+            state = FlyerWheelWebEmbedPreviewMigration.normalizedStateForPreview(merged, businessSlug: slug)
+        } else {
+            state = FlyerWheelWebEmbedPreviewMigration.normalizedStateForPreview(FlyerStateDTO.default, businessSlug: slug)
+        }
         let share = (response.shareUrl ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         /// `updated_at` exclu : sinon chaque sync change le base64 → la checklist Commerce relance WebView + décodage fond (flash / rechargement).
         let payload = FlyerBootstrapPreviewPayload(

@@ -73,11 +73,22 @@ struct CustomMerchantProPaywallView: View {
         }
         .background {
             GeometryReader { proxy in
-                Image("paypage")
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: proxy.size.width, height: proxy.size.height)
-                    .clipped()
+                let endR = max(proxy.size.width, proxy.size.height) * 0.95
+                ZStack {
+                    FlyerEditorSurfaceColors.canvas
+                    RadialGradient(
+                        colors: [
+                            FlyerEditorSurfaceColors.glowDepth.opacity(0.65),
+                            FlyerEditorSurfaceColors.glowDepth.opacity(0.28),
+                            FlyerEditorSurfaceColors.canvas.opacity(0)
+                        ],
+                        center: UnitPoint(x: 0.5, y: 0.08),
+                        startRadius: 0,
+                        endRadius: endR
+                    )
+                    .blur(radius: 24)
+                }
+                .frame(width: proxy.size.width, height: proxy.size.height)
             }
             .ignoresSafeArea()
         }

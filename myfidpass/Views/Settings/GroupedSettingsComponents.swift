@@ -247,13 +247,13 @@ struct GroupedSettingsLogoutRow: View {
     }
 }
 
-/// Titre centré « Réglages » au-dessus de la première section.
+/// Titre centré « Compte » au-dessus de la première section.
 struct GroupedSettingsPageTitle: View {
     /// Dans l’en-tête Commerce : police plus légère pour rester propre dans le panneau.
     var compact: Bool = false
 
     var body: some View {
-        Text("Réglages")
+        Text("Compte")
             .font(compact ? .title2.weight(.bold) : .largeTitle.weight(.bold))
             .foregroundStyle(Color(UIColor.label))
             .frame(maxWidth: .infinity)

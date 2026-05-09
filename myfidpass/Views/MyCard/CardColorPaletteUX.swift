@@ -2,7 +2,7 @@
 //  CardColorPaletteUX.swift
 //  myfidpass
 //
-//  Pastilles : grille unique `AppVibrantColorPalette` (roue + reste de l’app) + teintes logo (optionnel).
+//  Pastilles : grille `AppVibrantColorPalette` + carrousel flyer (teintes seules, ordre HSV).
 //
 
 import SwiftUI
@@ -148,12 +148,13 @@ struct FlyerAIPriorityPaletteRow: View {
     var selectionRingColor: Color = Color(hex: "7C3AED")
     /// Nombre max de couleurs sélectionnées (l’API flyer utilise surtout la 1re comme accent).
     var maxSlots: Int = 1
-    /// Ouvre une feuille simple `ColorPicker`.
+    /// Ouvre une feuille **grille** uniquement (pastilles) — application immédiate au tap.
     var showPrecisionColorPlus: Bool = true
+    /// Teintes extraites du logo : désactivé pour l’éditeur flyer (ordre confus + doublons avec la grille).
+    var includeImageSuggestions: Bool = false
 
     @State private var dropHoverHex: String?
     @State private var precisionSheetOpen = false
-    @State private var precisionPicked: Color = Color(red: 1, green: 0, blue: 0.4) // resynced à l’ouverture
 
     private var swatchDiameter: CGFloat { compactEmbedded ? 32 : 40 }
     private var rowSpacing: CGFloat { compactEmbedded ? 8 : 12 }
@@ -176,6 +177,7 @@ struct FlyerAIPriorityPaletteRow: View {
     }
 
     private var extraLogoSwatches: [String] {
+        guard includeImageSuggestions else { return [] }
         let seen = presetNormSet
         var out: [String] = []
         for raw in suggestedFromImages {
@@ -184,7 +186,28 @@ struct FlyerAIPriorityPaletteRow: View {
             guard !seen.contains(stripped), !out.contains(stripped) else { continue }
             out.append(stripped)
         }
-        return out.sorted { CardColorPaletteUX.relativeLuminance01(hex6: $0) < CardColorPaletteUX.relativeLuminance01(hex6: $1) }
+        return out.sorted { hueSortKey6($0) < hueSortKey6($1) }
+    }
+
+    /// Tri teinte (même logique que `AppVibrantColorPalette.flyerCarouselHex6`).
+    private func hueSortKey6(_ raw: String) -> Double {
+        AppVibrantColorPalette.flyerHueSortKey6(raw)
+    }
+
+    /// Pastilles « + » : teinte courante + carrousel + grille HSB (sans doublon).
+    private var precisionGridHex6Ordered: [String] {
+        var seen = Set<String>()
+        var out: [String] = []
+        func push(_ raw: String) {
+            let n = CardColorPaletteUX.normalizeHex(raw.replacingOccurrences(of: "#", with: ""))
+            guard seen.insert(n).inserted else { return }
+            out.append(n)
+        }
+        if let f = normalizedOrdered.first { push(f) }
+        for c in legacyOrderedNotInPreset { push(c) }
+        for h in baseSwatchHexes { push(h) }
+        for h in AppVibrantColorPalette.precisionPickerGridHex6 { push(h) }
+        return out
     }
 
     /// Couleurs encore choisies mais absentes de la grille (données existantes).
@@ -310,7 +333,6 @@ struct FlyerAIPriorityPaletteRow: View {
     private var precisionPlusButton: some View {
         let outer: CGFloat = swatchDiameter + 4
         return Button {
-            syncPrecisionColorFromSelection()
             precisionSheetOpen = true
         } label: {
             ZStack {
@@ -329,68 +351,21 @@ struct FlyerAIPriorityPaletteRow: View {
         .buttonStyle(.plain)
         .accessibilityLabel(Text("Choisir une couleur précise"))
         .sheet(isPresented: $precisionSheetOpen) {
-            VStack(spacing: 22) {
-                Capsule()
-                    .fill(Color.primary.opacity(0.18))
-                    .frame(width: 42, height: 5)
-                    .padding(.top, 8)
-
-                Text("Choisir une couleur")
-                    .font(.headline.weight(.semibold))
-                    .foregroundStyle(.primary)
-
-                ColorPicker("", selection: $precisionPicked, supportsOpacity: false)
-                    .labelsHidden()
-                    .scaleEffect(1.18)
-                    .padding(.vertical, 10)
-
-                HStack(spacing: 12) {
-                    Button {
-                        precisionSheetOpen = false
-                    } label: {
-                        Text("Annuler")
-                            .font(.body.weight(.semibold))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 13)
-                    }
-                    .buttonStyle(.plain)
-                    .background(Color.primary.opacity(0.08), in: Capsule())
-
-                    Button {
-                        let h = precisionPicked.toHexRGBString()
-                        promote(h)
-                        precisionSheetOpen = false
-                    } label: {
-                        Text("Valider")
-                            .font(.body.weight(.semibold))
-                            .foregroundStyle(.white)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 13)
-                    }
-                    .buttonStyle(.plain)
-                    .background(Color.black, in: Capsule())
-                }
-                .padding(.horizontal, 18)
-            }
-            .padding(.bottom, 18)
-            .presentationDetents([.height(230)])
-            .presentationDragIndicator(.hidden)
-        }
-    }
-
-    private func syncPrecisionColorFromSelection() {
-        if let f = normalizedOrdered.first {
-            let u = f.replacingOccurrences(of: "#", with: "")
-            if u.count == 6, u.allSatisfy({ $0.isHexDigit }) {
-                precisionPicked = Color(hex: u)
-                return
-            }
-        }
-        if let h = baseSwatchHexes.first {
-            let u = h.replacingOccurrences(of: "#", with: "")
-            if u.count == 6, u.allSatisfy({ $0.isHexDigit }) {
-                precisionPicked = Color(hex: u)
-            }
+            FlyerPrecisionColorGridSheet(
+                selectionHex6: normalizedOrdered.first.map {
+                    CardColorPaletteUX.normalizeHex($0.replacingOccurrences(of: "#", with: ""))
+                },
+                gridHex6: precisionGridHex6Ordered,
+                selectionRingColor: selectionRingColor,
+                swatchPixel: max(36, swatchDiameter + 2),
+                columnSpacing: compactEmbedded ? 8 : 10,
+                onSelectCanon: { canon in
+                    promote(canon)
+                },
+                dismiss: { precisionSheetOpen = false }
+            )
+            .presentationDragIndicator(.visible)
+            .presentationDetents([.medium, .large])
         }
     }
 
@@ -499,52 +474,140 @@ struct FlyerAIPriorityPaletteRow: View {
     }
 }
 
+// MARK: - Grille « couleur précise » (flyer)
+
+/// Feuille du bouton **+** : pastilles en grille seulement — tap = validation + fermeture.
+private struct FlyerPrecisionColorGridSheet: View {
+    let selectionHex6: String?
+    let gridHex6: [String]
+    let selectionRingColor: Color
+    let swatchPixel: CGFloat
+    let columnSpacing: CGFloat
+    let onSelectCanon: (String) -> Void
+    let dismiss: () -> Void
+
+    private static let sheetCanvas = Color(red: 14 / 255, green: 17 / 255, blue: 19 / 255)
+
+    private var columns: [GridItem] {
+        [GridItem(.adaptive(minimum: swatchPixel + 4, maximum: 54), spacing: columnSpacing)]
+    }
+
+    var body: some View {
+        ScrollView {
+            LazyVGrid(columns: columns, spacing: columnSpacing) {
+                ForEach(gridHex6, id: \.self) { raw in
+                    let norm = CardColorPaletteUX.normalizeHex(raw)
+                    let selected = selectionHex6 == norm
+                    let isLight = Self.lightSwatchNorms.contains(norm.uppercased())
+                    Button {
+                        onSelectCanon("#" + norm)
+                        dismiss()
+                    } label: {
+                        ZStack {
+                            Circle()
+                                .fill(Color(hex: norm))
+                                .frame(width: swatchPixel, height: swatchPixel)
+                            if selected {
+                                Circle()
+                                    .strokeBorder(Color.white.opacity(0.55), lineWidth: 1.5)
+                                    .frame(width: swatchPixel + 5, height: swatchPixel + 5)
+                            }
+                            Circle()
+                                .strokeBorder(swatchRing(isLight: isLight, selected: selected), lineWidth: selected ? 3 : 1.25)
+                                .frame(width: swatchPixel + (selected ? 7 : 4), height: swatchPixel + (selected ? 7 : 4))
+                        }
+                        .frame(height: swatchPixel + 14)
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(Text(selected ? "Couleur #\(norm), sélectionnée" : "Choisir #\(norm)"))
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 20)
+            .padding(.top, 6)
+        }
+        .scrollIndicators(.hidden)
+        .background(Self.sheetCanvas.ignoresSafeArea())
+        .preferredColorScheme(.dark)
+    }
+
+    private func swatchRing(isLight: Bool, selected: Bool) -> Color {
+        if selected { return selectionRingColor }
+        if isLight { return Color.black.opacity(0.16) }
+        return Color.black.opacity(0.08)
+    }
+
+    private static let lightSwatchNorms: Set<String> = [
+        "FFFFFF", "F5F5F7", "F5F5F5", "FAFAFA", "F0F0F0", "E8E8ED", "D1D1D6"
+    ]
+}
+
 // MARK: - Éditeur flyer : un champ #RRGGBB = même carrousel que la création (+ précision)
 
-/// Pastilles horizontales + bouton **+** (couleur précise) — aligné sur `FlyerAIPriorityPaletteRow` (création flyer).
+/// Pastilles horizontales + bouton **+** (couleur précise) — palette flyer sans neutres, ordre teinte.
 struct FlyerAIColorFieldCarousel: View {
     @Binding var hex: String
     var selectionRingColor: Color = Color(hex: "7C3AED")
     var compactEmbedded: Bool = true
+    /// Pastilles affichées (sans `#`). `nil` = `AppVibrantColorPalette.flyerCarouselHex6`.
+    var presetHex6: [String]? = nil
 
-    @State private var ordered: [String] = ["#304FFE"]
+    @State private var ordered: [String] = []
+
+    private var baseHexList: [String] {
+        if let presetHex6, !presetHex6.isEmpty { return presetHex6 }
+        return AppVibrantColorPalette.flyerCarouselHex6
+    }
 
     var body: some View {
         FlyerAIPriorityPaletteRow(
             orderedHexes: $ordered,
+            suggestedFromImages: [],
+            customSwatches: baseHexList,
             compactEmbedded: compactEmbedded,
             selectionRingColor: selectionRingColor,
             maxSlots: 1,
-            showPrecisionColorPlus: true
+            showPrecisionColorPlus: true,
+            includeImageSuggestions: false
         )
         .onAppear(perform: pullFromHex)
         .onChange(of: hex) { _, _ in pullFromHex() }
         .onChange(of: ordered) { _, new in
             guard let f = new.first else { return }
-            let withHash: String = {
+            let withHash: String? = {
                 let t = f.trimmingCharacters(in: .whitespacesAndNewlines)
-                if t.hasPrefix("#"), t.count == 7 { return t.uppercased() }
+                if t.hasPrefix("#"), t.count == 7, t.dropFirst().allSatisfy(\.isHexDigit) {
+                    return t.uppercased()
+                }
                 let u = t.replacingOccurrences(of: "#", with: "").uppercased()
-                guard u.count == 6, u.count == u.filter(\.isHexDigit).count else { return "#304FFE" }
-                return "#" + u
+                if u.count == 6 && u.allSatisfy(\.isHexDigit) { return "#" + u }
+                return nil
             }()
-            if withHash.uppercased() != hex.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() {
-                hex = withHash
+            guard let wh = withHash else { return }
+            if wh.uppercased() != hex.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() {
+                hex = wh
             }
         }
     }
 
     private func pullFromHex() {
         let t = hex.trimmingCharacters(in: .whitespacesAndNewlines)
-        let withHash: String
+        if t.isEmpty { return }
+        let withHash: String?
         if t.hasPrefix("#"), t.count == 7, t.dropFirst().allSatisfy(\.isHexDigit) {
             withHash = t.uppercased()
         } else {
             let u = t.replacingOccurrences(of: "#", with: "").uppercased()
-            withHash = (u.count == 6 && u.allSatisfy(\.isHexDigit)) ? "#\(u)" : "#304FFE"
+            if u.count == 6 && u.allSatisfy(\.isHexDigit) {
+                withHash = "#\(u)"
+            } else {
+                return
+            }
         }
-        if ordered != [withHash] {
-            ordered = [withHash]
+        guard let w = withHash else { return }
+        if ordered != [w] {
+            ordered = [w]
         }
     }
 }

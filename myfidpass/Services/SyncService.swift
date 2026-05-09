@@ -169,13 +169,13 @@ final class SyncService: ObservableObject {
         } catch APIError.subscriptionRequired {
             lastError = "Abonnement inactif ou expiré. Réactivez votre offre (Stripe) pour synchroniser le tableau de bord."
             postSyncFailureBanner()
-        } catch APIError.notFound {
+        } catch let err as APIError where err.isHTTPResourceMissing {
             // Souvent slug / URL mal formée ou commerce supprimé : 2ᵉ essai après relecture du profil (slug recalculé).
             do {
                 let meRetry: AuthMeResponse = try await APIClient.shared.request(.authMe)
                 authService?.applyAuthMeResponse(meRetry)
                 guard let slugRetry = resolvedSlug(from: meRetry) else {
-                    presentSyncFailure(APIError.notFound)
+                    presentSyncFailure(err)
                     return
                 }
                 let lastSaved = UserDefaults.standard.object(forKey: Self.templateLastSavedKey) as? Date
@@ -200,7 +200,7 @@ final class SyncService: ObservableObject {
             lastError = nil
             return
         }
-        if case APIError.notFound = error {
+        if let api = error as? APIError, api.isHTTPResourceMissing {
             lastError =
                 "Le serveur ne trouve pas ce commerce (ou la connexion est désynchronisée). Ouvrez l’onglet Commerce pour vérifier l’établissement, ou fermez puis rouvrez l’app."
         } else {

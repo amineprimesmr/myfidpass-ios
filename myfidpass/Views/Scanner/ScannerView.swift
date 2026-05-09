@@ -326,7 +326,7 @@ struct ScannerView: View {
                     pointsPerVisit = settings?.pointsPerVisit ?? 0
                     withAnimation(.spring(response: 0.3)) {}
                 }
-            } catch APIError.notFound {
+            } catch let e as APIError where e.isHTTPResourceMissing {
                 await MainActor.run {
                     showError = "Code non reconnu pour ce commerce."
                     appState.showError("Code non reconnu.")
@@ -394,7 +394,7 @@ struct ScannerView: View {
                     withAnimation(.spring(response: 0.3)) { showSuccess = true }
                 }
                 await syncService.syncAfterServerMutation()
-            } catch APIError.notFound {
+            } catch let e as APIError where e.isHTTPResourceMissing {
                 await MainActor.run {
                     showError = "Code non reconnu."
                     pendingBarcode = nil

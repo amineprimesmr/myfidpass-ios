@@ -195,7 +195,6 @@ struct CafeDesArtsCardPreview: View {
         .animation(.easeOut(duration: 0.2), value: logoURL)
         .animation(.easeOut(duration: 0.2), value: stampEmoji)
         .animation(.easeOut(duration: 0.25), value: cardBackgroundRemoteURL)
-        .animation(.easeOut(duration: 0.2), value: completionHighlightZones.count)
     }
 
     @ViewBuilder

@@ -153,6 +153,24 @@ enum CommerceFlyerRasterCache {
         decodedBg.removeAllObjects()
         publicBgBySlug.removeAllObjects()
         compositeByToken.removeAllObjects()
+        purgeCompositeSnapshotsDisk()
+        purgeFlyerTransientCacheFilesInCachesDirectory()
+    }
+
+    private static func purgeCompositeSnapshotsDisk() {
+        guard let root = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return }
+        let dir = root.appendingPathComponent("CommerceFlyerCompositeSnapshots", isDirectory: true)
+        try? FileManager.default.removeItem(at: dir)
+    }
+
+    /// Fichiers hors `CommerceFlyerStateCache` (Caches/) — voir `FlyerPendingBgStorage` / `FlyerRecreatePreviousBackupStorage` dans le hub flyer.
+    private static func purgeFlyerTransientCacheFilesInCachesDirectory() {
+        guard let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return }
+        let fm = FileManager.default
+        guard let names = try? fm.contentsOfDirectory(atPath: caches.path) else { return }
+        for name in names where name.hasPrefix("flyerPendingBg_") || name.hasPrefix("flyerRecreatePrevious_") {
+            try? fm.removeItem(at: caches.appendingPathComponent(name))
+        }
     }
 
     private static func compositeSnapshotDiskURL(token: String) -> URL? {

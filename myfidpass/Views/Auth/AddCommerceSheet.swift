@@ -13,6 +13,7 @@ struct AddCommerceSheet: View {
     @EnvironmentObject private var authService: AuthService
     @EnvironmentObject private var syncService: SyncService
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     @StateObject private var hapticManager = HapticManager.shared
 
@@ -42,6 +43,17 @@ struct AddCommerceSheet: View {
         return out
     }
 
+    private var establishmentSearchTopReserved: CGFloat {
+        if horizontalSizeClass == .regular { return 56 }
+        return MyfidpassOnboardingConstants.titleAreaHeight
+            + MyfidpassOnboardingConstants.titleToContentSpacing
+            + MyfidpassOnboardingConstants.processStyleFieldExtraSpacing
+    }
+
+    private var horizontalGutter: CGFloat {
+        horizontalSizeClass == .regular ? 40 : 16
+    }
+
     var body: some View {
         ZStack {
             AppTheme.Colors.background
@@ -59,12 +71,7 @@ struct AddCommerceSheet: View {
 
             VStack(spacing: 0) {
                 Spacer()
-                    .frame(height: MyfidpassOnboardingConstants.titleAreaHeight)
-                Spacer()
-                    .frame(
-                        height: MyfidpassOnboardingConstants.titleToContentSpacing
-                            + MyfidpassOnboardingConstants.processStyleFieldExtraSpacing
-                    )
+                    .frame(height: establishmentSearchTopReserved)
 
                 ScrollView(showsIndicators: false) {
                     VStack(spacing: 0) {
@@ -79,7 +86,7 @@ struct AddCommerceSheet: View {
                                 isPredictionsVisible = visible
                             }
                         )
-                        .padding(.horizontal, 16)
+                        .padding(.horizontal, horizontalGutter)
 
                         if let error = errorMessage {
                             Text(error)
@@ -188,7 +195,7 @@ struct AddCommerceSheet: View {
                 fallbackDisplayName: establishmentName
             )
         } catch let api as APIError {
-            if case .notFound = api {
+            if api.isHTTPResourceMissing {
                 let classic = try await createCommerceViaClassicEndpoint(name: establishmentName)
                 await finalizeAfterCommerceCreated(
                     responseSlug: classic.slug,

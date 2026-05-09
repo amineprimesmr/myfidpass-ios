@@ -316,7 +316,21 @@ struct ProfileView: View {
                     commerceFlyerShareURL = trimmedShare
                 }
                 commerceFlyerCustomBgDataURL = flyer.flyerPrefs?.customBgDataUrl
-                commerceFlyerBootstrapPreviewB64 = FlyerBootstrapPreviewPayloadBuilder.base64(from: flyer, businessSlug: slug)
+                let priorBootstrapRaw = CommerceFlyerStore.shared.snapshot(for: slug)?.bootstrapPreviewB64
+                    ?? CommerceFlyerStateCache.load(slug: slug)?.bootstrapPreviewB64
+                let priorBootstrap = priorBootstrapRaw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let fallbackState: FlyerStateDTO? = priorBootstrap.isEmpty
+                    ? nil
+                    : FlyerBootstrapPreviewPayloadBuilder.flyerStateFromBootstrapBase64(priorBootstrap)
+                var newBootstrapB64 = FlyerBootstrapPreviewPayloadBuilder.base64(
+                    from: flyer,
+                    businessSlug: slug,
+                    fallbackStateIfMissing: fallbackState
+                )
+                if newBootstrapB64 == nil, !priorBootstrap.isEmpty {
+                    newBootstrapB64 = priorBootstrap
+                }
+                commerceFlyerBootstrapPreviewB64 = newBootstrapB64
                 let engagement = engagementStepDone(from: settings)
                 CommerceFlyerStateCache.save(
                     slug: slug,

@@ -29,13 +29,20 @@ enum APIError: LocalizedError {
         switch self {
         case .invalidURL: return "URL invalide."
         case .noData: return "Réponse vide du serveur."
-        case .decoding(let e): return "Données invalides: \(e.localizedDescription)"
-        case .server(let code, let msg): return msg ?? "Erreur serveur (\(code))."
+        case .decoding:
+            return "Les données reçues sont incomplètes ou obsolètes. Synchronisez l’application puis réessayez."
+        case .server(let code, let msg):
+            // Ne jamais exposer les libellés bruts du backend pour les 404 (ex. « Ressource introuvable »).
+            if code == 404 {
+                return "Ce contenu n’est pas disponible pour le moment. Vérifiez le commerce sélectionné ou synchronisez depuis l’écran Compte."
+            }
+            return msg ?? "Erreur serveur (\(code))."
         case .network(let e):
             if let url = e as? URLError, url.code == .cancelled { return nil }
             return Self.friendlyNetworkDescription(e)
         case .unauthorized: return "Session expirée. Reconnectez-vous."
-        case .notFound: return "Ressource introuvable."
+        case .notFound:
+            return "Ce contenu n’est pas disponible pour le moment. Vérifiez le commerce sélectionné ou synchronisez depuis l’écran Compte."
         case .subscriptionRequired:
             return "Cette action nécessite un abonnement actif (ou une période d’essai gratuite encore en cours). Les nouveaux comptes ont 24 h d’accès complet ; après cette période, souscrivez via Stripe depuis l’écran d’abonnement."
         case .businessQuotaReached:
@@ -46,6 +53,15 @@ enum APIError: LocalizedError {
             return message
         case .businessPlaceAlreadyLinked(let message):
             return message
+        }
+    }
+
+    /// Réponses HTTP 404 (JSON → `server(404,…)`), ou ancien jeton `notFound` si encore présent.
+    var isHTTPResourceMissing: Bool {
+        switch self {
+        case .notFound: return true
+        case .server(let code, _): return code == 404
+        default: return false
         }
     }
 

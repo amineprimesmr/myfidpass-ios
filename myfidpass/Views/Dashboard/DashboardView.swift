@@ -246,6 +246,8 @@ struct DashboardView: View {
     @State private var showMyCardFullScreen = false
     @State private var showHomeFlyerHubFullScreen = false
     @State private var homeFlyerHubOpenedForEdit = false
+    /// Checklist « Créer le flyer » : ouvrir l’assistant création, pas l’aperçu « Votre flyer » (cache brouillon).
+    @State private var homeFlyerHubStartCreateAssistant = false
     @State private var contentAppeared = false
     @State private var scanResultSheet: ScanResultSheetData?
     @State private var scanStampSheet: ScanStampSheetData?
@@ -501,8 +503,12 @@ struct DashboardView: View {
             cardPreviewDisplayRefresh += 1
             refreshHomeFlyerAvailability()
         }
-        .onReceive(NotificationCenter.default.publisher(for: .myfidpassOpenMerchantFlyerHub)) { _ in
-            openFlyerHubFromHome(forEdit: false)
+        .onReceive(NotificationCenter.default.publisher(for: .myfidpassOpenMerchantFlyerHub)) { note in
+            let startCreate = Self.flyerHubStartCreateAssistant(from: note)
+            openFlyerHubFromHome(forEdit: false, startCreateAssistant: startCreate)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .myfidpassOpenHomeMyCardFullScreen)) { _ in
+            showMyCardFullScreen = true
         }
         .onChange(of: showMyCardFullScreen) { _, isOpen in
             if !isOpen {
@@ -540,6 +546,7 @@ struct DashboardView: View {
                 MerchantProgramHubView(
                     context: viewContext,
                     seedOpenFlyerForEdit: homeFlyerHubOpenedForEdit,
+                    startInCreateFromEditBack: homeFlyerHubStartCreateAssistant,
                     liveCommerceSnapshot: homeFlyerHubOpenedForEdit ? CommerceFlyerLiveSnapshot(
                         bootstrapPreviewB64: homeFlyerBootstrapB64,
                         customBgDataURL: homeFlyerCustomBgDataURL,
@@ -581,6 +588,7 @@ struct DashboardView: View {
         }
         .onChange(of: showHomeFlyerHubFullScreen) { _, isPresented in
             if !isPresented {
+                homeFlyerHubStartCreateAssistant = false
                 refreshHomeFlyerAvailability()
             }
         }
@@ -765,7 +773,7 @@ struct DashboardView: View {
                     readyLabel: "Commencer",
                     pendingLabel: "Commencer"
                 ) {
-                    openFlyerHubFromHome()
+                    openFlyerHubFromHome(startCreateAssistant: true)
                 }
             }
         }
@@ -988,9 +996,23 @@ struct DashboardView: View {
         .frame(maxWidth: .infinity)
     }
 
-    private func openFlyerHubFromHome(forEdit: Bool = false) {
+    private func openFlyerHubFromHome(forEdit: Bool = false, startCreateAssistant: Bool = false) {
         homeFlyerHubOpenedForEdit = forEdit
+        homeFlyerHubStartCreateAssistant = startCreateAssistant
         showHomeFlyerHubFullScreen = true
+    }
+
+    /// `userInfo` peut exposer un `Bool` Swift ou un `NSNumber` (pont Objective-C) — les deux doivent ouvrir l’assistant création.
+    private static func flyerHubStartCreateAssistant(from note: Notification) -> Bool {
+        let key = MyfidpassNotificationUserInfoKey.flyerHubStartCreateAssistant
+        guard let raw = note.userInfo?[key] else { return false }
+        if let b = raw as? Bool { return b }
+        if let n = raw as? NSNumber { return n.boolValue }
+        if let s = raw as? String {
+            let t = s.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            return t == "1" || t == "true" || t == "yes"
+        }
+        return false
     }
 
     private func homeSetupReplacementButton(
@@ -1494,7 +1516,7 @@ struct DashboardView: View {
                     showToast = true
                 }
                 Task { await syncService.syncAfterServerMutation() }
-            } catch APIError.notFound {
+            } catch let e as APIError where e.isHTTPResourceMissing {
                 await MainActor.run {
                     scanError = "Code non reconnu pour ce commerce. Scannez le QR affiché sur la carte dans le Wallet du client (pas le lien « Ajouter à Wallet »)."
                     appState.showError(scanError ?? "Code non reconnu.")

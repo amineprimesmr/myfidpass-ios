@@ -30,9 +30,10 @@ struct CardPreviewConfiguratorPill: View {
                 .strokeBorder(Color.white.opacity(0.34), lineWidth: 1)
         )
         .shadow(color: Color.black.opacity(0.35), radius: 8, y: 4)
-        .opacity(isBlinking ? 1 : 0.45)
-        .scaleEffect(isBlinking ? 1 : 0.96)
-        .animation(.easeInOut(duration: 0.75).repeatForever(autoreverses: true), value: isBlinking)
+        .compositingGroup()
+        .opacity(isBlinking ? 1 : 0.5)
+        .scaleEffect(isBlinking ? 1 : 0.97)
+        .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: isBlinking)
         .onAppear { isBlinking = true }
         .onDisappear { isBlinking = false }
     }

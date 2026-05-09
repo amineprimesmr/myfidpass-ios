@@ -2508,9 +2508,7 @@ struct CampaignNotificationsView: View {
         defer { isLoadingCampaignDataInFlight = false }
 
         do {
-            async let settingsReq: BusinessSettingsResponse = APIClient.shared.request(.businessSettings(slug: slug))
-            async let segmentsReq: CampaignSegmentsResponse = APIClient.shared.request(.dashboardNotificationSegments(slug: slug))
-            let (gotSettings, gotSeg) = try await (settingsReq, segmentsReq)
+            let gotSettings = try await APIClient.shared.request(.businessSettings(slug: slug)) as BusinessSettingsResponse
             ScanFlowSettingsCache.store(gotSettings, for: slug)
             CampaignNotificationImageCache.applyPreviewTimestamps(from: gotSettings, slug: slug)
             dashboardSettings = gotSettings
@@ -2518,6 +2516,14 @@ struct CampaignNotificationsView: View {
             if !shouldDeferCampaignDataReloadDuringEdit {
                 perimeterRelevantMessageText = gotSettings.locationRelevantText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 isPerimeterRelevantTextDirty = false
+            }
+            let gotSeg: CampaignSegmentsResponse
+            do {
+                gotSeg = try await APIClient.shared.request(.dashboardNotificationSegments(slug: slug)) as CampaignSegmentsResponse
+            } catch let segErr as APIError where segErr.isHTTPResourceMissing {
+                gotSeg = .empty
+            } catch {
+                throw error
             }
             segments = gotSeg
             campaignAutomation = mergedAutomation(from: gotSettings.campaignAutomation)
@@ -2542,6 +2548,12 @@ struct CampaignNotificationsView: View {
                 return
             }
             isLoadingData = false
+            if let api = error as? APIError, api.isHTTPResourceMissing {
+                dashboardSettings = nil
+                segments = nil
+                loadError = nil
+                return
+            }
             loadError = (error as? APIError)?.errorDescription ?? error.localizedDescription
         }
     }

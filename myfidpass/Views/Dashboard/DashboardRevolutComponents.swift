@@ -270,3 +270,12 @@ struct RevolutActivityRow: View {
         .padding(.vertical, 4)
     }
 }
+
+// MARK: - Fond écran flyer (éditeur) — partagé avec d’autres écrans (ex. paywall Pro) pour le même graphite + halo.
+
+enum FlyerEditorSurfaceColors {
+    /// Identique à l’arrière-plan `ScrollView` de l’assistant flyer (`#0e1113`).
+    static let canvas = Color(red: 14 / 255, green: 17 / 255, blue: 19 / 255)
+    /// Halo bleu-gris derrière les blocs flyer (`#242d3b`).
+    static let glowDepth = Color(red: 36 / 255, green: 45 / 255, blue: 59 / 255)
+}

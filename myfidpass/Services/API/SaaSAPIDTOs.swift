@@ -152,6 +152,21 @@ struct CampaignSegmentsResponse: Decodable {
     let points50: Int?
     let recurrent: Int?
     let birthdayToday: Int?
+
+    /// Quand l’endpoint segments renvoie 404 (route absente ou commerce sans données), l’UI continue sans effectifs.
+    static let empty = CampaignSegmentsResponse(
+        inactive14: nil,
+        inactive30: nil,
+        inactive60: nil,
+        inactive90: nil,
+        new7: nil,
+        new30: nil,
+        welcomeNew: nil,
+        pointsNear50: nil,
+        points50: nil,
+        recurrent: nil,
+        birthdayToday: nil
+    )
 }
 
 // MARK: - Campagnes automatiques (GET/PATCH dashboard/settings)

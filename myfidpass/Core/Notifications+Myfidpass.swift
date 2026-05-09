@@ -36,9 +36,16 @@ extension Notification.Name {
     static let myfidpassOpenMerchantTrialStripePaymentLink = Notification.Name("myfidpass.openMerchantTrialStripePaymentLink")
     /// Ouvre directement la feuille Réglages globale (sans passer par l’onglet Commerce).
     static let myfidpassOpenGlobalSettingsSheet = Notification.Name("myfidpass.openGlobalSettingsSheet")
+    /// Ferme la feuille globale (Compte / anciennement Réglages) — utilisé depuis la checklist lancement.
+    static let myfidpassCloseGlobalSettingsSheet = Notification.Name("myfidpass.closeGlobalSettingsSheet")
+    /// Ouvre « Ma carte » en plein écran depuis l’accueil (même flux que la tuile d’aperçu).
+    static let myfidpassOpenHomeMyCardFullScreen = Notification.Name("myfidpass.openHomeMyCardFullScreen")
+    /// Checklist lancement (web + iOS) : accusé flyer affiché ou contexte rechargé — rafraîchir pastille essai.
+    static let myfidpassMerchantSetupProgressUpdated = Notification.Name("myfidpass.merchantSetupProgressUpdated")
     /// Bascule l’onglet principal sur **Accueil** (commerçant) — utilisé avant d’ouvrir le hub flyer depuis Réglages.
     static let myfidpassSelectMerchantHomeTab = Notification.Name("myfidpass.selectMerchantHomeTab")
     /// Ouvre l’éditeur / hub « Flyer & programme » (plein écran), écouté par `DashboardView`.
+    /// `userInfo` optionnel : [`MyfidpassNotificationUserInfoKey.flyerHubStartCreateAssistant`: true] pour forcer l’assistant création (checklist étape 3).
     static let myfidpassOpenMerchantFlyerHub = Notification.Name("myfidpass.openMerchantFlyerHub")
     /// Ferme les réglages (sheet) et pousse l’écran Statistiques sur la navigation Commerce (pas une feuille).
     static let myfidpassOpenMerchantStatistics = Notification.Name("myfidpass.openMerchantStatistics")
@@ -61,4 +68,10 @@ extension NotificationCenter {
     func postAdoptMatchedGooglePlaceId(_ placeId: String) {
         post(name: .myfidpassAdoptMatchedGooglePlaceId, object: nil, userInfo: ["placeId": placeId])
     }
+}
+
+/// Clés `userInfo` pour les notifications internes.
+enum MyfidpassNotificationUserInfoKey {
+    /// Avec `myfidpassOpenMerchantFlyerHub` : `true` ouvre l’assistant **Créer le flyer** plutôt que l’aperçu « Votre flyer » (brouillon disque).
+    static let flyerHubStartCreateAssistant = "flyerHubStartCreateAssistant"
 }

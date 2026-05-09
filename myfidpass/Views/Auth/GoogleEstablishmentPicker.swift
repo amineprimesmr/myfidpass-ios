@@ -121,6 +121,8 @@ struct GoogleEstablishmentPicker: View {
     @State private var query = ""
     @State private var predictions: [PlaceAutocompletePrediction] = []
     @State private var isSearching = false
+    @State private var isVerifyingPlaceSelection = false
+    @State private var placeConflictMessage: String?
     @State private var hint: String?
     @State private var debounceTask: Task<Void, Never>?
     @FocusState private var processFieldFocused: Bool
@@ -158,6 +160,7 @@ struct GoogleEstablishmentPicker: View {
         }
         .onChange(of: query) { _, new in
             debounceTask?.cancel()
+            placeConflictMessage = nil
             let trimmed = new.trimmingCharacters(in: .whitespaces)
             if trimmed.count < 2 {
                 predictions = []
@@ -225,10 +228,20 @@ struct GoogleEstablishmentPicker: View {
                     )
             }
 
-            if isSearching {
+            if isSearching || isVerifyingPlaceSelection {
                 ProgressView()
                     .scaleEffect(0.9)
                     .transition(.opacity.combined(with: .scale(scale: 0.9)))
+            }
+
+            if let placeConflictMessage, !placeConflictMessage.isEmpty {
+                Text(placeConflictMessage)
+                    .font(AppTheme.Fonts.caption2())
+                    .foregroundStyle(Color.red)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 8)
+                    .transition(.opacity)
             }
 
             if selectedPlaceId == nil, !predictions.isEmpty, !liftsProcessPredictionsToHost {
@@ -241,7 +254,7 @@ struct GoogleEstablishmentPicker: View {
                     )
             }
 
-            if selectedPlaceId == nil, !isSearching {
+            if selectedPlaceId == nil, !isSearching, !isVerifyingPlaceSelection {
                 unresolvedEstablishmentHelp
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
@@ -258,6 +271,7 @@ struct GoogleEstablishmentPicker: View {
         .animation(.spring(response: 0.52, dampingFraction: 0.86), value: selectedPlaceId != nil)
         .animation(.spring(response: 0.45, dampingFraction: 0.82), value: predictions.count)
         .animation(.easeOut(duration: 0.2), value: isSearching)
+        .animation(.easeOut(duration: 0.2), value: isVerifyingPlaceSelection)
     }
 
     private var questionFieldBlock: some View {
@@ -421,7 +435,7 @@ struct GoogleEstablishmentPicker: View {
                 HStack {
                     TextField("Ex. Boulangerie Martin, Lyon", text: $query)
                         .textFieldStyle(.roundedBorder)
-                    if isSearching {
+                    if isSearching || isVerifyingPlaceSelection {
                         ProgressView()
                             .scaleEffect(0.85)
                     }
@@ -478,8 +492,14 @@ struct GoogleEstablishmentPicker: View {
                 predictionsGroupedList(predictions: predictions)
             }
 
-            if selectedPlaceId == nil, !isSearching {
+            if selectedPlaceId == nil, !isSearching, !isVerifyingPlaceSelection {
                 unresolvedEstablishmentHelp
+            }
+
+            if let placeConflictMessage, !placeConflictMessage.isEmpty {
+                Text(placeConflictMessage)
+                    .font(AppTheme.Fonts.caption2())
+                    .foregroundStyle(Color.red)
             }
 
             if let hint {
@@ -519,20 +539,48 @@ struct GoogleEstablishmentPicker: View {
         predictions = []
         query = ""
         hint = nil
+        placeConflictMessage = nil
+    }
+
+    private func commerceDejaUtiliseMessage(fallback apiText: String?) -> String {
+        let t = apiText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !t.isEmpty { return t }
+        return "Ce commerce est déjà utilisé. Connectez-vous au compte existant ou choisissez un autre commerce."
     }
 
     private func select(_ p: PlaceAutocompletePrediction) {
         let main = EstablishmentPredictionRowText.title(for: p)
-        selectedPlaceId = p.placeId
-        selectedDescription = p.description
-        selectedMainText = main
-        selectedSecondaryText = EstablishmentPredictionRowText.secondaryLine(for: p)
-        predictions = []
-        query = main
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        placeConflictMessage = nil
         hint = nil
-        relaxRequirement = false
-        processFieldFocused = false
-        notifyPredictionsVisibilityIfNeeded()
+        Task {
+            await MainActor.run { isVerifyingPlaceSelection = true }
+            do {
+                let r = try await APIClient.shared.fetchGooglePlaceAvailability(googlePlaceId: p.placeId)
+                await MainActor.run {
+                    isVerifyingPlaceSelection = false
+                    if !r.placeAvailable {
+                        placeConflictMessage = commerceDejaUtiliseMessage(fallback: r.userFacingMessage)
+                        return
+                    }
+                    selectedPlaceId = p.placeId
+                    selectedDescription = p.description
+                    selectedMainText = main
+                    selectedSecondaryText = EstablishmentPredictionRowText.secondaryLine(for: p)
+                    predictions = []
+                    query = main
+                    hint = nil
+                    relaxRequirement = false
+                    processFieldFocused = false
+                    notifyPredictionsVisibilityIfNeeded()
+                }
+            } catch {
+                await MainActor.run {
+                    isVerifyingPlaceSelection = false
+                    hint = "Impossible de vérifier ce commerce. Réessayez."
+                }
+            }
+        }
     }
 
     @ViewBuilder
@@ -570,7 +618,7 @@ struct GoogleEstablishmentPicker: View {
                 predictions = []
                 if case let APIError.server(code, msg) = error, code == 503 {
                     relaxRequirement = true
-                    hint = (msg ?? "Recherche indisponible") + " Vous pourrez configurer votre commerce après connexion (Paramètres)."
+                    hint = (msg ?? "Recherche indisponible") + " Vous pourrez configurer votre commerce après connexion (écran Compte)."
                 } else {
                     hint = "Impossible de lancer la recherche. Vérifiez la connexion."
                 }

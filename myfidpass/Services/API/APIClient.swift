@@ -64,6 +64,12 @@ private enum JWTAccessExpiry {
     }
 }
 
+struct GooglePlaceAvailabilityResult: Sendable {
+    let placeAvailable: Bool
+    /// Texte d’erreur API lorsque `placeAvailable` est false.
+    let userFacingMessage: String?
+}
+
 final class APIClient: @unchecked Sendable {
     static let shared = APIClient()
 
@@ -220,7 +226,8 @@ final class APIClient: @unchecked Sendable {
             if endpoint.is404NoAccountLogin {
                 throw APIError.noAccountInLogiciel
             }
-            throw APIError.notFound
+            let msg404 = Self.parseServerErrorMessage(from: data)
+            throw APIError.server(statusCode: 404, message: msg404)
         default:
             throw Self.resolveNonSuccessHTTPError(statusCode: http.statusCode, data: data)
         }
@@ -438,7 +445,7 @@ final class APIClient: @unchecked Sendable {
             }
             throw APIError.unauthorized
         case 404:
-            throw APIError.notFound
+            throw APIError.server(statusCode: 404, message: Self.parseServerErrorMessage(from: data))
         default:
             throw APIError.server(statusCode: http.statusCode, message: Self.parseServerErrorMessage(from: data))
         }
@@ -518,6 +525,29 @@ final class APIClient: @unchecked Sendable {
 
     // MARK: - Compte existe ? (check-email / check-identifier)
 
+    /// Lieu Google encore disponible pour une nouvelle inscription (`place_available` dans la réponse JSON).
+    func fetchGooglePlaceAvailability(googlePlaceId: String) async throws -> GooglePlaceAvailabilityResult {
+        let norm = googlePlaceId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !norm.isEmpty else { throw APIError.noData }
+        let endpoint = APIEndpoint.authCheckGooglePlace(googlePlaceId: norm)
+        var req = try endpoint.urlRequest(base: APIConfig.baseURL, encoder: Self.makeJSONEncoder())
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        applyDashboardTokenHeaderIfNeeded(to: &req, endpoint: endpoint)
+        let (data, response): (Data, URLResponse)
+        do {
+            (data, response) = try await performNetworkData(for: req)
+        } catch {
+            throw APIError.network(error)
+        }
+        guard let http = response as? HTTPURLResponse else { throw APIError.noData }
+        guard (200...299).contains(http.statusCode) else {
+            throw Self.resolveNonSuccessHTTPError(statusCode: http.statusCode, data: data)
+        }
+        guard !data.isEmpty else { throw APIError.noData }
+        return try Self.parseGooglePlaceAvailability(from: data)
+    }
+
     /// Vérifie `account_exists` sans `Decodable` strict (évite les échecs si le JSON varie ou si le décodage rejette un type mineur).
     func fetchAccountExistsProbe(identifier: String) async throws -> Bool {
         let norm = identifier.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -549,6 +579,38 @@ final class APIClient: @unchecked Sendable {
         }
         guard !data.isEmpty else { throw APIError.noData }
         return try Self.parseBoolAccountExists(from: data)
+    }
+
+    private static func parseGooglePlaceAvailability(from data: Data) throws -> GooglePlaceAvailabilityResult {
+        let obj = try JSONSerialization.jsonObject(with: data, options: [])
+        guard let dict = obj as? [String: Any] else {
+            throw APIError.decoding(
+                NSError(domain: "myfidpass.googlePlaceAvailability", code: 0, userInfo: [NSLocalizedDescriptionKey: "Réponse JSON inattendue"])
+            )
+        }
+        let raw = dict["place_available"] ?? dict["placeAvailable"]
+        let available: Bool
+        if let b = raw as? Bool {
+            available = b
+        } else if let i = raw as? Int {
+            available = i != 0
+        } else if let n = raw as? NSNumber {
+            available = n.boolValue
+        } else if let s = raw as? String {
+            let t = s.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if ["true", "1", "yes"].contains(t) { available = true }
+            else if ["false", "0", "no"].contains(t) { available = false }
+            else { available = true }
+        } else {
+            available = true
+        }
+        let err = (dict["error"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let msg = (dict["message"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let userMsg: String?
+        if let e = err, !e.isEmpty { userMsg = e }
+        else if let m = msg, !m.isEmpty { userMsg = m }
+        else { userMsg = nil }
+        return GooglePlaceAvailabilityResult(placeAvailable: available, userFacingMessage: userMsg)
     }
 
     private static func parseBoolAccountExists(from data: Data) throws -> Bool {

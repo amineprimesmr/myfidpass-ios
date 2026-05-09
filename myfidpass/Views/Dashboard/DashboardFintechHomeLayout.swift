@@ -581,7 +581,7 @@ struct DashboardHomeMinimalTopBar: View {
         if #available(iOS 26.0, *) {
             Button(action: action) {
                 ZStack(alignment: .topTrailing) {
-                    Image(systemName: "gearshape")
+                    Image(systemName: "person.crop.circle")
                         .font(.system(size: 16, weight: .semibold))
                     if showSettingsAttentionDot {
                         Circle()
@@ -594,10 +594,11 @@ struct DashboardHomeMinimalTopBar: View {
             .buttonStyle(.glass)
             .buttonBorderShape(.roundedRectangle(radius: 20))
             .controlSize(.large)
+            .accessibilityLabel("Compte")
         } else {
             Button(action: action) {
                 ZStack(alignment: .topTrailing) {
-                    Image(systemName: "gearshape")
+                    Image(systemName: "person.crop.circle")
                         .font(.system(size: 16, weight: .semibold))
                         .padding(.horizontal, 13)
                         .padding(.vertical, 10)
@@ -615,6 +616,7 @@ struct DashboardHomeMinimalTopBar: View {
                 }
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Compte")
         }
     }
 

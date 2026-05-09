@@ -19,6 +19,8 @@ enum APIEndpoint {
     // MARK: - Auth
     case authLogin(login: String, password: String)
     case authCheckEmail(email: String)
+    /// Vérifie si un lieu Google est déjà lié à un commerce (inscription).
+    case authCheckGooglePlace(googlePlaceId: String)
     /// E-mail **ou** identifiant employé (sans @) — POST /api/auth/check-identifier
     case authCheckIdentifier(identifier: String)
     case authRegister(
@@ -204,6 +206,7 @@ enum APIEndpoint {
         switch self {
         case .authLogin: return "/api/auth/login"
         case .authCheckEmail: return "/api/auth/check-email"
+        case .authCheckGooglePlace: return "/api/auth/check-google-place"
         case .authCheckIdentifier: return "/api/auth/check-identifier"
         case .authRegister: return "/api/auth/register"
         case .placesAutocomplete: return "/api/places/autocomplete"
@@ -316,7 +319,7 @@ enum APIEndpoint {
     /// `placesAutocomplete` suit le `default` (false) : avec Bearer, le backend retire les lieux Google déjà liés au compte (comme le SaaS).
     var skipsClientSessionBootstrap: Bool {
         switch self {
-        case .authConfig, .authLogin, .authCheckEmail, .authCheckIdentifier, .authRegister, .authForgotPassword, .authResetPassword,
+        case .authConfig, .authLogin, .authCheckEmail, .authCheckGooglePlace, .authCheckIdentifier, .authRegister, .authForgotPassword, .authResetPassword,
              .authGoogle, .authApple, .authPhoneSendCode, .authPhoneVerify,
              .authRefresh, .authLogout, .placesPlaceDetails:
             return true
@@ -338,7 +341,7 @@ enum APIEndpoint {
 
     var method: String {
         switch self {
-        case .authLogin, .authCheckEmail, .authCheckIdentifier, .authRegister, .authForgotPassword, .authResetPassword, .authGoogle, .authApple,
+        case .authLogin, .authCheckEmail, .authCheckGooglePlace, .authCheckIdentifier, .authRegister, .authForgotPassword, .authResetPassword, .authGoogle, .authApple,
              .authPhoneSendCode, .authPhoneVerify,
              .authRefresh, .authLogout,
              .scan, .deviceRegister, .notifyClients, .createCategory, .updateMemberCategories, .creditMember,
@@ -478,6 +481,8 @@ enum APIEndpoint {
             bodyData = try encoder.encode(LoginPayload(login: login, password: password))
         case .authCheckEmail(let email):
             bodyData = try encoder.encode(CheckEmailPayload(email: email))
+        case .authCheckGooglePlace(let googlePlaceId):
+            bodyData = try encoder.encode(CheckGooglePlacePayload(googlePlaceId: googlePlaceId))
         case .authCheckIdentifier(let identifier):
             bodyData = try encoder.encode(CheckIdentifierPayload(identifier: identifier))
         case .authRegister(let email, let password, let name, let googlePlaceId, let establishmentName, let establishments):
@@ -652,6 +657,14 @@ private struct CheckIdentifierPayload: Encodable {
 
 private struct CheckEmailPayload: Encodable {
     let email: String
+}
+
+private struct CheckGooglePlacePayload: Encodable {
+    let googlePlaceId: String
+
+    enum CodingKeys: String, CodingKey {
+        case googlePlaceId = "google_place_id"
+    }
 }
 
 private struct GooglePayload: Encodable {

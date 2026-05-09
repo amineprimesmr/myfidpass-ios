@@ -317,7 +317,7 @@ struct SocialMetricsEngagementSection: View {
     private static func friendlyMetricsLoadError(_ error: Error) -> String {
         if let api = error as? APIError {
             switch api {
-            case .notFound:
+            case _ where api.isHTTPResourceMissing:
                 return "Métriques indisponibles sur le serveur (déploiement en cours). Réessayez dans quelques minutes."
             case .decoding:
                 return "Impossible de lire la réponse du serveur. Mettez à jour l’app."

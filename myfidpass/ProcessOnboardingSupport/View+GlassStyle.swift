@@ -385,7 +385,7 @@ private struct TopBarLiquidGlassPressableStyle: ButtonStyle {
     }
 }
 
-// MARK: - Teaser Pro (stats floutées, envoi notif)
+// MARK: - Teaser Pro (paywall commerce)
 
 /// Bouton verre + cadenas : courte animation « déverrouillage » puis ouverture du paywall (callback).
 struct MerchantProUnlockTeaserButton: View {
@@ -413,14 +413,9 @@ struct MerchantProUnlockTeaserButton: View {
                     .font(.system(size: 17, weight: .semibold))
                     .symbolRenderingMode(.hierarchical)
                     .contentTransition(.symbolEffect(.replace))
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Déverrouiller avec Pro")
-                        .font(.system(size: 15, weight: .semibold))
-                    Text("Stats complètes & envois")
-                        .font(.system(size: 11, weight: .medium))
-                        .opacity(0.9)
-                }
-                .multilineTextAlignment(.leading)
+                Text("Déverrouiller avec Pro")
+                    .font(.system(size: 15, weight: .semibold))
+                    .multilineTextAlignment(.leading)
             }
             .foregroundStyle(preferDarkGlassTint ? Color.white : Color.primary)
             .padding(.horizontal, 16)

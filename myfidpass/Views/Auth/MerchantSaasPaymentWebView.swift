@@ -24,8 +24,10 @@ struct MerchantSaasPaymentWebContent: UIViewRepresentable {
         wv.navigationDelegate = context.coordinator
         wv.uiDelegate = context.coordinator
         wv.isOpaque = false
-        wv.backgroundColor = .black
-        wv.scrollView.backgroundColor = .black
+        /// Même graphite que l’écran flyer (`#0e1113`) — letterboxing / rebond scroll cohérents avec l’éditeur.
+        let chrome = UIColor(red: 14 / 255, green: 17 / 255, blue: 19 / 255, alpha: 1)
+        wv.backgroundColor = chrome
+        wv.scrollView.backgroundColor = chrome
         wv.load(URLRequest(url: url))
         return wv
     }
@@ -112,6 +114,26 @@ struct MerchantSaasPaymentWebView: View {
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
+            GeometryReader { proxy in
+                let endR = max(proxy.size.width, proxy.size.height) * 0.95
+                ZStack {
+                    FlyerEditorSurfaceColors.canvas
+                    RadialGradient(
+                        colors: [
+                            FlyerEditorSurfaceColors.glowDepth.opacity(0.65),
+                            FlyerEditorSurfaceColors.glowDepth.opacity(0.28),
+                            FlyerEditorSurfaceColors.canvas.opacity(0)
+                        ],
+                        center: UnitPoint(x: 0.5, y: 0.08),
+                        startRadius: 0,
+                        endRadius: endR
+                    )
+                    .blur(radius: 24)
+                }
+                .frame(width: proxy.size.width, height: proxy.size.height)
+            }
+            .ignoresSafeArea()
+
             MerchantSaasPaymentWebContent(url: paymentURL)
                 .padding(.top, webContentExtraTopInset)
                 .ignoresSafeArea()

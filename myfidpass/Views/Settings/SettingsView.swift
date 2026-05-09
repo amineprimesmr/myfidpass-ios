@@ -2,7 +2,7 @@
 //  SettingsView.swift
 //  myfidpass
 //
-//  Réglages style iOS groupé : fond systemGroupedBackground, cartes arrondies, pastilles d’icônes.
+//  Compte (ex-Réglages) : fond systemGroupedBackground, cartes arrondies, checklist lancement.
 //
 
 import SwiftUI
@@ -10,7 +10,7 @@ import UIKit
 import CoreData
 
 struct SettingsView: View {
-    /// Contenu fusionné (sans `ScrollView`) pour l’onglet « Réglages » du hub Commerce.
+    /// Contenu fusionné (sans `ScrollView`) pour un futur panneau intégré (hub Commerce).
     var embedInProfile: Bool = false
 
     @Environment(\.openURL) private var openURL
@@ -23,10 +23,10 @@ struct SettingsView: View {
     private let notifications = NotificationsService.shared
 
     @State private var showLogoutConfirmation = false
-    @State private var showDeleteAccountConfirmation = false
-    @State private var isDeletingAccount = false
-    @State private var deleteAccountError: String?
     @State private var inAppSafariURL: URL?
+    @State private var checklistSettings: BusinessSettingsResponse?
+    @State private var checklistFlyerCustomized = false
+    @State private var checklistReloadToken = UUID()
 
     private var appVersionShort: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
@@ -44,20 +44,20 @@ struct SettingsView: View {
         return Self.relativeSyncFormatter.localizedString(for: d, relativeTo: Date())
     }
 
+    private var merchantSetupProgress: MerchantSetupProgress {
+        let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return MerchantSetupProgressCalculator.compute(
+            settings: checklistSettings,
+            slug: slug,
+            flyerLooksCustomized: checklistFlyerCustomized,
+        )
+    }
+
     private var shouldShowTrialPromoBanner: Bool {
         !authService.hasPaidStripeSubscription
             && authService.isMerchantTrialPeriodActive
             && authService.merchantTrialEndsAt != nil
-    }
-
-    private var needsFlyerSetupBadge: Bool {
-        guard let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !slug.isEmpty else { return false }
-        CommerceFlyerStore.shared.hydrateFromDiskIfNeeded(slug: slug)
-        guard let cached = CommerceFlyerStore.shared.snapshot(for: slug) else { return true }
-        let hasBootstrap = !(cached.bootstrapPreviewB64 ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        let hasCustomBg = !(cached.customBgDataURL ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        return !(cached.flyerRegistered || hasBootstrap || hasCustomBg)
+            && merchantSetupProgress.allDone
     }
 
     var body: some View {
@@ -81,8 +81,23 @@ struct SettingsView: View {
         }
         .background(embedInProfile ? Color.clear : GroupedSettingsMetrics.pageBackground)
         .settingsNavigationChrome(embedInProfile: embedInProfile)
+        .task(id: checklistReloadToken) {
+            await loadMerchantSetupChecklistContext()
+        }
         .onAppear {
             notifications.refreshAuthorizationStatus()
+            /// Mise à jour **immédiate** du flag flyer (disque) — avant le GET `businessSettings`, sinon la carte Flyer / jeu reste invisible le temps du réseau.
+            if let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines), !slug.isEmpty {
+                CommerceFlyerStore.shared.hydrateFromDiskIfNeeded(slug: slug)
+                checklistFlyerCustomized = MerchantSetupProgressCalculator.flyerLooksCustomizedFromDisk(slug: slug)
+            }
+            checklistReloadToken = UUID()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .myfidpassCardPreviewDisplayDidChange)) { _ in
+            checklistReloadToken = UUID()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .myfidpassMerchantSetupProgressUpdated)) { _ in
+            checklistReloadToken = UUID()
         }
         .sheet(isPresented: Binding(
             get: { inAppSafariURL != nil },
@@ -100,37 +115,6 @@ struct SettingsView: View {
         } message: {
             Text("Vous devrez vous reconnecter.")
         }
-        .alert("Supprimer votre compte ?", isPresented: $showDeleteAccountConfirmation) {
-            Button("Annuler", role: .cancel) {}
-            Button("Supprimer définitivement", role: .destructive) {
-                Task { await performDeleteAccount() }
-            }
-        } message: {
-            Text(
-                "Cette action est irréversible : compte commerçant, données et historique associés. Vous serez déconnecté immédiatement après confirmation."
-            )
-        }
-        .alert("Erreur", isPresented: .init(get: { deleteAccountError != nil }, set: { if !$0 { deleteAccountError = nil } })) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            if let msg = deleteAccountError { Text(msg) }
-        }
-        .overlay {
-            if isDeletingAccount {
-                ZStack {
-                    Color(UIColor.tertiarySystemBackground)
-                        .opacity(0.92)
-                        .ignoresSafeArea()
-                    VStack(spacing: 16) {
-                        ProgressView().scaleEffect(1.3).tint(AppTheme.Colors.primary)
-                        Text("Suppression…")
-                            .font(.headline)
-                            .foregroundStyle(Color(UIColor.label))
-                    }
-                    .padding(32)
-                }
-            }
-        }
         .frame(maxWidth: .infinity, maxHeight: embedInProfile ? nil : .infinity)
     }
 
@@ -141,6 +125,17 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: GroupedSettingsMetrics.interCardSpacing) {
             if embedInProfile {
                 GroupedSettingsPageTitle(compact: embedInProfile)
+            }
+
+            if !embedInProfile,
+               !merchantSetupProgress.allDone,
+               let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !slug.isEmpty {
+                MerchantSetupChecklistSection(
+                    progress: merchantSetupProgress,
+                    businessSlug: slug,
+                    onAckPrint: { checklistReloadToken = UUID() },
+                )
             }
 
             if shouldShowTrialPromoBanner, let trialEnd = authService.merchantTrialEndsAt {
@@ -166,7 +161,9 @@ struct SettingsView: View {
                 }
             }
 
-            if let slug = authService.businesses.first?.slug.trimmingCharacters(in: .whitespacesAndNewlines), !slug.isEmpty {
+            /// Dès qu’un flyer est détecté sur le commerce (cache disque), sans attendre l’étape checklist « affiché en magasin ».
+            if let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines), !slug.isEmpty,
+               merchantSetupProgress.flyerDone {
                 GroupedSettingsCard {
                     Button {
                         NotificationCenter.default.post(name: .myfidpassSelectMerchantHomeTab, object: nil)
@@ -180,8 +177,22 @@ struct SettingsView: View {
                             title: "Flyer",
                             subtitle: nil,
                             value: nil,
-                            showsChevron: true,
-                            showsAttentionDot: needsFlyerSetupBadge
+                            showsChevron: true
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    GroupedSettingsRowDivider()
+                    Button {
+                        if let url = LegalURLs.fidelityCardPage(slug: slug) {
+                            inAppSafariURL = url
+                        }
+                    } label: {
+                        GroupedSettingsNavigationRow(
+                            icon: "qrcode",
+                            title: "Tester le jeu",
+                            subtitle: nil,
+                            value: nil,
+                            showsChevron: true
                         )
                     }
                     .buttonStyle(.plain)
@@ -272,10 +283,6 @@ struct SettingsView: View {
                 GroupedSettingsLogoutRow(action: { showLogoutConfirmation = true })
             }
 
-            GroupedSettingsCard {
-                GroupedSettingsDestructiveRow(title: "Supprimer mon compte", action: { showDeleteAccountConfirmation = true })
-            }
-
             Text("Version \(appVersionShort)")
                 .font(.caption)
                 .foregroundStyle(Color(UIColor.secondaryLabel).opacity(0.9))
@@ -312,37 +319,38 @@ struct SettingsView: View {
         .padding(.vertical, GroupedSettingsMetrics.rowVerticalPadding)
     }
 
-    private func performDeleteAccount() async {
-        await MainActor.run {
-            isDeletingAccount = true
-            deleteAccountError = nil
+    @MainActor
+    private func loadMerchantSetupChecklistContext() async {
+        guard let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines), !slug.isEmpty else {
+            checklistSettings = nil
+            checklistFlyerCustomized = false
+            return
         }
-        defer {
-            Task { @MainActor in
-                isDeletingAccount = false
+        CommerceFlyerStore.shared.hydrateFromDiskIfNeeded(slug: slug)
+        checklistFlyerCustomized = MerchantSetupProgressCalculator.flyerLooksCustomizedFromDisk(slug: slug)
+        var settings = ScanFlowSettingsCache.cached(for: slug)
+        if settings == nil {
+            do {
+                settings = try await APIClient.shared.request(APIEndpoint.businessSettings(slug: slug)) as BusinessSettingsResponse
+            } catch {
+                settings = nil
             }
         }
-        do {
-            try await authService.deleteAccount()
-        } catch {
-            await MainActor.run {
-                deleteAccountError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-            }
-        }
+        checklistSettings = settings
     }
 }
 
 // MARK: - Navigation
 
 private extension View {
-    /// Depuis Commerce : barre visible avec titre « Réglages » et bouton retour système. Intégré dans l’onglet : barre masquée comme avant.
+    /// Depuis Commerce : barre visible avec titre « Compte » et bouton retour système. Intégré dans l’onglet : barre masquée comme avant.
     @ViewBuilder
     func settingsNavigationChrome(embedInProfile: Bool) -> some View {
         if embedInProfile {
             self.toolbar(.hidden, for: .navigationBar)
         } else {
             self
-                .navigationTitle("Réglages")
+                .navigationTitle("Compte")
                 .navigationBarTitleDisplayMode(.inline)
         }
     }

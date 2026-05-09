@@ -239,7 +239,6 @@ struct MyCardView: View {
     /// Dernière version enregistrée (ou chargée depuis l’API) — pour afficher « Enregistrer » seulement si l’état a divergé.
     @State private var lastPersistedSnapshot: MyCardPersistedSnapshot?
     @State private var cardSettingsSaveInFlight = false
-    @State private var touchPillBlink = false
     /// Alerte avant de quitter la page si des changements ne sont pas enregistrés.
     @State private var showUnsavedLeaveAlert = false
     init(context: NSManagedObjectContext) {
@@ -645,36 +644,6 @@ struct MyCardView: View {
                 .id(
                     "\(programType)-\(primaryHex)-\(accentHex)-\(labelHex)-\(logoURL)-\(stripDisplayMode)-\(stripText)-\(displayName)-\(requiredStamps)-\(previewStampsCount)-\(previewPointsCount)-\(cardBackgroundImagePath ?? "")-\(cardBackgroundRemoteURL ?? "")-\(cardMemberPreviewText)-\(previewMemberColumnTitle)-\(stampEmoji)-\(stampRewardLabel)-\(stampMidRewardLabel)-\(labelRestants)-\(stampIconPendingBase64?.prefix(32) ?? "")-\(serverStampIconURLString ?? "")-\(stampIconWasRemoved)"
                 )
-                .overlay(alignment: .bottomLeading) {
-                    if shouldShowCompletionPills {
-                        HStack(spacing: 5) {
-                            Image(systemName: "hand.tap.fill")
-                                .font(.system(size: 11, weight: .bold))
-                            Text("Touchez")
-                                .font(.system(size: 11, weight: .bold))
-                        }
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(
-                            Capsule()
-                                .fill(Color.black.opacity(0.82))
-                        )
-                        .overlay(
-                            Capsule()
-                                .strokeBorder(Color.white.opacity(0.34), lineWidth: 1)
-                        )
-                        .shadow(color: Color.black.opacity(0.35), radius: 8, y: 4)
-                        .padding(.leading, AppTheme.Spacing.lg + 10)
-                        .padding(.bottom, 90)
-                        .opacity(touchPillBlink ? 1 : 0.45)
-                        .scaleEffect(touchPillBlink ? 1 : 0.96)
-                        .animation(.easeInOut(duration: 0.75).repeatForever(autoreverses: true), value: touchPillBlink)
-                        .onAppear { touchPillBlink = true }
-                        .onDisappear { touchPillBlink = false }
-                        .allowsHitTesting(false)
-                    }
-                }
             }
             .frame(height: previewMinHeight + 36)
             .padding(.vertical, AppTheme.Spacing.xs)
@@ -889,7 +858,7 @@ struct MyCardView: View {
                     walletErrorMessage = nil
                     walletPassData = data
                 }
-            } catch APIError.notFound {
+            } catch let e as APIError where e.isHTTPResourceMissing {
                 await MainActor.run {
                     walletErrorMessage = "Pass non trouvé pour ce membre. Réessayez."
                 }

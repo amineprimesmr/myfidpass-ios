@@ -9,6 +9,7 @@ import SwiftUI
 import UIKit
 
 struct AccountSettingsDetailView: View {
+    @Environment(\.openURL) private var openURL
     @Environment(\.colorScheme) private var colorScheme
     @EnvironmentObject private var authService: AuthService
     @EnvironmentObject private var syncService: SyncService
@@ -24,6 +25,9 @@ struct AccountSettingsDetailView: View {
     @State private var passwordResetNotice: String?
     @State private var passwordResetError: String?
     @State private var didRequestPushOnAccountAppear = false
+    @State private var showDeleteAccountConfirmation = false
+    @State private var isDeletingAccount = false
+    @State private var deleteAccountError: String?
 
     private var theme: SettingsVisualThemeAccount { SettingsVisualThemeAccount(colorScheme: colorScheme) }
 
@@ -117,6 +121,23 @@ struct AccountSettingsDetailView: View {
                     GroupedSettingsInfoRow(icon: "bell.badge.fill", title: "Notifications push", value: pushStatusLabel)
                 }
 
+                GroupedSettingsCard {
+                    GroupedSettingsDestructiveRow(title: "Supprimer mon compte") {
+                        showDeleteAccountConfirmation = true
+                    }
+                }
+                Button {
+                    openURL(LegalURLs.deleteAccountInfo)
+                } label: {
+                    Text("Page d’information (suppression de compte)")
+                        .font(.footnote.weight(.medium))
+                        .foregroundStyle(Color(UIColor.secondaryLabel))
+                        .frame(maxWidth: .infinity)
+                        .multilineTextAlignment(.center)
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 4)
+
             }
             .padding(.horizontal, GroupedSettingsMetrics.horizontalPadding)
             .padding(.top, 8)
@@ -145,6 +166,37 @@ struct AccountSettingsDetailView: View {
             Button("OK", role: .cancel) {}
         } message: {
             if let m = passwordResetError { Text(m) }
+        }
+        .alert("Supprimer votre compte ?", isPresented: $showDeleteAccountConfirmation) {
+            Button("Annuler", role: .cancel) {}
+            Button("Supprimer définitivement", role: .destructive) {
+                Task { await performDeleteAccount() }
+            }
+        } message: {
+            Text(
+                "Cette action est irréversible : compte commerçant, données et historique associés. Vous serez déconnecté immédiatement après confirmation."
+            )
+        }
+        .alert("Erreur", isPresented: .init(get: { deleteAccountError != nil }, set: { if !$0 { deleteAccountError = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            if let msg = deleteAccountError { Text(msg) }
+        }
+        .overlay {
+            if isDeletingAccount {
+                ZStack {
+                    Color(UIColor.tertiarySystemBackground)
+                        .opacity(0.92)
+                        .ignoresSafeArea()
+                    VStack(spacing: 16) {
+                        ProgressView().scaleEffect(1.3).tint(AppTheme.Colors.primary)
+                        Text("Suppression…")
+                            .font(.headline)
+                            .foregroundStyle(Color(UIColor.label))
+                    }
+                    .padding(32)
+                }
+            }
         }
         .overlay {
             if isLoading && me == nil {
@@ -313,6 +365,25 @@ struct AccountSettingsDetailView: View {
         } catch {
             await MainActor.run {
                 passwordResetError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            }
+        }
+    }
+
+    private func performDeleteAccount() async {
+        await MainActor.run {
+            isDeletingAccount = true
+            deleteAccountError = nil
+        }
+        defer {
+            Task { @MainActor in
+                isDeletingAccount = false
+            }
+        }
+        do {
+            try await authService.deleteAccount()
+        } catch {
+            await MainActor.run {
+                deleteAccountError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             }
         }
     }

@@ -17,6 +17,9 @@ enum LegalURLs {
     /// Politique de confidentialité.
     static let privacyPolicy = URL(string: "https://myfidpass.fr/confidentialite")!
 
+    /// Suppression de compte (page vitrine / App Store).
+    static let deleteAccountInfo = URL(string: "https://myfidpass.fr/supprimer-compte")!
+
     /// Aide / FAQ (site vitrine).
     static let helpCenter = URL(string: "https://myfidpass.fr")!
 
