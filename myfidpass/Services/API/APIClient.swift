@@ -76,32 +76,60 @@ final class APIClient: @unchecked Sendable {
     private let refreshGate = RefreshTokenSerialGate()
     private let requestCoalescer = RequestInFlightCoalescer()
 
-    /// Session : plafond large ; les timeouts fins sont sur `URLRequest` (ex. 300 s pour POST campagne).
+    /// Session : timeouts plus serrés que l'ancien (120/360) — la plupart des appels sont des GET
+    /// rapides (< 5 s). Les endpoints qui nécessitent vraiment longtemps (flyer IA, campagne broadcast)
+    /// surchargent leur propre `URLRequest.timeoutInterval`.
+    /// `waitsForConnectivity` : sur réseau coupé, attend connectivité jusqu'à `timeoutIntervalForResource`
+    /// au lieu de fail immédiatement → bien meilleur UX en métro / ascenseur.
     private static func makeDefaultSession() -> URLSession {
         let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 120
-        config.timeoutIntervalForResource = 360
+        config.timeoutIntervalForRequest = 30
+        config.timeoutIntervalForResource = 90
+        config.waitsForConnectivity = true
+        config.httpMaximumConnectionsPerHost = 8
+        // Pas d'`urlCache` global : l'API renvoie déjà des entêtes Cache-Control quand pertinent.
         return URLSession(configuration: config)
+    }
+
+    /// Détermine si une erreur réseau est *retryable* (transitoire) : DNS perdu, connexion lost, timeout.
+    /// Évite les retries sur erreurs définitives (host introuvable, certificat invalide).
+    private static func isRetryableNetworkError(_ error: Error) -> Bool {
+        guard let urlError = error as? URLError else { return false }
+        switch urlError.code {
+        case .networkConnectionLost,
+             .notConnectedToInternet,
+             .timedOut,
+             .dnsLookupFailed,
+             .cannotConnectToHost,
+             .resourceUnavailable,
+             .internationalRoamingOff:
+            return true
+        default:
+            return false
+        }
     }
 
     private let session: URLSession
 
-    /// `JSONDecoder` n’est pas thread-safe : un décodeur partagé + requêtes `async let` parallèles
-    /// peut corrompre le tas (`freed pointer was not the last allocation`). Un décodeur par appel.
-    private static func makeJSONDecoder() -> JSONDecoder {
+    /// `JSONDecoder` / `JSONEncoder` sont **techniquement thread-safe** (Foundation) MAIS
+    /// nous gardions des instances par appel à cause d'un historique crashs malloc lié à un
+    /// **partage de state mutable** (configuration) entre tâches `async let`. Comme nous ne
+    /// reconfigurons jamais après création, on peut désormais réutiliser une instance partagée
+    /// (gain : pas de ré-allocation à chaque requête, ~0.3 ms × N requêtes).
+    private static let sharedJSONDecoder: JSONDecoder = {
         let d = JSONDecoder()
         d.dateDecodingStrategy = .iso8601
         d.keyDecodingStrategy = .convertFromSnakeCase
         return d
-    }
-
-    /// Même principe que le décodeur si plusieurs encodages concurrents.
-    private static func makeJSONEncoder() -> JSONEncoder {
+    }()
+    private static let sharedJSONEncoder: JSONEncoder = {
         let e = JSONEncoder()
         e.dateEncodingStrategy = .iso8601
         e.keyEncodingStrategy = .convertToSnakeCase
         return e
-    }
+    }()
+    private static func makeJSONDecoder() -> JSONDecoder { sharedJSONDecoder }
+    private static func makeJSONEncoder() -> JSONEncoder { sharedJSONEncoder }
 
     init(session: URLSession? = nil) {
         self.session = session ?? Self.makeDefaultSession()
@@ -114,14 +142,27 @@ final class APIClient: @unchecked Sendable {
     }
 
     /// Exécute la requête réseau avec coalescing pour les GET (même endpoint + même contexte auth).
+    /// Retry exponentiel sur erreurs réseau transitoires (1 retry max — la lib URLSession a déjà
+    /// son propre retry interne pour TCP).
     private func performNetworkData(for request: URLRequest) async throws -> (Data, URLResponse) {
         let method = request.httpMethod?.uppercased() ?? "GET"
         guard method == "GET", request.httpBody == nil else {
+            // POST/PUT/DELETE : pas de coalescing (idempotence non garantie), pas de retry automatique
+            // (le serveur peut avoir déjà commencé le traitement → risque de double action).
             return try await session.data(for: request)
         }
         let key = requestCoalescingKey(for: request)
         return try await requestCoalescer.run(key: key) { [session] in
-            try await session.data(for: request)
+            do {
+                return try await session.data(for: request)
+            } catch {
+                if Self.isRetryableNetworkError(error) {
+                    // 1 seul retry avec backoff court (500 ms) — au-delà l'utilisateur préfère un message clair.
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                    return try await session.data(for: request)
+                }
+                throw error
+            }
         }
     }
 

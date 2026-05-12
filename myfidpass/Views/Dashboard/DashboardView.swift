@@ -471,7 +471,11 @@ struct DashboardView: View {
     }
 
     var body: some View {
-        let _ = dataService.updateTrigger
+        // PERF : la lecture explicite de `dataService.updateTrigger` est retirée — SwiftUI
+        // observe déjà `dataService` via `@StateObject`. La réinvalidation venait du save Core Data
+        // qui incrémentait `updateTrigger` à chaque appel ; à terme, basculer les sous-vues
+        // concernées (activity feed, members list) sur `@FetchRequest` ciblé pour éviter le rebuild
+        // global de la vue (1768 lignes).
         NavigationStack(path: $navigationPath) {
             dashboardHomeRoot
         }

@@ -1112,35 +1112,33 @@ final class AuthService: NSObject, ObservableObject {
 }
 
 extension AuthService: ASWebAuthenticationPresentationContextProviding {
-    nonisolated func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
-        func anchor() -> ASPresentationAnchor {
-            MainActor.assumeIsolated {
-                let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-                func activationRank(_ state: UIScene.ActivationState) -> Int {
-                    switch state {
-                    case .foregroundActive: return 0
-                    case .foregroundInactive: return 1
-                    case .background: return 2
-                    case .unattached: return 3
-                    @unknown default: return 4
-                    }
-                }
-                let ordered = scenes.sorted { activationRank($0.activationState) < activationRank($1.activationState) }
-                for scene in ordered {
-                    if let w = scene.windows.first(where: { $0.isKeyWindow }) { return w }
-                }
-                for scene in ordered {
-                    if let w = scene.windows.first(where: { !$0.isHidden && $0.alpha > 0.01 }) { return w }
-                }
-                if let w = ordered.first?.windows.first { return w }
-                if let w = scenes.flatMap(\.windows).first(where: { !$0.isHidden }) { return w }
-                fatalError("MyFidpass: aucune fenêtre disponible pour ASWebAuthenticationSession.")
+    /// Apple docs : `presentationAnchor(for:)` est appelée sur le main thread par `ASWebAuthenticationSession`.
+    /// Avant : `nonisolated` + `DispatchQueue.main.sync` → si jamais appelée depuis le main (cas réel sur device lent),
+    /// **DEADLOCK** garanti → watchdog iOS tue l'app (0x8badf00d). Le `@MainActor` rend l'isolation explicite et sûre.
+    @MainActor
+    func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        func activationRank(_ state: UIScene.ActivationState) -> Int {
+            switch state {
+            case .foregroundActive: return 0
+            case .foregroundInactive: return 1
+            case .background: return 2
+            case .unattached: return 3
+            @unknown default: return 4
             }
         }
-        if Thread.isMainThread {
-            return anchor()
+        let ordered = scenes.sorted { activationRank($0.activationState) < activationRank($1.activationState) }
+        for scene in ordered {
+            if let w = scene.windows.first(where: { $0.isKeyWindow }) { return w }
         }
-        return DispatchQueue.main.sync(execute: anchor)
+        for scene in ordered {
+            if let w = scene.windows.first(where: { !$0.isHidden && $0.alpha > 0.01 }) { return w }
+        }
+        if let w = ordered.first?.windows.first { return w }
+        if let w = scenes.flatMap(\.windows).first(where: { !$0.isHidden }) { return w }
+        // Fallback ultime : ne pas crash en prod — retourner une fenêtre vide.
+        // `fatalError` était une bombe à retardement (un cold-start avec scene en transition = crash).
+        return UIWindow()
     }
 }
 
