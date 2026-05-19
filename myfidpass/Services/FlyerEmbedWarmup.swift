@@ -23,8 +23,8 @@ enum FlyerEmbedWarmup {
     // MARK: - Init
 
     /// Appelé tôt (ex. onglet Commerce) pour qu’`FlyerPreviewWebView` ait souvent un chemin `dequeue()`.
-    /// Court délai : laisse le 1ʳᵉ runloop / Core Data terminer sans saturer le cold start.
-    private static let startupDelay: TimeInterval = 0.05
+    /// Après le 1er frame navigation / TabView : réduit la concurrence avec WebKit au tout premier affichage accueil.
+    private static let startupDelay: TimeInterval = 0.65
 
     static func startIfNeeded() {
         guard maxPool > 0 else { return }

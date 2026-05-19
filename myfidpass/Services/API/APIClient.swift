@@ -75,6 +75,9 @@ final class APIClient: @unchecked Sendable {
 
     private let refreshGate = RefreshTokenSerialGate()
     private let requestCoalescer = RequestInFlightCoalescer()
+    /// Évite deux rotations refresh rapprochées (app native + WKWebView paiement) qui invalident l’autre session.
+    private var lastRefreshSuccessAt: Date?
+    private let minRefreshInterval: TimeInterval = 2.5
 
     /// Session : plafond large ; les timeouts fins sont sur `URLRequest` (ex. 300 s pour POST campagne).
     private static func makeDefaultSession() -> URLSession {
@@ -135,6 +138,13 @@ final class APIClient: @unchecked Sendable {
         return [method, url, auth, dashboard, accept].joined(separator: "|")
     }
 
+    /// True si le JWT access en mémoire n’est pas expiré (marge 30 s) — évite logout brutal sur refresh concurrent.
+    private static func accessTokenStillWithinValidityWindow() -> Bool {
+        guard let token = AuthStorage.authToken?.trimmingCharacters(in: .whitespacesAndNewlines), !token.isEmpty,
+              let exp = JWTAccessExpiry.expirationDate(of: token) else { return false }
+        return exp.timeIntervalSinceNow > 30
+    }
+
     /// Efface les jetons et notifie l’app : `AuthService` appelle `logout()` (sinon `isLoggedIn` reste vrai alors que le serveur a refusé la session — ex. reset BDD / compte supprimé).
     private func terminateSessionAfterAuthFailure() {
         AuthStorage.authToken = nil
@@ -142,6 +152,11 @@ final class APIClient: @unchecked Sendable {
         DispatchQueue.main.async {
             NotificationCenter.default.post(name: .myfidpassSessionInvalidated, object: nil)
         }
+    }
+
+    private func terminateSessionAfterAuthFailureIfAppropriate() {
+        if Self.accessTokenStillWithinValidityWindow() { return }
+        terminateSessionAfterAuthFailure()
     }
 
     func request<T: Decodable>(
@@ -206,7 +221,7 @@ final class APIClient: @unchecked Sendable {
                 guard let retryHttp = retryResponse as? HTTPURLResponse else { throw APIError.noData }
                 if retryHttp.statusCode == 401 {
                     if !endpoint.skipsClientSessionBootstrap {
-                        terminateSessionAfterAuthFailure()
+                        terminateSessionAfterAuthFailureIfAppropriate()
                     }
                     throw APIError.unauthorized
                 }
@@ -217,9 +232,11 @@ final class APIClient: @unchecked Sendable {
                 }
                 throw Self.resolveNonSuccessHTTPError(statusCode: retryHttp.statusCode, data: retryData)
             }
+            // Refresh impossible : ne pas effacer la session si l’access JWT est encore dans sa fenêtre de validité
+            // (course native ↔ WebView paiement qui a pu consommer l’ancien refresh).
             if !endpoint.skipsClientSessionBootstrap,
                AuthStorage.authToken != nil || AuthStorage.refreshToken != nil {
-                terminateSessionAfterAuthFailure()
+                terminateSessionAfterAuthFailureIfAppropriate()
             }
             throw APIError.unauthorized
         case 404:
@@ -268,6 +285,10 @@ final class APIClient: @unchecked Sendable {
             let fallback = "Ce commerce est déjà utilisé. Connectez-vous au compte existant ou choisissez un autre commerce."
             return .businessPlaceAlreadyLinked(msg.isEmpty ? fallback : msg)
         }
+        if raw == "notification_icon_required" {
+            let fallback = "Ajoutez une icône de notification (image) dans l’onglet Notifications avant d’envoyer des messages aux clients."
+            return .notificationIconRequired(msg.isEmpty ? fallback : msg)
+        }
         return nil
     }
 
@@ -312,6 +333,12 @@ final class APIClient: @unchecked Sendable {
     }
 
     private func exchangeRefreshTokenBody() async -> String? {
+        if let last = lastRefreshSuccessAt,
+           Date().timeIntervalSince(last) < minRefreshInterval,
+           let existing = AuthStorage.authToken?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !existing.isEmpty {
+            return existing
+        }
         guard let refreshToken = AuthStorage.refreshToken, !refreshToken.isEmpty else { return nil }
         do {
             var req = try APIEndpoint.authRefresh(refreshToken: refreshToken)
@@ -335,12 +362,14 @@ final class APIClient: @unchecked Sendable {
             // Le serveur a déjà invalidé l’ancien refresh : si le décodage échoue, extraire au moins token + refresh.
             if let refreshed = try? Self.makeJSONDecoder().decode(AuthRefreshResponse.self, from: data) {
                 Self.applyRefreshedTokens(refreshed, rawData: data)
+                lastRefreshSuccessAt = Date()
                 return refreshed.token
             }
             guard let recovered = Self.recoverTokensFromRefreshResponseBody(data) else { return nil }
             AuthStorage.authToken = recovered.access
             if let r = recovered.refresh, !r.isEmpty { AuthStorage.refreshToken = r }
             NotificationCenter.default.post(name: .myfidpassAuthTokensUpdated, object: nil)
+            lastRefreshSuccessAt = Date()
             return recovered.access
         } catch {
             return nil
@@ -433,7 +462,7 @@ final class APIClient: @unchecked Sendable {
                 if retryHttp.statusCode >= 200, retryHttp.statusCode < 300 { return retryData }
                 if retryHttp.statusCode == 401 {
                     if !endpoint.skipsClientSessionBootstrap {
-                        terminateSessionAfterAuthFailure()
+                        terminateSessionAfterAuthFailureIfAppropriate()
                     }
                     throw APIError.unauthorized
                 }
@@ -441,7 +470,72 @@ final class APIClient: @unchecked Sendable {
             }
             if !endpoint.skipsClientSessionBootstrap,
                AuthStorage.authToken != nil || AuthStorage.refreshToken != nil {
-                terminateSessionAfterAuthFailure()
+                terminateSessionAfterAuthFailureIfAppropriate()
+            }
+            throw APIError.unauthorized
+        case 404:
+            throw APIError.server(statusCode: 404, message: Self.parseServerErrorMessage(from: data))
+        default:
+            throw APIError.server(statusCode: http.statusCode, message: Self.parseServerErrorMessage(from: data))
+        }
+    }
+
+    /// Corps + `HTTPURLResponse` pour codes **200…299** (ex. **202 Accepted** avec `job_id`), sans interpréter le JSON.
+    func requestSuccessfulDataWithHTTPResponse(_ endpoint: APIEndpoint) async throws -> (Data, HTTPURLResponse) {
+        if !endpoint.skipsClientSessionBootstrap {
+            await ensureValidAccessToken()
+        }
+        var request = try endpoint.urlRequest(base: APIConfig.baseURL, encoder: Self.makeJSONEncoder())
+        if !endpoint.skipsClientSessionBootstrap, let token = authToken, !token.isEmpty {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        for (k, v) in endpoint.supplementalHeaders {
+            request.setValue(v, forHTTPHeaderField: k)
+        }
+        applyDashboardTokenHeaderIfNeeded(to: &request, endpoint: endpoint)
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if endpoint.method == "POST" {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
+
+        let (data, response): (Data, URLResponse)
+        do {
+            (data, response) = try await performNetworkData(for: request)
+        } catch {
+            throw APIError.network(error)
+        }
+
+        guard let http = response as? HTTPURLResponse else {
+            throw APIError.noData
+        }
+
+        switch http.statusCode {
+        case 200...299:
+            return (data, http)
+        case 401:
+            if let newToken = await tryRefreshToken() {
+                var retryRequest = try endpoint.urlRequest(base: APIConfig.baseURL, encoder: Self.makeJSONEncoder())
+                if !endpoint.skipsClientSessionBootstrap {
+                    retryRequest.setValue("Bearer \(newToken)", forHTTPHeaderField: "Authorization")
+                }
+                for (k, v) in endpoint.supplementalHeaders { retryRequest.setValue(v, forHTTPHeaderField: k) }
+                applyDashboardTokenHeaderIfNeeded(to: &retryRequest, endpoint: endpoint)
+                retryRequest.setValue("application/json", forHTTPHeaderField: "Accept")
+                if endpoint.method == "POST" { retryRequest.setValue("application/json", forHTTPHeaderField: "Content-Type") }
+                let (retryData, retryResponse) = try await performNetworkData(for: retryRequest)
+                guard let retryHttp = retryResponse as? HTTPURLResponse else { throw APIError.noData }
+                if retryHttp.statusCode >= 200, retryHttp.statusCode < 300 { return (retryData, retryHttp) }
+                if retryHttp.statusCode == 401 {
+                    if !endpoint.skipsClientSessionBootstrap {
+                        terminateSessionAfterAuthFailureIfAppropriate()
+                    }
+                    throw APIError.unauthorized
+                }
+                throw APIError.server(statusCode: retryHttp.statusCode, message: Self.parseServerErrorMessage(from: retryData))
+            }
+            if !endpoint.skipsClientSessionBootstrap,
+               AuthStorage.authToken != nil || AuthStorage.refreshToken != nil {
+                terminateSessionAfterAuthFailureIfAppropriate()
             }
             throw APIError.unauthorized
         case 404:
@@ -494,7 +588,7 @@ final class APIClient: @unchecked Sendable {
                 if retryHttp.statusCode >= 200, retryHttp.statusCode < 300 { return retryData }
                 if retryHttp.statusCode == 401 {
                     if !endpoint.skipsClientSessionBootstrap {
-                        terminateSessionAfterAuthFailure()
+                        terminateSessionAfterAuthFailureIfAppropriate()
                     }
                     throw APIError.unauthorized
                 }
@@ -502,7 +596,7 @@ final class APIClient: @unchecked Sendable {
             }
             if !endpoint.skipsClientSessionBootstrap,
                AuthStorage.authToken != nil || AuthStorage.refreshToken != nil {
-                terminateSessionAfterAuthFailure()
+                terminateSessionAfterAuthFailureIfAppropriate()
             }
             throw APIError.unauthorized
         default:

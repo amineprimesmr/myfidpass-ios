@@ -41,7 +41,7 @@ struct FluidZoomTransitionButtonStyle<S: Shape>: ButtonStyle {
             }
         }
         .scaleEffect(configuration.isPressed ? 0.985 : 1)
-        .animation(.spring(response: 0.26, dampingFraction: 0.84), value: configuration.isPressed)
+        .animation(nil, value: configuration.isPressed)
         .onChange(of: configuration.isPressed) { _, newValue in
             guard newValue else { return }
             hapticsTrigger.toggle()

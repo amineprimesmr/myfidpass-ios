@@ -21,6 +21,15 @@ private struct CampaignRuleSpec: Identifiable {
     let subtitle: String
     /// Clé `GET .../campaign-segments` pour afficher l’effectif.
     let segmentKey: String?
+    /// Titre court dans l’aperçu type notification (sinon `title`).
+    var notificationPreviewTitle: String? = nil
+    /// Texte sous l’aperçu : **ce que vit le client** (pas la mécanique serveur).
+    var timingCaption: String? = nil
+
+    var effectiveNotificationPreviewTitle: String {
+        let t = notificationPreviewTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return t.isEmpty ? title : t
+    }
 }
 
 private struct CampaignFamilySpec: Identifiable {
@@ -40,88 +49,158 @@ private enum NotificationsTopRoundedPanel {
     )
 }
 
-// MARK: - Aide Apple Wallet (écran verrouillé vs message commerçant)
+// MARK: - Aperçu notification — Liquid Glass, lecture + bouton Modifier
 
-/// Apple n’expose pas d’API pour remplacer « Carte de fidélité modifiée » sur le verrouillage : on informe le commerçant.
-private struct WalletLockScreenDisclaimerCard: View {
-    /// `true` : une ligne sous les actions (manuel / auto) ; `false` : bloc détaillé sous l’aperçu.
-    var compact: Bool
+private struct WalletNotificationPreviewBlock<Footer: View>: View {
+    var logoURL: String? = nil
+    let notificationTitle: String
+    @Binding var messageText: String
+    var messagePlaceholder: String = "Message sur le pass"
+    var maxLength: Int = 200
+    @ViewBuilder private let footer: () -> Footer
+
+    @State private var isEditingMessage = false
+    @FocusState private var messageFocused: Bool
+
+    private let iconSide: CGFloat = 40
+    private let iconCorner: CGFloat = 10
+
+    init(
+        logoURL: String? = nil,
+        notificationTitle: String,
+        messageText: Binding<String>,
+        messagePlaceholder: String = "Message sur le pass",
+        maxLength: Int = 200,
+        @ViewBuilder footer: @escaping () -> Footer
+    ) {
+        self.logoURL = logoURL
+        self.notificationTitle = notificationTitle
+        self._messageText = messageText
+        self.messagePlaceholder = messagePlaceholder
+        self.maxLength = maxLength
+        self.footer = footer
+    }
 
     var body: some View {
-        if compact {
-            HStack(alignment: .top, spacing: 10) {
-                Image(systemName: "apple.logo")
-                    .font(.body)
-                    .foregroundStyle(AppTheme.Colors.textSecondary)
-                Text(
-                    "Lors du tout premier changement après ajout au Wallet, l’écran verrouillé affiche souvent « Carte de fidélité modifiée » (choix d’Apple). Votre texte est bien enregistré sur le pass ; les alertes suivantes le montrent davantage (Wallet, aperçu étendu)."
-                )
-                .font(AppTheme.Fonts.caption())
-                .foregroundStyle(AppTheme.Colors.textSecondary)
-                .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(AppTheme.Spacing.sm)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(AppTheme.Colors.primary.opacity(0.06))
-            .clipShape(RoundedRectangle(cornerRadius: AppTheme.Radius.md, style: .continuous))
-        } else {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 8) {
-                    Image(systemName: "lock.iphone")
-                        .font(.title3)
-                        .foregroundStyle(AppTheme.Colors.primary)
-                    Text("Affichage côté client (Apple)")
-                        .font(AppTheme.Fonts.subheadline())
-                        .fontWeight(.semibold)
-                        .foregroundStyle(AppTheme.Colors.textPrimary)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .center, spacing: 12) {
+                previewIcon
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(notificationTitle)
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(Color.black)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                    if isEditingMessage {
+                        TextField(messagePlaceholder, text: cappedMessageBinding, axis: .vertical)
+                            .textFieldStyle(.plain)
+                            .font(.footnote.weight(.regular))
+                            .foregroundStyle(Color.black.opacity(0.92))
+                            .tint(AppTheme.Colors.primary)
+                            .lineLimit(3 ... 10)
+                            .multilineTextAlignment(.leading)
+                            .focused($messageFocused)
+                            .submitLabel(.done)
+                            .onSubmit { finishEditingMessage() }
+                    } else {
+                        messageReadOnlyLine
+                    }
                 }
-                VStack(alignment: .leading, spacing: 8) {
-                    disclaimerRow(
-                        symbol: "1.circle.fill",
-                        text: "L’aperçu ci-dessus = le texte enregistré dans le pass (titre + message)."
-                    )
-                    disclaimerRow(
-                        symbol: "bell.badge.fill",
-                        text: "Première notification après ajout de la carte : sur l’écran verrouillé, iOS affiche souvent uniquement la phrase système « Carte de fidélité modifiée ». Ce n’est pas un bug Myfidpass : Apple ne permet pas de la remplacer par votre phrase sur cette surface."
-                    )
-                    disclaimerRow(
-                        symbol: "sparkles",
-                        text: "À partir des mises à jour suivantes, votre message personnalisé apparaît plus souvent (aperçu étendu, îlot, en ouvrant Wallet)."
-                    )
-                    disclaimerRow(
-                        symbol: "wallet.pass.fill",
-                        text: "Le client voit toujours votre contenu sur la carte dans l’app Wallet, après ouverture ou rafraîchissement du pass."
-                    )
-                    disclaimerRow(
-                        symbol: "arrow.triangle.merge",
-                        text: "Manuel et automatique partagent le même champ « Message » sur le pass : le dernier envoi (peu importe l’origine) remplace le texte côté clients — ce n’est pas deux conversations séparées."
-                    )
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                Button {
+                    if isEditingMessage {
+                        finishEditingMessage()
+                    } else {
+                        isEditingMessage = true
+                        Task { @MainActor in
+                            try? await Task.sleep(nanoseconds: 45_000_000)
+                            messageFocused = true
+                        }
+                    }
+                } label: {
+                    Image(systemName: isEditingMessage ? "checkmark.circle.fill" : "square.and.pencil")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(isEditingMessage ? AppTheme.Colors.primary : Color.black.opacity(0.48))
+                        .frame(width: 32, height: 40)
+                        .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel(isEditingMessage ? "Terminer la modification du message" : "Modifier le message")
             }
-            .padding(AppTheme.Spacing.md)
+            .padding(.vertical, 12)
+            .padding(.horizontal, 14)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(AppTheme.Colors.cardBackground)
-            .overlay(
-                RoundedRectangle(cornerRadius: AppTheme.Radius.lg, style: .continuous)
-                    .strokeBorder(AppTheme.Colors.primary.opacity(0.2), lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: AppTheme.Radius.lg, style: .continuous))
+            .glassEffect(.regularInteractive, cornerRadius: 22)
+            .shadow(color: .clear, radius: 0, y: 0)
+            .preferredColorScheme(.light)
+
+            footer()
         }
     }
 
-    private func disclaimerRow(symbol: String, text: String) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: symbol)
-                .font(.body)
-                .foregroundStyle(AppTheme.Colors.primary)
-                .frame(width: 22, alignment: .center)
-            Text(text)
-                .font(AppTheme.Fonts.caption())
-                .foregroundStyle(AppTheme.Colors.textSecondary)
-                .fixedSize(horizontal: false, vertical: true)
+    private func finishEditingMessage() {
+        isEditingMessage = false
+        messageFocused = false
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+    }
+
+    private var messageReadOnlyLine: some View {
+        let trimmed = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return Text(trimmed.isEmpty ? messagePlaceholder : messageText)
+            .font(.footnote.weight(.regular))
+            .foregroundStyle(trimmed.isEmpty ? Color.black.opacity(0.38) : Color.black.opacity(0.92))
+            .multilineTextAlignment(.leading)
+            .lineLimit(1 ... 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var cappedMessageBinding: Binding<String> {
+        Binding(
+            get: { messageText },
+            set: { messageText = String($0.prefix(maxLength)) }
+        )
+    }
+
+    @ViewBuilder
+    private var previewIcon: some View {
+        if let raw = logoURL?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty {
+            BusinessLogoView(
+                logoURL: raw,
+                logoAssetContext: .campaignNotificationIcon,
+                size: iconSide,
+                cornerRadius: iconCorner
+            )
+        } else {
+            Image("logonotif")
+                .resizable()
+                .scaledToFill()
+                .frame(width: iconSide, height: iconSide)
+                .clipShape(RoundedRectangle(cornerRadius: iconCorner, style: .continuous))
         }
     }
 }
+
+private extension WalletNotificationPreviewBlock where Footer == EmptyView {
+    init(
+        logoURL: String? = nil,
+        notificationTitle: String,
+        messageText: Binding<String>,
+        messagePlaceholder: String = "Message sur le pass",
+        maxLength: Int = 200
+    ) {
+        self.init(
+            logoURL: logoURL,
+            notificationTitle: notificationTitle,
+            messageText: messageText,
+            messagePlaceholder: messagePlaceholder,
+            maxLength: maxLength,
+            footer: { EmptyView() }
+        )
+    }
+}
+
+// MARK: - Apple Wallet (verrouillage)
 
 private let campaignFamilies: [CampaignFamilySpec] = [
     CampaignFamilySpec(
@@ -130,7 +209,7 @@ private let campaignFamilies: [CampaignFamilySpec] = [
         icon: "arrow.counterclockwise.circle",
         rules: [
             CampaignRuleSpec(
-                id: "inactive14",
+                id: "inactive_14",
                 title: "Client inactif +14 jours",
                 subtitle: "Aucune visite depuis 2 semaines",
                 segmentKey: "inactive14"
@@ -143,7 +222,7 @@ private let campaignFamilies: [CampaignFamilySpec] = [
         icon: "gift.fill",
         rules: [
             CampaignRuleSpec(
-                id: "birthdayToday",
+                id: "birthday_today",
                 title: "Anniversaire du jour",
                 subtitle: "Profil complété avec date de naissance (téléphone + ville)",
                 segmentKey: "birthdayToday"
@@ -165,116 +244,218 @@ private let campaignFamilies: [CampaignFamilySpec] = [
     ),
 ]
 
-private let defaultRuleMessages: [String: String] = [
-    "inactive14": "Ça fait un moment... Revenez nous voir aujourd'hui et profitez de -10 %.",
-    "birthdayToday": "Joyeux anniversaire ! Profitez de -20 % en commandant aujourd'hui.",
+/// Ordre d’affichage du hub — périmètre / carte en premier dans le carrousel ; clés alignées sur le cron SaaS.
+private let automationHubRules: [CampaignRuleSpec] = [
+    CampaignRuleSpec(
+        id: "locationEntry",
+        title: "Entrée dans le périmètre",
+        subtitle: "Message lié à la géolocalisation Wallet.",
+        segmentKey: nil,
+        notificationPreviewTitle: "Vous êtes tout près",
+        timingCaption:
+            "Le client voit ce message en passant près du magasin avec sa carte dans Apple Wallet."
+    ),
+    CampaignRuleSpec(
+        id: "welcome_pass",
+        title: "Bienvenue · nouveaux membres",
+        subtitle: "Clients venant d’ajouter la carte / segment « bienvenue ».",
+        segmentKey: "welcomeNew",
+        notificationPreviewTitle: "Bienvenue",
+        timingCaption:
+            "Le client voit ce message lorsqu’il vient d’intégrer le programme et d’ajouter la carte Wallet."
+    ),
+    CampaignRuleSpec(
+        id: "points_near",
+        title: "Presque la récompense",
+        subtitle: "Clients proches du palier de points.",
+        segmentKey: "pointsNear50",
+        notificationPreviewTitle: "Encore quelques points",
+        timingCaption:
+            "Le client voit ce message quand il manque peu de points (ou de tampons) avant de débloquer la récompense."
+    ),
+    CampaignRuleSpec(
+        id: "reward_ready",
+        title: "Récompense prête",
+        subtitle: "Clients à récompense disponible (ex. 50 points).",
+        segmentKey: "points50",
+        notificationPreviewTitle: "Votre récompense est prête",
+        timingCaption:
+            "Le client voit ce message dès que le palier est atteint et que la récompense est dispo sur la carte."
+    ),
+    CampaignRuleSpec(
+        id: "inactive_14",
+        title: "Client inactif +14 jours",
+        subtitle: "Sans visite depuis 2 semaines.",
+        segmentKey: "inactive14",
+        notificationPreviewTitle: "Ça fait un moment…",
+        timingCaption:
+            "Le client voit ce message s’il n’a plus utilisé sa carte depuis environ deux semaines."
+    ),
+    CampaignRuleSpec(
+        id: "birthday_today",
+        title: "Anniversaire du jour",
+        subtitle: "Date de naissance renseignée sur le profil.",
+        segmentKey: "birthdayToday",
+        notificationPreviewTitle: "Joyeux anniversaire",
+        timingCaption:
+            "Le client voit ce message le jour de son anniversaire (date renseignée sur son profil)."
+    ),
+]
+
+/// Messages par défaut : `campaign-automation-cron.js` + périmètre (`locationEntry` seed).
+private let defaultAutomationRuleMessages: [String: String] = [
+    "welcome_pass": "Bienvenue ! Profitez d’une offre de bienvenue sur votre prochaine visite.",
+    "inactive_14": "Ça fait un moment... Revenez nous voir aujourd'hui et profitez de -10 %.",
+    "reward_ready": "Votre récompense est prête — passez en magasin pour en profiter.",
+    "points_near": "Plus que quelques points pour débloquer votre récompense !",
+    "birthday_today": "Joyeux anniversaire ! Profitez de -20 % en commandant aujourd'hui.",
     "locationEntry": "Vous êtes à proximité de notre commerce. Passez nous voir, votre carte Wallet est prête.",
 ]
 
-/// Message suggéré pour relances inactifs (événement « Inactif depuis X jours ») — le commerçant peut l’ajuster.
-private let defaultInactiveRelancePromoMessage =
-    "Ça fait un moment... Revenez nous voir aujourd'hui et profitez de -10 %."
+private func foldLegacyAutomationKeys(
+    into rules: inout [String: CampaignAutomationRuleDTO],
+    canonical: String,
+    legacy: String
+) {
+    guard let leg = rules.removeValue(forKey: legacy) else { return }
+    if var cur = rules[canonical] {
+        let legMsg = leg.message?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let curMsg = cur.message?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if curMsg.isEmpty, !legMsg.isEmpty { cur.message = leg.message }
+        if leg.enabled == true { cur.enabled = true }
+        rules[canonical] = cur
+    } else {
+        rules[canonical] = leg
+    }
+}
+
+/// Évite d’envoyer `inactive14` / `birthdayToday` : le cron serveur ne les exécute pas (seulement `inactive_14` / `birthday_today`).
+private func campaignAutomationSanitizedForServer(_ config: CampaignAutomationConfigDTO) -> CampaignAutomationConfigDTO {
+    var rules = config.rules ?? [:]
+    foldLegacyAutomationKeys(into: &rules, canonical: "inactive_14", legacy: "inactive14")
+    foldLegacyAutomationKeys(into: &rules, canonical: "birthday_today", legacy: "birthdayToday")
+    rules.removeValue(forKey: "new_week")
+    return CampaignAutomationConfigDTO(
+        version: config.version,
+        globalCooldownDays: config.globalCooldownDays,
+        rules: rules
+    )
+}
+
+/// Force `enabled: false` sur toutes les règles tant qu’aucune icône notif personnalisée n’est configurée.
+private func campaignAutomationGatedForIcon(
+    _ config: CampaignAutomationConfigDTO,
+    hasCustomIcon: Bool
+) -> CampaignAutomationConfigDTO {
+    guard hasCustomIcon else {
+        var rules = config.rules ?? [:]
+        for key in rules.keys {
+            var row = rules[key] ?? CampaignAutomationRuleDTO(enabled: false, message: "")
+            row.enabled = false
+            rules[key] = row
+        }
+        return CampaignAutomationConfigDTO(
+            version: config.version,
+            globalCooldownDays: config.globalCooldownDays,
+            rules: rules
+        )
+    }
+    return config
+}
 
 private func mergedAutomation(from api: CampaignAutomationConfigDTO?) -> CampaignAutomationConfigDTO {
     var rules: [String: CampaignAutomationRuleDTO] = [:]
-    for family in campaignFamilies {
-        for r in family.rules where !r.id.hasPrefix("_info") {
-            let defMsg = defaultRuleMessages[r.id] ?? ""
-            let existing: CampaignAutomationRuleDTO? = {
-                if let exact = api?.rules?[r.id] { return exact }
-                switch r.id {
-                case "inactive14":
-                    return api?.rules?["inactive_14"]
-                case "birthdayToday":
-                    return api?.rules?["birthday_today"]
-                default:
-                    return nil
-                }
-            }()
-            rules[r.id] = CampaignAutomationRuleDTO(
-                enabled: true,
-                message: (existing?.message?.isEmpty == false ? existing?.message : defMsg) ?? defMsg,
-                segment: existing?.segment,
-                title: existing?.title
-            )
-        }
+    for r in automationHubRules where !r.id.hasPrefix("_info") {
+        let defMsg = defaultAutomationRuleMessages[r.id] ?? ""
+        let existing: CampaignAutomationRuleDTO? = {
+            if let exact = api?.rules?[r.id] { return exact }
+            switch r.id {
+            case "inactive_14":
+                return api?.rules?["inactive14"]
+            case "birthday_today":
+                return api?.rules?["birthdayToday"]
+            default:
+                return nil
+            }
+        }()
+        rules[r.id] = CampaignAutomationRuleDTO(
+            enabled: existing?.enabled ?? false,
+            message: (existing?.message?.isEmpty == false ? existing?.message : defMsg) ?? defMsg,
+            segment: existing?.segment,
+            title: existing?.title
+        )
     }
     if let apiRules = api?.rules {
         for (k, v) in apiRules {
             if k.hasPrefix("custom_") || k.hasPrefix("event_") {
                 rules[k] = v
             } else if rules[k] == nil {
-                var copy = v
-                if copy.enabled != true { copy.enabled = true }
-                rules[k] = copy
+                if k == "inactive14" && rules["inactive_14"] != nil { continue }
+                if k == "birthdayToday" && rules["birthday_today"] != nil { continue }
+                rules[k] = v
             }
         }
     }
+    foldLegacyAutomationKeys(into: &rules, canonical: "inactive_14", legacy: "inactive14")
+    foldLegacyAutomationKeys(into: &rules, canonical: "birthday_today", legacy: "birthdayToday")
+    rules.removeValue(forKey: "new_week")
     let cd = api?.globalCooldownDays ?? 7
     return CampaignAutomationConfigDTO(version: api?.version ?? 1, globalCooldownDays: min(90, max(1, cd)), rules: rules)
 }
 
+/// Programmation manuelle dans l’app : une fois, ou chaque jour (conversion fuseau → UTC côté token, comme le job SaaS).
+private enum ScheduledNotificationKind: String, CaseIterable, Identifiable {
+    case oneTime
+    case daily
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .oneTime:
+            return "Une date et heure"
+        case .daily:
+            return "Chaque jour à la même heure"
+        }
+    }
+}
+
 // MARK: - Barre de progression envoi (bandeau tout en haut — `progress` suit les étapes réelles de `send()`)
 
-/// Remplissage 0…1 + halo blanc très vif ; léger pulsage (TimelineView) pendant l’attente réseau / synchro.
+/// Barre de progression statique (sans `TimelineView` — moins de charge pendant l’envoi).
 private struct NotificationSendTopProgressStrip: View {
     var progress: CGFloat
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 24.0)) { timeline in
-            let t = timeline.date.timeIntervalSinceReferenceDate
-            let breathe = 0.62 + 0.38 * (0.5 + 0.5 * sin(t * 1.15))
-            GeometryReader { geo in
-                let w = max(geo.size.width, 1)
-                let p = max(0, min(1, progress))
-                let fillW = max(0, p * w)
-
-                ZStack(alignment: .leading) {
-                    Capsule(style: .continuous)
-                        .fill(Color.white.opacity(0.22 + 0.12 * breathe))
-                        .frame(height: 6)
-
-                    if fillW > 0.5 {
-                        Capsule(style: .continuous)
-                            .fill(Color.white.opacity(0.55 * breathe))
-                            .frame(width: fillW + 14, height: 12)
-                            .blur(radius: 10)
-                            .offset(x: -7)
-
-                        Capsule(style: .continuous)
-                            .fill(
-                                LinearGradient(
-                                    colors: [
-                                        Color.white.opacity(0.97),
-                                        Color.white,
-                                        Color.white.opacity(0.98),
-                                    ],
-                                    startPoint: .leading,
-                                    endPoint: .trailing
-                                )
-                            )
-                            .frame(width: fillW, height: 6)
-                            .shadow(color: Color.white.opacity(0.95), radius: 12, x: 0, y: 0)
-                            .shadow(color: Color.white.opacity(0.55), radius: 22, x: 0, y: 0)
-
-                        if fillW > 18 {
-                            Capsule(style: .continuous)
-                                .fill(Color.white)
-                                .frame(width: min(16, fillW * 0.08), height: 7)
-                                .blur(radius: 2.5)
-                                .offset(x: fillW - 10)
-                        }
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-                .compositingGroup()
+        GeometryReader { geo in
+            let w = max(geo.size.width, 1)
+            let p = max(0, min(1, progress))
+            let fillW = max(0, p * w)
+            ZStack(alignment: .leading) {
+                Capsule(style: .continuous)
+                    .fill(Color.white.opacity(0.22))
+                    .frame(height: 5)
+                Capsule(style: .continuous)
+                    .fill(Color.white.opacity(0.92))
+                    .frame(width: max(3, fillW), height: 5)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         }
-        .frame(height: 18)
+        .frame(height: 5)
         .accessibilityLabel("Progression d’envoi de la notification")
         .accessibilityValue("\(Int((max(0, min(1, progress))) * 100)) pour cent")
-        .accessibilityAddTraits(.updatesFrequently)
     }
+}
+
+// MARK: - Carrousel « Notifications automatiques » (dimensions partagées)
+
+private enum AutomationCarouselLayout {
+    /// Hauteur totale du `TabView` page (carte périmètre / cartes famille + bannière).
+    static let tabViewHeight: CGFloat = 468
+    /// Carte résumé et bloc carte carte (alignés).
+    static let summaryCardHeight: CGFloat = 386
+    /// Carrousel horizontal du hub « Automatisations » (explication + carte / notif).
+    static let hubCarouselTabViewHeight: CGFloat = 458
 }
 
 // MARK: - Vue principale
@@ -324,13 +505,11 @@ struct CampaignNotificationsView: View {
     /// Une seule feuille à la fois (sinon iOS : « only presenting a single sheet is supported »).
     private enum AuxiliarySheet: Identifiable, Equatable {
         case ruleEditor(String)
-        case customAutomation
         case eventAutomation
 
         var id: String {
             switch self {
             case .ruleEditor(let rid): return "rule:\(rid)"
-            case .customAutomation: return "custom"
             case .eventAutomation: return "event"
             }
         }
@@ -341,11 +520,6 @@ struct CampaignNotificationsView: View {
     @State private var notificationLogoPopupPresented = false
     @State private var notificationIconNudgeTask: Task<Void, Never>?
     @State private var showPerimeterMapSheet = false
-    @State private var customRuleBeingEdited: String?
-    @State private var customDraftTitle = ""
-    @State private var customDraftSegment = ""
-    @State private var customDraftMessage = ""
-    @State private var customRulePendingDelete: String?
 
     /// Envoi manuel de campagne : même déblocage que les stats détaillées (Stripe qualifiant ou admin).
     private var campaignManualSendUnlocked: Bool {
@@ -354,25 +528,25 @@ struct CampaignNotificationsView: View {
         return false
     }
 
-    // MARK: - Event-based custom automations (no segment)
+    // MARK: - Notifications programmées (date / récurrence quotidienne)
     @State private var eventAutomationsRuleBeingEdited: String?
+    @State private var scheduleKind: ScheduledNotificationKind = .daily
+    @State private var oneShotScheduleDate: Date = Calendar.current.date(byAdding: .hour, value: 2, to: Date()) ?? Date()
     @State private var eventDraftTitle = ""
-    @State private var eventDraftEventType = "member_created"
-    @State private var eventDraftDelayMinutes: Int = 2
+    /// Délai après l’heure programmée avant envoi effectif (minutes) — le SaaS enqueue `run_at = maintenant + délai`.
+    @State private var eventDraftDelayMinutes: Int = 1
     @State private var eventDraftMessage = ""
-    @State private var eventDraftPreset: EventPreset = .memberCreated
-    @State private var eventDraftInactiveDays: Int = 30
     @State private var eventDraftScheduleHour: Int = 10
     @State private var eventDraftScheduleMinute: Int = 0
-    @State private var eventDraftCustomKey: String = ""
-    @State private var eventDraftAIInstruction: String = ""
-    @State private var isEventDraftAIParsing = false
     @State private var eventRulePendingDelete: String?
     /// Page du carrousel « Notifications automatiques » (géolocalisation + inactifs).
     @State private var automationCarouselPage: Int = 0
+    /// Page du carrousel horizontal du hub éditable (automatisations).
+    @State private var automationHubCarouselPage: Int = 0
     /// Confirmation **uniquement** avant de désactiver tout un bloc d’automatisations.
     @State private var familyAutomationDisableConfirm: FamilyAutomationDisableConfirm?
     @State private var lastCarouselHapticPage: Int = 0
+    @State private var lastAutomationHubCarouselHapticPage: Int = 0
     @State private var lastCampaignDataSlug: String?
     @State private var scheduledCampaignDataReloadTask: Task<Void, Never>?
 
@@ -460,8 +634,8 @@ struct CampaignNotificationsView: View {
     /// Réserve verticale sous le chrome noir (barre titre + bandeau d’envoi éventuel) pour ne pas recouvrir le panneau blanc.
     private var campaignNotificationsScrollTopInset: CGFloat {
         let baseHeaderChrome: CGFloat = DashboardHomeMinimalTopBarLayout.scrollContentTopInset
-        // `NotificationSendTopProgressStrip` : frame 18 + paddings top 4 / bottom 6.
-        let sendStripBlock: CGFloat = isSending ? 28 : 0
+        // Bandeau d’envoi : barre ~5 pt + paddings.
+        let sendStripBlock: CGFloat = isSending ? 22 : 0
         return baseHeaderChrome + sendStripBlock
     }
 
@@ -487,9 +661,9 @@ struct CampaignNotificationsView: View {
     /// Découpe du `body` pour éviter l’erreur « unable to type-check in reasonable time ».
     private var campaignNotificationsScrollStack: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: AppTheme.Spacing.lg) {
+            VStack(alignment: .leading, spacing: AppTheme.Spacing.md) {
                 previewSection
-                    .padding(.top, 14)
+                    .padding(.top, 12)
                 automationsContent
                     .padding(.horizontal, AppTheme.Spacing.md)
             }
@@ -499,6 +673,8 @@ struct CampaignNotificationsView: View {
                 UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
             }
         }
+        /// Réduit les conflits de rebond avec le paging horizontal du carrousel (TabView) imbriqué.
+        .scrollBounceBehavior(.basedOnSize)
     }
 
     private var campaignNotificationsWithLifecycle: some View {
@@ -584,7 +760,10 @@ struct CampaignNotificationsView: View {
                 scheduleNotificationIconNudgeIfNeeded()
             }
         }
-        .task {
+        // Cold start : cet onglet est souvent monté hors écran par le TabView — ne pas lancer GET + états lourds
+        // tant que l’utilisateur n’a pas ouvert « Campagnes » (évite blocage principal + warning navigation).
+        .task(id: tabRouter.selectedTab) {
+            guard tabRouter.selectedTab == 1 else { return }
             await Task.yield()
             await loadCampaignData()
         }
@@ -662,27 +841,11 @@ struct CampaignNotificationsView: View {
                 switch sheet {
                 case .ruleEditor(let ruleId):
                     ruleEditSheet(ruleId: ruleId)
-                case .customAutomation:
-                    customAutomationEditorSheet
                 case .eventAutomation:
                     eventAutomationEditorSheet
                 }
             }
-            .alert("Supprimer cette automatisation ?", isPresented: Binding(
-                get: { customRulePendingDelete != nil },
-                set: { if !$0 { customRulePendingDelete = nil } }
-            )) {
-                Button("Supprimer", role: .destructive) {
-                    if let id = customRulePendingDelete {
-                        removeCustomRule(id: id)
-                    }
-                    customRulePendingDelete = nil
-                }
-                Button("Annuler", role: .cancel) { customRulePendingDelete = nil }
-            } message: {
-                Text("La règle sera retirée de la liste. Vous pourrez en créer une nouvelle à tout moment.")
-            }
-            .alert("Supprimer cette automatisation événementielle ?", isPresented: Binding(
+            .alert("Supprimer cette programmation ?", isPresented: Binding(
                 get: { eventRulePendingDelete != nil },
                 set: { if !$0 { eventRulePendingDelete = nil } }
             )) {
@@ -694,7 +857,7 @@ struct CampaignNotificationsView: View {
                 }
                 Button("Annuler", role: .cancel) { eventRulePendingDelete = nil }
             } message: {
-                Text("La règle sera retirée de la liste. Vous pourrez en créer une nouvelle à tout moment.")
+                Text("La programmation sera supprimée.")
             }
             .fullScreenCover(isPresented: $showPerimeterMapSheet) {
                 PerimeterMapView(context: viewContext, onDismissEmbedded: { showPerimeterMapSheet = false })
@@ -828,8 +991,13 @@ struct CampaignNotificationsView: View {
                 errorCard(err)
                     .padding(.horizontal, AppTheme.Spacing.md)
             }
+            Text("Envoi immédiat")
+                .font(AppTheme.Fonts.headline())
+                .foregroundStyle(AppTheme.Colors.textPrimary)
+                .padding(.horizontal, AppTheme.Spacing.md)
             ZStack {
                 BorderBeamManualNotificationComposerView(
+                    notificationTitle: $title,
                     messageBody: $bodyText,
                     segment: $segment,
                     segmentChoices: manualSegmentChoices,
@@ -866,12 +1034,292 @@ struct CampaignNotificationsView: View {
             if resolveSlugForAPI() == nil {
                 syncRequiredCard
             } else {
-                /// Titre + carrousel serrés (évite la double marge : paddings barre + `TabView` + padding des pages).
-                VStack(alignment: .leading, spacing: 0) {
-                    automationsTopBar
-                    automationsCarouselBlock
+                VStack(alignment: .leading, spacing: AppTheme.Spacing.md) {
+                    unifiedAutomationsHubSection
+                    eventAutomationsSection
                 }
             }
+        }
+    }
+
+    private var legacyCustomAutomationRuleIds: [String] {
+        (campaignAutomation.rules ?? [:]).keys.filter { $0.hasPrefix("custom_") }.sorted()
+    }
+
+    private var automationHubCarouselPageCount: Int {
+        automationHubRules.count + legacyCustomAutomationRuleIds.count
+    }
+
+    /// Hub unique : carrousel horizontal (une carte par automatisation) + règles perso en pages suivantes.
+    private var unifiedAutomationsHubSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Automatisations")
+                .font(AppTheme.Fonts.headline())
+                .foregroundStyle(AppTheme.Colors.textPrimary)
+
+            if automationHubCarouselPageCount == 0 {
+                Text("Aucune automatisation à afficher.")
+                    .font(AppTheme.Fonts.caption2())
+                    .foregroundStyle(AppTheme.Colors.textSecondary)
+            } else {
+                TabView(selection: $automationHubCarouselPage) {
+                    ForEach(Array(automationHubRules.enumerated()), id: \.element.id) { idx, spec in
+                        automationHubCarouselPageView(spec: spec, pageIndex: idx)
+                            .tag(idx)
+                    }
+                    ForEach(Array(legacyCustomAutomationRuleIds.enumerated()), id: \.element) { off, rid in
+                        automationHubLegacyCarouselPage(ruleId: rid)
+                            .tag(automationHubRules.count + off)
+                    }
+                }
+                .tabViewStyle(.page(indexDisplayMode: .never))
+                .frame(height: AutomationCarouselLayout.hubCarouselTabViewHeight)
+                .padding(.top, -6)
+
+                HStack(spacing: 0) {
+                    ForEach(0..<automationHubCarouselPageCount, id: \.self) { i in
+                        Button {
+                            automationHubCarouselPage = i
+                        } label: {
+                            Capsule()
+                                .fill(i == automationHubCarouselPage ? AppTheme.Colors.primary : AppTheme.Colors.textSecondary.opacity(0.28))
+                                .frame(width: i == automationHubCarouselPage ? 22 : 6, height: 6)
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.horizontal, 4)
+                    }
+                }
+                .animation(nil, value: automationHubCarouselPage)
+                .frame(maxWidth: .infinity)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Automatisations, page \(automationHubCarouselPage + 1) sur \(automationHubCarouselPageCount)")
+            }
+        }
+        .padding(AppTheme.Spacing.md)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AppTheme.Colors.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: AppTheme.Radius.lg, style: .continuous))
+        .onChange(of: automationHubCarouselPageCount) { _, newCount in
+            if newCount == 0 {
+                automationHubCarouselPage = 0
+                return
+            }
+            if automationHubCarouselPage >= newCount {
+                automationHubCarouselPage = newCount - 1
+            }
+        }
+        .onChange(of: automationHubCarouselPage) { _, newPage in
+            guard newPage != lastAutomationHubCarouselHapticPage else { return }
+            lastAutomationHubCarouselHapticPage = newPage
+            let g = UIImpactFeedbackGenerator(style: .light)
+            g.prepare()
+            g.impactOccurred(intensity: 0.85)
+        }
+    }
+
+    @ViewBuilder
+    private func automationHubCarouselPageView(spec: CampaignRuleSpec, pageIndex: Int) -> some View {
+        let trimmedCaption = spec.timingCaption?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let explanation = trimmedCaption.isEmpty ? spec.subtitle : trimmedCaption
+        /// Périmètre / géolocalisation : la carte + le rappel « Notification dans le périmètre »
+        /// (carrousel header) suffisent — on retire le doublon « Entrée dans le périmètre / Le client voit ce message… ».
+        let hidesTitleAndExplanation = spec.id == "locationEntry"
+        ScrollView(.vertical, showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 12) {
+                if !hidesTitleAndExplanation {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(spec.title)
+                            .font(AppTheme.Fonts.subheadline().weight(.semibold))
+                            .foregroundStyle(AppTheme.Colors.textPrimary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Text(explanation)
+                            .font(AppTheme.Fonts.caption2())
+                            .foregroundStyle(AppTheme.Colors.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                if spec.id == "locationEntry" {
+                    ZStack(alignment: .bottom) {
+                        LocalAutomationReliefMapBackdrop(
+                            latitude: dashboardSettings?.locationLat,
+                            longitude: dashboardSettings?.locationLng,
+                            radiusMeters: dashboardSettings?.locationRadiusMeters,
+                            isLiveElevationMapActive: automationHubCarouselPage == pageIndex
+                        )
+                        .frame(height: 214)
+                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        VStack(alignment: .leading, spacing: 8) {
+                            automationPerimeterHubCardCore(spec: spec)
+                        }
+                        .padding(10)
+                    }
+                } else {
+                    automationStandardHubCard(spec: spec, showsRuleTitleHeader: false)
+                }
+            }
+            .padding(.horizontal, 2)
+            .padding(.vertical, 4)
+        }
+    }
+
+    @ViewBuilder
+    private func automationHubLegacyCarouselPage(ruleId: String) -> some View {
+        let row = campaignAutomation.rules?[ruleId]
+        let seg = row?.segment ?? ""
+        let segLabel = campaignSegmentCatalogLabel(for: seg)
+        let tit = row?.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let displayTitle = tit.isEmpty ? "Automatisation personnalisée" : tit
+        let explanation =
+            "Les clients du segment « \(segLabel) » reçoivent ce message lorsque l’automate côté serveur déclenche cette règle (comme une notification système sur le téléphone)."
+        ScrollView(.vertical, showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Règle perso · \(displayTitle)")
+                        .font(AppTheme.Fonts.subheadline().weight(.semibold))
+                        .foregroundStyle(AppTheme.Colors.textPrimary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Text(explanation)
+                        .font(AppTheme.Fonts.caption2())
+                        .foregroundStyle(AppTheme.Colors.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                legacyCustomRuleCard(ruleId: ruleId, showsMetaHeader: false)
+            }
+            .padding(.horizontal, 2)
+            .padding(.vertical, 4)
+        }
+    }
+
+    private func bindingAutomationRuleMessage(_ ruleId: String) -> Binding<String> {
+        let def = defaultAutomationRuleMessages[ruleId] ?? ""
+        return Binding(
+            get: { campaignAutomation.rules?[ruleId]?.message ?? def },
+            set: { v in
+                var rsc = campaignAutomation.rules ?? [:]
+                var row = rsc[ruleId] ?? CampaignAutomationRuleDTO(enabled: false, message: v)
+                if hasCustomNotificationIconFromSettings {
+                    row.enabled = true
+                }
+                row.message = String(v.prefix(200))
+                rsc[ruleId] = row
+                campaignAutomation.rules = rsc
+                scheduleCampaignAutomationSave()
+            }
+        )
+    }
+
+    private func bindingEventAutomationRuleMessage(_ ruleId: String) -> Binding<String> {
+        Binding(
+            get: { campaignAutomation.rules?[ruleId]?.message ?? "" },
+            set: { v in
+                var rsc = campaignAutomation.rules ?? [:]
+                var row = rsc[ruleId] ?? CampaignAutomationRuleDTO(enabled: false, message: "")
+                if hasCustomNotificationIconFromSettings {
+                    row.enabled = true
+                }
+                row.message = String(v.prefix(200))
+                rsc[ruleId] = row
+                campaignAutomation.rules = rsc
+                scheduleCampaignAutomationSave()
+            }
+        )
+    }
+
+    private func automationStandardHubCard(spec: CampaignRuleSpec, showsRuleTitleHeader: Bool = true) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if showsRuleTitleHeader {
+                Text(spec.title)
+                    .font(AppTheme.Fonts.caption2())
+                    .foregroundStyle(AppTheme.Colors.textSecondary)
+                    .lineLimit(2)
+            }
+            automationStandardHubCardCore(spec: spec)
+        }
+    }
+
+    private func automationStandardHubCardCore(spec: CampaignRuleSpec) -> some View {
+        WalletNotificationPreviewBlock(
+            logoURL: notificationPreviewIconURLForView,
+            notificationTitle: spec.effectiveNotificationPreviewTitle,
+            messageText: bindingAutomationRuleMessage(spec.id),
+            messagePlaceholder: "Tapez le message…"
+        )
+    }
+
+    /// Contenu périmètre (notif + carte + interrupteur) sans bandeau titre — pour carrousel avec en-tête dédié.
+    private func automationPerimeterHubCardCore(spec: CampaignRuleSpec) -> some View {
+        let def = defaultAutomationRuleMessages[spec.id] ?? ""
+        return VStack(alignment: .leading, spacing: 8) {
+            WalletNotificationPreviewBlock(
+                logoURL: notificationPreviewIconURLForView,
+                notificationTitle: spec.effectiveNotificationPreviewTitle,
+                messageText: Binding(
+                    get: { perimeterRelevantMessageText },
+                    set: { v in
+                        perimeterRelevantMessageText = String(v.prefix(200))
+                        isPerimeterRelevantTextDirty = true
+                        var rsc = campaignAutomation.rules ?? [:]
+                        var row = rsc["locationEntry"] ?? CampaignAutomationRuleDTO(enabled: false, message: def)
+                        if hasCustomNotificationIconFromSettings {
+                            row.enabled = true
+                        }
+                        rsc["locationEntry"] = row
+                        campaignAutomation.rules = rsc
+                        schedulePerimeterRelevantTextSave()
+                        scheduleCampaignAutomationSave()
+                    }
+                ),
+                messagePlaceholder: "Message à proximité du magasin…"
+            )
+            if #available(iOS 26.0, *) {
+                Button {
+                    showPerimeterMapSheet = true
+                } label: {
+                    Label("Périmètre sur la carte", systemImage: "map")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.glass(.regular))
+                .buttonBorderShape(.roundedRectangle(radius: 14))
+            } else {
+                Button {
+                    showPerimeterMapSheet = true
+                } label: {
+                    Label("Périmètre sur la carte", systemImage: "map")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+    }
+
+    private func legacyCustomRuleCard(ruleId: String, showsMetaHeader: Bool = true) -> some View {
+        let row = campaignAutomation.rules?[ruleId]
+        let seg = row?.segment ?? ""
+        let segLabel = campaignSegmentCatalogLabel(for: seg)
+        let tit = row?.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let displayTitle = tit.isEmpty ? "Automatisation personnalisée" : tit
+        let previewTitle = tit.isEmpty ? "Offre pour vous" : String(tit.prefix(48))
+        return VStack(alignment: .leading, spacing: 8) {
+            if showsMetaHeader {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(displayTitle)
+                        .font(AppTheme.Fonts.caption2().weight(.semibold))
+                        .foregroundStyle(AppTheme.Colors.textSecondary)
+                        .lineLimit(2)
+                    Text(segLabel)
+                        .font(AppTheme.Fonts.caption2())
+                        .foregroundStyle(AppTheme.Colors.textSecondary)
+                        .lineLimit(1)
+                }
+            }
+            WalletNotificationPreviewBlock(
+                logoURL: notificationPreviewIconURLForView,
+                notificationTitle: previewTitle,
+                messageText: bindingAutomationRuleMessage(ruleId),
+                messagePlaceholder: "Message pour ce groupe…"
+            )
         }
     }
 
@@ -891,7 +1339,7 @@ struct CampaignNotificationsView: View {
     private func perimeterAutomationPreviewLine() -> String {
         let t = perimeterRelevantMessageText.trimmingCharacters(in: .whitespacesAndNewlines)
         if !t.isEmpty { return t }
-        return "Message affiché quand un client entre dans la zone autour de votre commerce (Apple Wallet)."
+        return "À proximité du magasin (Wallet)."
     }
 
     private func firstAutomationMessageBody(forFamilyId familyId: String) -> String {
@@ -903,7 +1351,7 @@ struct CampaignNotificationsView: View {
             let m = campaignAutomation.rules?[rule.id]?.message?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             if !m.isEmpty { return String(m.prefix(220)) }
         }
-        if let first = rules.first, let def = defaultRuleMessages[first.id] { return def }
+        if let first = rules.first, let def = defaultAutomationRuleMessages[first.id] { return def }
         return fallbackAutomationCarouselBody()
     }
 
@@ -925,21 +1373,34 @@ struct CampaignNotificationsView: View {
     }
 
     private func isFamilyAutomationActive(carouselFamilyId: String) -> Bool {
+        guard hasCustomNotificationIconFromSettings else { return false }
         let fid = effectiveRulesFamilyId(forCarouselFamilyId: carouselFamilyId)
         guard let family = campaignFamilies.first(where: { $0.id == fid }) else { return false }
-        return family.rules.contains { !$0.id.hasPrefix("_info") && (campaignAutomation.rules?[$0.id]?.enabled == true) }
+        return family.rules.contains { !$0.id.hasPrefix("_info") && ((campaignAutomation.rules?[$0.id]?.enabled) ?? false) }
+    }
+
+    @MainActor
+    private func requireNotificationIconForSending(presentPopup: Bool = true) -> Bool {
+        guard hasCustomNotificationIconFromSettings else {
+            if presentPopup {
+                notificationLogoPopupPresented = true
+            }
+            return false
+        }
+        return true
     }
 
     /// Active ou désactive toutes les règles de la famille (messages défaut si besoin).
     private func setFamilyAutomationEnabled(carouselFamilyId: String, enabled: Bool) {
+        if enabled, !requireNotificationIconForSending() { return }
         let fid = effectiveRulesFamilyId(forCarouselFamilyId: carouselFamilyId)
         guard let family = campaignFamilies.first(where: { $0.id == fid }) else { return }
         var r = campaignAutomation.rules ?? [:]
         for rule in family.rules where !rule.id.hasPrefix("_info") {
-            var row = r[rule.id] ?? CampaignAutomationRuleDTO(enabled: false, message: defaultRuleMessages[rule.id] ?? "")
+            var row = r[rule.id] ?? CampaignAutomationRuleDTO(enabled: false, message: defaultAutomationRuleMessages[rule.id] ?? "")
             row.enabled = enabled
             if enabled, row.message == nil || row.message?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true {
-                row.message = defaultRuleMessages[rule.id] ?? row.message
+                row.message = defaultAutomationRuleMessages[rule.id] ?? row.message
             }
             r[rule.id] = row
         }
@@ -957,11 +1418,14 @@ struct CampaignNotificationsView: View {
             get: {
                 let m = campaignAutomation.rules?[ruleId]?.message?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 if !m.isEmpty { return String(m.prefix(200)) }
-                return defaultRuleMessages[ruleId] ?? ""
+                return defaultAutomationRuleMessages[ruleId] ?? ""
             },
             set: { v in
                 var r = campaignAutomation.rules ?? [:]
                 var row = r[ruleId] ?? CampaignAutomationRuleDTO(enabled: false, message: "")
+                if hasCustomNotificationIconFromSettings {
+                    row.enabled = true
+                }
                 row.message = String(v.prefix(200))
                 r[ruleId] = row
                 campaignAutomation.rules = r
@@ -980,7 +1444,16 @@ struct CampaignNotificationsView: View {
                 let flattened = v.replacingOccurrences(of: "\n", with: "")
                 perimeterRelevantMessageText = String(flattened.prefix(200))
                 isPerimeterRelevantTextDirty = true
+                var rsc = campaignAutomation.rules ?? [:]
+                let def = defaultAutomationRuleMessages["locationEntry"] ?? ""
+                var row = rsc["locationEntry"] ?? CampaignAutomationRuleDTO(enabled: false, message: def)
+                if hasCustomNotificationIconFromSettings {
+                    row.enabled = true
+                }
+                rsc["locationEntry"] = row
+                campaignAutomation.rules = rsc
                 schedulePerimeterRelevantTextSave()
+                scheduleCampaignAutomationSave()
             }
         )
     }
@@ -992,7 +1465,6 @@ struct CampaignNotificationsView: View {
 
     @ViewBuilder
     private func automationCarouselPageStack(
-        pageIndex: Int,
         familyIdForPreview: String,
         accent: Color,
         summaryFamilyId: String
@@ -1019,9 +1491,7 @@ struct CampaignNotificationsView: View {
                 senderTitle: effectiveCampaignNotificationSenderLine,
                 messageBody: automationCarouselSampleBody(forFamilyId: familyIdForPreview),
                 messageBinding: carouselMessageBinding(ruleId: ruleId),
-                logoURL: notificationPreviewIconURLForView,
-                pageIndex: pageIndex,
-                currentPage: automationCarouselPage
+                logoURL: notificationPreviewIconURLForView
             )
             .id(notificationIconReloadNonce)
             .padding(.horizontal, 10)
@@ -1035,7 +1505,7 @@ struct CampaignNotificationsView: View {
     }
 
     @ViewBuilder
-    private func automationPerimeterPageStack(pageIndex: Int, carouselSelection: Int) -> some View {
+    private func automationPerimeterPageStack(isLiveElevationMapActive: Bool) -> some View {
         let trimmedPerimeter = perimeterRelevantMessageText.trimmingCharacters(in: .whitespacesAndNewlines)
         let hasPerimeterMessage = !trimmedPerimeter.isEmpty
         let rulesActive = isFamilyAutomationActive(carouselFamilyId: "local")
@@ -1046,8 +1516,8 @@ struct CampaignNotificationsView: View {
         let corner = RoundedRectangle(cornerRadius: AppTheme.Radius.lg, style: .continuous)
         ZStack(alignment: .top) {
             localWalletMapSection(
-                cardHeight: 236,
-                isLiveElevationMapActive: carouselSelection == pageIndex,
+                cardHeight: AutomationCarouselLayout.summaryCardHeight,
+                isLiveElevationMapActive: isLiveElevationMapActive,
                 showsActivé: showsActivé,
                 isButtonEnabled: perimeterButtonEnabled,
                 onToggleActive: {
@@ -1071,8 +1541,6 @@ struct CampaignNotificationsView: View {
                 messageBinding: carouselPerimeterMessageBinding(),
                 textFieldPlaceholder: "Message périmètre (géolocalisation Wallet)…",
                 logoURL: notificationPreviewIconURLForView,
-                pageIndex: pageIndex,
-                currentPage: automationCarouselPage,
                 useMultilineMessageField: false,
                 onSubmitActivate: {
                     let msg = perimeterRelevantMessageText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1101,14 +1569,13 @@ struct CampaignNotificationsView: View {
 
     /// Carrousel : notif liquid glass superposée à la carte, swipe fluide + indicateurs.
     private var automationsCarouselBlock: some View {
-        let tabH: CGFloat = 318
+        let tabH = AutomationCarouselLayout.tabViewHeight
         return VStack(alignment: .leading, spacing: 12) {
             TabView(selection: $automationCarouselPage) {
-                automationPerimeterPageStack(pageIndex: 0, carouselSelection: automationCarouselPage)
+                automationPerimeterPageStack(isLiveElevationMapActive: automationCarouselPage == 0)
                     .tag(0)
                 ForEach(Array(predefinedAutomationFamilies.enumerated()), id: \.element.id) { index, family in
                     automationCarouselPageStack(
-                        pageIndex: index + 1,
                         familyIdForPreview: family.id,
                         accent: familyThemeColor(family.id),
                         summaryFamilyId: family.id
@@ -1124,7 +1591,7 @@ struct CampaignNotificationsView: View {
             HStack(spacing: 0) {
                 ForEach(0..<automationCarouselPageCount, id: \.self) { i in
                     Button {
-                        withAnimation(.easeOut(duration: 0.18)) { automationCarouselPage = i }
+                        automationCarouselPage = i
                     } label: {
                         Capsule()
                             .fill(i == automationCarouselPage ? AppTheme.Colors.primary : AppTheme.Colors.textSecondary.opacity(0.28))
@@ -1134,6 +1601,7 @@ struct CampaignNotificationsView: View {
                     .padding(.horizontal, 4)
                 }
             }
+            .animation(nil, value: automationCarouselPage)
             .frame(maxWidth: .infinity)
             .accessibilityElement(children: .combine)
             .accessibilityLabel("Automatisations, page \(automationCarouselPage + 1) sur \(automationCarouselPageCount)")
@@ -1147,7 +1615,9 @@ struct CampaignNotificationsView: View {
         .onChange(of: automationCarouselPage) { _, newPage in
             guard newPage != lastCarouselHapticPage else { return }
             lastCarouselHapticPage = newPage
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            let g = UIImpactFeedbackGenerator(style: .light)
+            g.prepare()
+            g.impactOccurred(intensity: 0.85)
         }
     }
 
@@ -1185,23 +1655,87 @@ struct CampaignNotificationsView: View {
         }
     }
 
+    /// Bande colorée bas de carte (carrousel) — remplace les anciennes images `AutoRelance` / `anniv` (plus de decode PNG, plus fluide).
+    private func automationCarouselSummaryStripeColors(familyId: String, accent: Color) -> [Color] {
+        switch familyId {
+        case "birthday":
+            return [
+                Color(red: 0.32, green: 0.06, blue: 0.18),
+                Color(red: 0.52, green: 0.12, blue: 0.30),
+                Color(red: 0.78, green: 0.22, blue: 0.44),
+                Color(red: 0.95, green: 0.42, blue: 0.55),
+                Color(red: 0.99, green: 0.68, blue: 0.76)
+            ]
+        case "reactivation":
+            return [
+                Color(red: 0.04, green: 0.12, blue: 0.20),
+                Color(red: 0.08, green: 0.26, blue: 0.36),
+                Color(red: 0.10, green: 0.42, blue: 0.48),
+                Color(red: 0.16, green: 0.55, blue: 0.52),
+                Color(red: 0.92, green: 0.58, blue: 0.16)
+            ]
+        default:
+            return [
+                accent.opacity(0.88),
+                accent.opacity(0.55),
+                AppTheme.Colors.primary.opacity(0.42),
+                Color(red: 0.10, green: 0.11, blue: 0.14)
+            ]
+        }
+    }
+
+    @ViewBuilder
+    private func automationSummaryCardBackground(
+        familyId: String,
+        accent: Color,
+        corner: CGFloat,
+        cardHeight: CGFloat
+    ) -> some View {
+        let stripeH = min(172, cardHeight * 0.44)
+        ZStack(alignment: .top) {
+            RoundedRectangle(cornerRadius: corner, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color(red: 0.09, green: 0.10, blue: 0.12),
+                            AppTheme.Colors.cardBackground.opacity(0.94)
+                        ],
+                        startPoint: .top,
+                        endPoint: .init(x: 0.5, y: 0.58)
+                    )
+                )
+            LinearGradient(
+                colors: [Color.black.opacity(0.52), Color.black.opacity(0.18), Color.clear],
+                startPoint: .top,
+                endPoint: .center
+            )
+            VStack(spacing: 0) {
+                Spacer(minLength: 0)
+                LinearGradient(
+                    colors: automationCarouselSummaryStripeColors(familyId: familyId, accent: accent),
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+                .frame(height: stripeH)
+                .mask(
+                    LinearGradient(
+                        colors: [.clear, .black],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
+    }
+
     private func automationSummaryCard(
         accent: Color,
         isActive: Bool,
         familyId: String,
         onToggleActive: @escaping () -> Void
     ) -> some View {
-        let backgroundAssetName: String? = {
-            switch familyId {
-            case "reactivation":
-                return "AutoRelance"
-            case "birthday":
-                return "anniv"
-            default:
-                return nil
-            }
-        }()
-        let cardHeight: CGFloat = 236
+        let cardHeight = AutomationCarouselLayout.summaryCardHeight
         let corner = AppTheme.Radius.lg
         return VStack(alignment: .leading, spacing: 10) {
             Spacer(minLength: 52)
@@ -1228,27 +1762,12 @@ struct CampaignNotificationsView: View {
         .padding(14)
         .frame(maxWidth: .infinity, minHeight: cardHeight, maxHeight: cardHeight, alignment: .top)
         .background {
-            if let backgroundAssetName {
-                Image(backgroundAssetName)
-                    .resizable()
-                    .scaledToFill()
-            } else {
-                ZStack(alignment: .top) {
-                    RoundedRectangle(cornerRadius: corner, style: .continuous)
-                        .fill(
-                            LinearGradient(
-                                colors: [accent.opacity(0.34), Color.black.opacity(0.22), AppTheme.Colors.cardBackground],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
-                    LinearGradient(
-                        colors: [Color.black.opacity(0.68), Color.black.opacity(0.3), Color.clear],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                }
-            }
+            automationSummaryCardBackground(
+                familyId: familyId,
+                accent: accent,
+                corner: corner,
+                cardHeight: cardHeight
+            )
         }
         .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
         .overlay(
@@ -1265,64 +1784,27 @@ struct CampaignNotificationsView: View {
         }
     }
 
-    private var customRuleIds: [String] {
-        (campaignAutomation.rules ?? [:]).keys.filter { $0.hasPrefix("custom_") }.sorted()
-    }
-
     private var eventRuleIds: [String] {
         (campaignAutomation.rules ?? [:]).keys.filter { $0.hasPrefix("event_") }.sorted()
-    }
-
-    private var customAutomationsSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .center) {
-                Text("Automatisations personnalisées")
-                    .font(AppTheme.Fonts.headline())
-                    .foregroundStyle(AppTheme.Colors.textPrimary)
-                Spacer(minLength: 8)
-                if #available(iOS 26.0, *) {
-                    Button {
-                        prepareNewCustomAutomation()
-                    } label: {
-                        Label("Nouvelle", systemImage: "plus.circle.fill")
-                    }
-                    .buttonStyle(.glass(.regular))
-                    .buttonBorderShape(.capsule)
-                    .controlSize(.large)
-                } else {
-                    Button {
-                        prepareNewCustomAutomation()
-                    } label: {
-                        Label("Nouvelle", systemImage: "plus.circle.fill")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(AppTheme.Colors.primary)
-                }
-            }
-            if !customRuleIds.isEmpty {
-                ForEach(customRuleIds, id: \.self) { rid in
-                    customAutomationRow(ruleId: rid)
-                }
-            }
-        }
-        .padding(AppTheme.Spacing.md)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(AppTheme.Colors.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: AppTheme.Radius.lg, style: .continuous))
     }
 
     private var eventAutomationsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .center) {
-                Text("Créer une automatisation")
-                    .font(AppTheme.Fonts.headline())
-                    .foregroundStyle(AppTheme.Colors.textPrimary)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Programmation")
+                        .font(AppTheme.Fonts.headline())
+                        .foregroundStyle(AppTheme.Colors.textPrimary)
+                    Text("Rappels à une date précise ou quand le client atteint un moment clé (carte ajoutée, palier, etc.).")
+                        .font(AppTheme.Fonts.caption2())
+                        .foregroundStyle(AppTheme.Colors.textSecondary)
+                }
                 Spacer(minLength: 8)
                 if #available(iOS 26.0, *) {
                     Button {
                         prepareNewEventAutomation()
                     } label: {
-                        Label("Nouvelle", systemImage: "plus.circle.fill")
+                        Label("Ajouter", systemImage: "calendar.badge.plus")
                     }
                     .buttonStyle(.glass(.regular))
                     .buttonBorderShape(.capsule)
@@ -1331,15 +1813,17 @@ struct CampaignNotificationsView: View {
                     Button {
                         prepareNewEventAutomation()
                     } label: {
-                        Label("Nouvelle", systemImage: "plus.circle.fill")
+                        Label("Ajouter", systemImage: "calendar.badge.plus")
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(AppTheme.Colors.primary)
                 }
             }
             if !eventRuleIds.isEmpty {
-                ForEach(eventRuleIds, id: \.self) { rid in
-                    eventAutomationRow(ruleId: rid)
+                VStack(alignment: .leading, spacing: 14) {
+                    ForEach(eventRuleIds, id: \.self) { rid in
+                        eventAutomationRow(ruleId: rid)
+                    }
                 }
             }
         }
@@ -1349,211 +1833,64 @@ struct CampaignNotificationsView: View {
         .clipShape(RoundedRectangle(cornerRadius: AppTheme.Radius.lg, style: .continuous))
     }
 
-    private func customAutomationRow(ruleId: String) -> some View {
-        let rawTitle = campaignAutomation.rules?[ruleId]?.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let displayTitle = rawTitle.isEmpty ? "Automatisation" : rawTitle
-        let seg = campaignAutomation.rules?[ruleId]?.segment ?? ""
-        let segLabel = manualSegmentChoices.first(where: { $0.key == seg })?.label ?? seg
-        return HStack(alignment: .center, spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(displayTitle)
-                    .font(AppTheme.Fonts.subheadline())
-                    .fontWeight(.medium)
-                HStack(spacing: 6) {
-                    Text(segLabel)
-                        .font(AppTheme.Fonts.caption())
-                        .foregroundStyle(AppTheme.Colors.textSecondary)
-                    if let n = segmentCount(for: seg), !seg.isEmpty {
-                        Text("\(n)")
-                            .font(AppTheme.Fonts.caption())
-                            .fontWeight(.semibold)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .background(AppTheme.Colors.primary.opacity(0.15))
-                            .clipShape(Capsule())
-                    }
-                }
-            }
-            Spacer(minLength: 8)
-            Toggle("", isOn: Binding(
-                get: { campaignAutomation.rules?[ruleId]?.enabled ?? false },
-                set: { on in
-                    var r = campaignAutomation.rules ?? [:]
-                    var row = r[ruleId] ?? CampaignAutomationRuleDTO(enabled: false, message: "")
-                    row.enabled = on
-                    r[ruleId] = row
-                    campaignAutomation.rules = r
-                    scheduleCampaignAutomationSave()
-                }
-            ))
-            .labelsHidden()
-            .tint(AppTheme.Colors.primary)
-            if #available(iOS 26.0, *) {
-                Button {
-                    openEditCustomAutomation(ruleId: ruleId)
-                } label: {
-                    Image(systemName: "pencil")
-                }
-                .buttonStyle(.glass(.regular))
-                .buttonBorderShape(.circle)
-                .controlSize(.small)
-                Button {
-                    customRulePendingDelete = ruleId
-                } label: {
-                    Image(systemName: "trash")
-                }
-                .buttonStyle(.glass(.regular))
-                .buttonBorderShape(.circle)
-                .controlSize(.small)
-            } else {
-                Button {
-                    openEditCustomAutomation(ruleId: ruleId)
-                } label: {
-                    Image(systemName: "pencil")
-                }
-                .buttonStyle(.bordered)
-                Button {
-                    customRulePendingDelete = ruleId
-                } label: {
-                    Image(systemName: "trash")
-                }
-                .buttonStyle(.bordered)
-            }
-        }
-        .padding(.vertical, 6)
-    }
-
-    private var customAutomationEditorSheet: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    TextField("Nom (ex. : Relance VIP)", text: $customDraftTitle)
-                    Picker("Segment cible", selection: $customDraftSegment) {
-                        ForEach(manualSegmentChoices, id: \.key) { c in
-                            Text(c.label).tag(c.key)
-                        }
-                    }
-                    .onChange(of: customDraftSegment) { _, newSeg in
-                        if customDraftMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                           let hint = defaultMessages[newSeg] {
-                            customDraftMessage = hint
-                        }
-                    }
-                } header: {
-                    Text("Règle")
-                }
-                Section {
-                    VStack(alignment: .leading, spacing: 8) {
-                        TextEditor(text: $customDraftMessage)
-                            .frame(minHeight: 140)
-                        Text("\(customDraftMessage.count)/200 caractères max. côté serveur.")
-                            .font(AppTheme.Fonts.caption2())
-                            .foregroundStyle(AppTheme.Colors.textSecondary)
-                    }
-                } header: {
-                    Text("Message sur le pass")
-                }
-            }
-            .navigationTitle(customRuleBeingEdited == nil ? "Nouvelle automatisation" : "Modifier")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Annuler") {
-                        auxiliarySheet = nil
-                    }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Enregistrer") {
-                        saveCustomAutomationDraft()
-                    }
-                    .fontWeight(.semibold)
-                    .disabled(!canSaveCustomDraft)
-                }
-            }
-        }
-    }
-
     private var eventAutomationEditorSheet: some View {
         NavigationStack {
             Form {
                 Section {
-                    TextField("Décrivez l’automatisation souhaitée…", text: $eventDraftAIInstruction, axis: .vertical)
-                        .lineLimit(2 ... 4)
-                    Button {
-                        Task { await parseEventDraftWithAI() }
-                    } label: {
-                        HStack {
-                            if isEventDraftAIParsing { ProgressView() }
-                            Image(systemName: "wand.and.stars")
-                            Text(isEventDraftAIParsing ? "Analyse IA…" : "Générer la règle avec IA")
-                                .fontWeight(.semibold)
-                        }
-                    }
-                    .disabled(isEventDraftAIParsing || eventDraftAIInstruction.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                } header: {
-                    Text("Assistant IA")
-                }
-
-                Section {
-                    TextField("Nom (ex. : Bienvenue +2min)", text: $eventDraftTitle)
-                    Picker("Déclencheur", selection: $eventDraftPreset) {
-                        ForEach(EventPreset.allCases, id: \.self) { preset in
-                            Text(preset.label).tag(preset)
+                    TextField("Nom", text: $eventDraftTitle)
+                    Picker("Type", selection: $scheduleKind) {
+                        ForEach(ScheduledNotificationKind.allCases) { k in
+                            Text(k.label).tag(k)
                         }
                     }
                     .pickerStyle(.menu)
-                    .onChange(of: eventDraftPreset) { _, preset in
-                        guard preset == .inactiveDays else { return }
-                        let t = eventDraftMessage.trimmingCharacters(in: .whitespacesAndNewlines)
-                        if t.isEmpty || t == "Bienvenue ! Votre carte est prête." {
-                            eventDraftMessage = defaultInactiveRelancePromoMessage
-                        }
-                    }
 
-                    if eventDraftPreset == .inactiveDays {
-                        Stepper(value: $eventDraftInactiveDays, in: 1 ... 365, step: 1) {
-                            Text("Inactif depuis \(eventDraftInactiveDays) jour(s)")
+                    if scheduleKind == .oneTime {
+                        DatePicker(
+                            "Date et heure",
+                            selection: $oneShotScheduleDate,
+                            displayedComponents: [.date, .hourAndMinute]
+                        )
+                    } else {
+                        Stepper(value: $eventDraftScheduleHour, in: 0 ... 23, step: 1) {
+                            Text("Heure : \(String(format: "%02d", eventDraftScheduleHour))h")
                         }
-                    }
-
-                    if eventDraftPreset == .dailyAt {
-                        HStack(spacing: 8) {
-                            Stepper(value: $eventDraftScheduleHour, in: 0 ... 23, step: 1) {
-                                Text("Heure: \(String(format: "%02d", eventDraftScheduleHour))h")
-                            }
+                        Stepper(value: $eventDraftScheduleMinute, in: 0 ... 59, step: 1) {
+                            Text("Minutes : \(String(format: "%02d", eventDraftScheduleMinute))")
                         }
-                        HStack(spacing: 8) {
-                            Stepper(value: $eventDraftScheduleMinute, in: 0 ... 59, step: 5) {
-                                Text("Minute: \(String(format: "%02d", eventDraftScheduleMinute))")
-                            }
-                        }
-                    }
-
-                    if eventDraftPreset == .custom {
-                        TextField("Clé événement perso (ex: birthday_7d)", text: $eventDraftCustomKey)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
                     }
 
                     Stepper(value: $eventDraftDelayMinutes, in: 1 ... 120, step: 1) {
-                        Text("Délai : \(eventDraftDelayMinutes) minute(s)")
+                        Text("+\(eventDraftDelayMinutes) min après l’instant")
                     }
                 } header: {
-                    Text("Règle")
+                    Text("Quand")
+                } footer: {
+                    Text("Heure stockée en UTC (fuseau de l’appareil). Tous les membres avec la carte.")
+                        .font(AppTheme.Fonts.caption2())
                 }
+
                 Section {
                     VStack(alignment: .leading, spacing: 8) {
-                        TextEditor(text: $eventDraftMessage)
-                            .frame(minHeight: 140)
-                        Text("\(eventDraftMessage.count)/200 caractères max. côté serveur.")
+                        TextField(
+                            "Message",
+                            text: Binding(
+                                get: { eventDraftMessage },
+                                set: { eventDraftMessage = String($0.prefix(200)) }
+                            ),
+                            axis: .vertical
+                        )
+                        .lineLimit(4 ... 12)
+                        .textFieldStyle(.plain)
+                        Text("\(eventDraftMessage.count)/200")
                             .font(AppTheme.Fonts.caption2())
                             .foregroundStyle(AppTheme.Colors.textSecondary)
                     }
                 } header: {
-                    Text("Message sur le pass")
+                    Text("Message")
                 }
             }
-            .navigationTitle(eventAutomationsRuleBeingEdited == nil ? "Nouvelle automatisation événementielle" : "Modifier")
+            .navigationTitle(eventAutomationsRuleBeingEdited == nil ? "Programmation" : "Modifier")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -1595,52 +1932,29 @@ struct CampaignNotificationsView: View {
     private var canSaveEventDraft: Bool {
         let msg = eventDraftMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         let tit = eventDraftTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        if eventDraftPreset == .custom {
-            let custom = sanitizeCustomEventKey(eventDraftCustomKey)
-            return !msg.isEmpty && !tit.isEmpty && !custom.isEmpty && eventDraftDelayMinutes > 0
-        }
         return !msg.isEmpty && !tit.isEmpty && eventDraftDelayMinutes > 0
-    }
-
-    private var canSaveCustomDraft: Bool {
-        let msg = customDraftMessage.trimmingCharacters(in: .whitespacesAndNewlines)
-        let tit = customDraftTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !msg.isEmpty && !customDraftSegment.isEmpty && !tit.isEmpty
-    }
-
-    private func prepareNewCustomAutomation() {
-        customRuleBeingEdited = nil
-        customDraftTitle = ""
-        let firstSeg = manualSegmentChoices.first?.key ?? "inactive14"
-        customDraftSegment = firstSeg
-        customDraftMessage = defaultMessages[firstSeg] ?? ""
-        auxiliarySheet = .customAutomation
     }
 
     private func prepareNewEventAutomation() {
         eventAutomationsRuleBeingEdited = nil
+        scheduleKind = .daily
+        oneShotScheduleDate = Calendar.current.date(byAdding: .hour, value: 2, to: Date()) ?? Date()
         eventDraftTitle = ""
-        eventDraftEventType = "member_created"
-        eventDraftPreset = .memberCreated
-        eventDraftInactiveDays = 30
+        eventDraftDelayMinutes = 1
+        eventDraftMessage = ""
         eventDraftScheduleHour = 10
         eventDraftScheduleMinute = 0
-        eventDraftCustomKey = ""
-        eventDraftDelayMinutes = 2
-        eventDraftMessage = "Bienvenue ! Votre carte est prête."
-        eventDraftAIInstruction = ""
         auxiliarySheet = .eventAutomation
     }
 
     private func openEditEventAutomation(ruleId: String) {
+        guard let row = campaignAutomation.rules?[ruleId],
+              eventSupportsSchedulingEditor(row.eventType) else { return }
         eventAutomationsRuleBeingEdited = ruleId
-        let row = campaignAutomation.rules?[ruleId]
-        eventDraftTitle = row?.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        eventDraftEventType = row?.eventType ?? "member_created"
-        hydrateEventDraft(from: eventDraftEventType)
-        eventDraftDelayMinutes = row?.delayMinutes ?? 2
-        eventDraftMessage = row?.message ?? ""
-        eventDraftAIInstruction = ""
+        eventDraftTitle = row.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        hydrateScheduleDraft(from: row.eventType ?? "")
+        eventDraftDelayMinutes = max(1, row.delayMinutes ?? 1)
+        eventDraftMessage = row.message ?? ""
         auxiliarySheet = .eventAutomation
     }
 
@@ -1648,14 +1962,14 @@ struct CampaignNotificationsView: View {
         let msg = String(eventDraftMessage.prefix(200)).trimmingCharacters(in: .whitespacesAndNewlines)
         let tit = String(eventDraftTitle.prefix(80)).trimmingCharacters(in: .whitespacesAndNewlines)
         let delay = max(1, Int(eventDraftDelayMinutes))
-        let et = resolvedEventTypeForDraft()
+        let et = builtScheduledEventTypeTokenForSave()
         guard !msg.isEmpty, !tit.isEmpty, !et.isEmpty else { return }
 
         let key = eventAutomationsRuleBeingEdited ?? "event_\(UUID().uuidString)"
         var r = campaignAutomation.rules ?? [:]
         let existing = r[key]
         let row = CampaignAutomationRuleDTO(
-            enabled: existing?.enabled ?? true,
+            enabled: hasCustomNotificationIconFromSettings ? (existing?.enabled ?? false) : false,
             message: msg,
             segment: nil,
             title: tit,
@@ -1677,157 +1991,197 @@ struct CampaignNotificationsView: View {
     }
 
     private func eventAutomationRow(ruleId: String) -> some View {
-        let rawTitle = campaignAutomation.rules?[ruleId]?.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let displayTitle = rawTitle.isEmpty ? "Automatisation événementielle" : rawTitle
-        let delay = campaignAutomation.rules?[ruleId]?.delayMinutes ?? 2
-        let eventType = campaignAutomation.rules?[ruleId]?.eventType ?? "member_created"
-        return HStack(alignment: .center, spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(displayTitle)
-                    .font(AppTheme.Fonts.subheadline())
-                    .fontWeight(.medium)
+        let delay = campaignAutomation.rules?[ruleId]?.delayMinutes ?? 1
+        let eventType = campaignAutomation.rules?[ruleId]?.eventType ?? ""
+        let canEditSchedule = eventSupportsSchedulingEditor(eventType)
+        return VStack(alignment: .leading, spacing: 8) {
+            if canEditSchedule {
                 HStack(spacing: 6) {
                     Text(readableEventLabel(for: eventType))
-                        .font(AppTheme.Fonts.caption())
+                        .font(AppTheme.Fonts.caption2())
                         .foregroundStyle(AppTheme.Colors.textSecondary)
                     Text("+\(delay) min")
-                        .font(AppTheme.Fonts.caption())
+                        .font(AppTheme.Fonts.caption2())
                         .fontWeight(.semibold)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 3)
-                        .background(AppTheme.Colors.primary.opacity(0.15))
+                        .background(AppTheme.Colors.primary.opacity(0.12))
                         .clipShape(Capsule())
                 }
-            }
-            Spacer(minLength: 8)
-            Toggle("", isOn: Binding(
-                get: { campaignAutomation.rules?[ruleId]?.enabled ?? false },
-                set: { on in
-                    var r = campaignAutomation.rules ?? [:]
-                    var row = r[ruleId] ?? CampaignAutomationRuleDTO(enabled: false, message: "")
-                    row.enabled = on
-                    r[ruleId] = row
-                    campaignAutomation.rules = r
-                    scheduleCampaignAutomationSave()
-                }
-            ))
-            .labelsHidden()
-            .tint(AppTheme.Colors.primary)
-
-            if #available(iOS 26.0, *) {
-                Button {
-                    openEditEventAutomation(ruleId: ruleId)
-                } label: {
-                    Image(systemName: "pencil")
-                }
-                .buttonStyle(.glass(.regular))
-                .buttonBorderShape(.circle)
-                .controlSize(.small)
-
-                Button {
-                    eventRulePendingDelete = ruleId
-                } label: {
-                    Image(systemName: "trash")
-                }
-                .buttonStyle(.glass(.regular))
-                .buttonBorderShape(.circle)
-                .controlSize(.small)
             } else {
-                Button {
-                    openEditEventAutomation(ruleId: ruleId)
-                } label: {
-                    Image(systemName: "pencil")
-                }
-                .buttonStyle(.bordered)
-
-                Button {
-                    eventRulePendingDelete = ruleId
-                } label: {
-                    Image(systemName: "trash")
-                }
-                .buttonStyle(.bordered)
+                Text("Ancienne règle · supprimez pour recréer")
+                    .font(AppTheme.Fonts.caption2())
+                    .foregroundStyle(AppTheme.Colors.textSecondary)
+                    .lineLimit(2)
             }
+            WalletNotificationPreviewBlock(
+                logoURL: notificationPreviewIconURLForView,
+                notificationTitle: eventNotificationPreviewTitle(ruleId: ruleId),
+                messageText: bindingEventAutomationRuleMessage(ruleId),
+                messagePlaceholder: "Tapez le message…",
+                footer: {
+                    HStack(spacing: 10) {
+                        Spacer(minLength: 0)
+                        if #available(iOS 26.0, *) {
+                            if canEditSchedule {
+                                Button {
+                                    openEditEventAutomation(ruleId: ruleId)
+                                } label: {
+                                    Image(systemName: "calendar")
+                                }
+                                .buttonStyle(.glass(.regular))
+                                .buttonBorderShape(.circle)
+                                .controlSize(.small)
+                                .accessibilityLabel("Modifier la date et l’heure")
+                            }
+                            Button {
+                                eventRulePendingDelete = ruleId
+                            } label: {
+                                Image(systemName: "trash")
+                            }
+                            .buttonStyle(.glass(.regular))
+                            .buttonBorderShape(.circle)
+                            .controlSize(.small)
+                            .accessibilityLabel("Supprimer la programmation")
+                        } else {
+                            if canEditSchedule {
+                                Button {
+                                    openEditEventAutomation(ruleId: ruleId)
+                                } label: {
+                                    Image(systemName: "calendar")
+                                }
+                                .buttonStyle(.bordered)
+                                .accessibilityLabel("Modifier la date et l’heure")
+                            }
+                            Button {
+                                eventRulePendingDelete = ruleId
+                            } label: {
+                                Image(systemName: "trash")
+                            }
+                            .buttonStyle(.bordered)
+                            .accessibilityLabel("Supprimer la programmation")
+                        }
+                    }
+                }
+            )
         }
-        .padding(.vertical, 6)
+        .padding(.vertical, 4)
     }
 
-    private enum EventPreset: String, CaseIterable {
-        case memberCreated
-        case firstCardScan
-        case rewardUnlocked
-        case inactiveDays
-        case dailyAt
-        case custom
-
-        var label: String {
-            switch self {
-            case .memberCreated: return "Carte ajoutée"
-            case .firstCardScan: return "Premier scan"
-            case .rewardUnlocked: return "Récompense débloquée"
-            case .inactiveDays: return "Inactif depuis X jours"
-            case .dailyAt: return "Tous les jours à heure fixe"
-            case .custom: return "Événement personnalisé"
-            }
+    /// Titre court dans l’aperçu (nom de règle du commerçant, sinon libellé selon le type d’événement).
+    private func eventNotificationPreviewTitle(ruleId: String) -> String {
+        if let t = campaignAutomation.rules?[ruleId]?.title?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty {
+            return String(t.prefix(56))
         }
-    }
-
-    private func hydrateEventDraft(from rawEventType: String) {
-        let raw = rawEventType.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if raw.hasPrefix("inactive_days:") {
-            eventDraftPreset = .inactiveDays
-            let value = raw.replacingOccurrences(of: "inactive_days:", with: "")
-            eventDraftInactiveDays = max(1, min(365, Int(value) ?? 30))
-            return
-        }
-        if raw.hasPrefix("daily_at:") {
-            eventDraftPreset = .dailyAt
-            let value = raw.replacingOccurrences(of: "daily_at:", with: "")
-            let comps = value.split(separator: ":")
-            if comps.count == 2 {
-                eventDraftScheduleHour = max(0, min(23, Int(comps[0]) ?? 10))
-                eventDraftScheduleMinute = max(0, min(59, Int(comps[1]) ?? 0))
-            }
-            return
-        }
+        let raw = (campaignAutomation.rules?[ruleId]?.eventType ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
         switch raw {
         case "member_created":
-            eventDraftPreset = .memberCreated
+            return "Bienvenue"
         case "first_scan":
-            eventDraftPreset = .firstCardScan
+            return "Première visite"
         case "reward_unlocked":
-            eventDraftPreset = .rewardUnlocked
+            return "Récompense débloquée"
         default:
-            eventDraftPreset = .custom
-            eventDraftCustomKey = rawEventType
+            break
         }
+        if raw.hasPrefix("inactive_days:") { return "Ça fait un moment" }
+        if raw.hasPrefix("daily_at:") { return "Rappel du jour" }
+        if raw.hasPrefix("once_at:") { return "Message programmé" }
+        return "Notification"
     }
 
-    private func sanitizeCustomEventKey(_ raw: String) -> String {
-        let filtered = raw.lowercased().map { ch -> Character in
-            if ch.isLetter || ch.isNumber || ch == "_" || ch == "-" { return ch }
-            return "_"
-        }
-        let collapsed = String(filtered)
-            .trimmingCharacters(in: CharacterSet(charactersIn: "_- "))
-        return String(collapsed.prefix(48))
+    private func eventSupportsSchedulingEditor(_ eventType: String?) -> Bool {
+        let t = eventType?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        return t.hasPrefix("daily_at:") || t.hasPrefix("once_at:")
     }
 
-    private func resolvedEventTypeForDraft() -> String {
-        switch eventDraftPreset {
-        case .memberCreated:
-            return "member_created"
-        case .firstCardScan:
-            return "first_scan"
-        case .rewardUnlocked:
-            return "reward_unlocked"
-        case .inactiveDays:
-            return "inactive_days:\(max(1, min(365, eventDraftInactiveDays)))"
-        case .dailyAt:
-            let hh = String(format: "%02d", max(0, min(23, eventDraftScheduleHour)))
-            let mm = String(format: "%02d", max(0, min(59, eventDraftScheduleMinute)))
-            return "daily_at:\(hh):\(mm)"
-        case .custom:
-            return sanitizeCustomEventKey(eventDraftCustomKey)
+    private func dailyAtTokenFromLocal(hour: Int, minute: Int) -> String {
+        let h = max(0, min(23, hour))
+        let m = max(0, min(59, minute))
+        guard let localDate = Calendar.current.date(bySettingHour: h, minute: m, second: 0, of: Date()) else {
+            return "daily_at:10:00"
+        }
+        var utcCal = Calendar(identifier: .gregorian)
+        utcCal.timeZone = TimeZone(secondsFromGMT: 0)!
+        let c = utcCal.dateComponents([.hour, .minute], from: localDate)
+        let uh = max(0, min(23, c.hour ?? 10))
+        let um = max(0, min(59, c.minute ?? 0))
+        return String(format: "daily_at:%02d:%02d", uh, um)
+    }
+
+    private func localComponentsFromDailyUTC(_ token: String) -> (hour: Int, minute: Int)? {
+        let t = token.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard t.hasPrefix("daily_at:") else { return nil }
+        let rest = String(t.dropFirst(9))
+        let parts = rest.split(separator: ":")
+        guard parts.count == 2, let uh = Int(parts[0]), let um = Int(parts[1]) else { return nil }
+        var utcCal = Calendar(identifier: .gregorian)
+        utcCal.timeZone = TimeZone(secondsFromGMT: 0)!
+        guard let utcDate = utcCal.date(bySettingHour: uh, minute: um, second: 0, of: Date()) else { return nil }
+        let lc = Calendar.current.dateComponents([.hour, .minute], from: utcDate)
+        return (lc.hour ?? 0, lc.minute ?? 0)
+    }
+
+    private func parseOnceAtUTCToDate(_ raw: String) -> Date? {
+        let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = t.lowercased()
+        guard let r = lower.range(of: "once_at:") else { return nil }
+        let iso = String(t[r.upperBound...])
+        let parts = iso.split(separator: "T")
+        guard parts.count == 2 else { return nil }
+        let ymd = parts[0].split(separator: "-").compactMap { Int($0) }
+        let hm = parts[1].split(separator: ":").compactMap { Int($0) }
+        guard ymd.count == 3, hm.count >= 2 else { return nil }
+        var c = DateComponents()
+        c.timeZone = TimeZone(secondsFromGMT: 0)
+        c.year = ymd[0]
+        c.month = ymd[1]
+        c.day = ymd[2]
+        c.hour = hm[0]
+        c.minute = hm[1]
+        return Calendar(identifier: .gregorian).date(from: c)
+    }
+
+    private func onceAtTokenUTC(from date: Date) -> String {
+        var utcCal = Calendar(identifier: .gregorian)
+        utcCal.timeZone = TimeZone(secondsFromGMT: 0)!
+        let c = utcCal.dateComponents([.year, .month, .day, .hour, .minute], from: date)
+        guard let y = c.year, let mo = c.month, let d = c.day, let h = c.hour, let mi = c.minute else {
+            return "once_at:2099-01-01T00:00"
+        }
+        return String(format: "once_at:%04d-%02d-%02dT%02d:%02d", y, mo, d, h, mi)
+    }
+
+    private func hydrateScheduleDraft(from rawEventType: String?) {
+        let t = rawEventType?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        if t.hasPrefix("once_at:") {
+            scheduleKind = .oneTime
+            if let raw = rawEventType, let d = parseOnceAtUTCToDate(raw) {
+                oneShotScheduleDate = d
+            }
+            return
+        }
+        if t.hasPrefix("daily_at:") {
+            scheduleKind = .daily
+            if let raw = rawEventType, let lm = localComponentsFromDailyUTC(raw) {
+                eventDraftScheduleHour = lm.hour
+                eventDraftScheduleMinute = lm.minute
+            }
+            return
+        }
+        scheduleKind = .daily
+        eventDraftScheduleHour = 10
+        eventDraftScheduleMinute = 0
+    }
+
+    private func builtScheduledEventTypeTokenForSave() -> String {
+        switch scheduleKind {
+        case .oneTime:
+            return onceAtTokenUTC(from: oneShotScheduleDate)
+        case .daily:
+            return dailyAtTokenFromLocal(hour: eventDraftScheduleHour, minute: eventDraftScheduleMinute)
         }
     }
 
@@ -1838,9 +2192,15 @@ struct CampaignNotificationsView: View {
             let n = max(1, Int(value) ?? 30)
             return "Inactif depuis \(n)j"
         }
-        if raw.hasPrefix("daily_at:") {
-            let value = raw.replacingOccurrences(of: "daily_at:", with: "")
-            return "Chaque jour à \(value)"
+        if raw.hasPrefix("daily_at:"), let lm = localComponentsFromDailyUTC(eventType) {
+            return String(format: "Chaque jour à %02d:%02d", lm.hour, lm.minute)
+        }
+        if raw.hasPrefix("once_at:"), let d = parseOnceAtUTCToDate(eventType) {
+            let f = DateFormatter()
+            f.locale = Locale(identifier: "fr_FR")
+            f.dateStyle = .medium
+            f.timeStyle = .short
+            return "Une fois — \(f.string(from: d))"
         }
         switch raw {
         case "member_created":
@@ -1854,83 +2214,23 @@ struct CampaignNotificationsView: View {
         }
     }
 
-    private func applyAIParsedEventDraft(
-        title: String,
-        message: String,
-        eventType: String,
-        delayMinutes: Int
-    ) {
-        eventDraftTitle = String(title.prefix(80)).trimmingCharacters(in: .whitespacesAndNewlines)
-        eventDraftMessage = String(message.prefix(200)).trimmingCharacters(in: .whitespacesAndNewlines)
-        eventDraftDelayMinutes = max(1, min(1440, delayMinutes))
-        eventDraftEventType = eventType
-        hydrateEventDraft(from: eventType)
-    }
-
-    @MainActor
-    private func parseEventDraftWithAI() async {
-        let instruction = eventDraftAIInstruction.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !instruction.isEmpty else { return }
-        guard let slug = resolveSlugForAPI() else { return }
-        isEventDraftAIParsing = true
-        defer {
-            isEventDraftAIParsing = false
+    /// Libellés segments alignés sur `CAMPAIGN_SEGMENT_KEYS` (notifications.js côté SaaS).
+    private func campaignSegmentCatalogLabel(for key: String) -> String {
+        switch key {
+        case "inactive14": return "Inactifs 14 jours"
+        case "inactive30": return "Inactifs 30 jours"
+        case "inactive60": return "Inactifs 60 jours"
+        case "inactive90": return "Inactifs 90 jours"
+        case "new7": return "Nouveaux (7 jours)"
+        case "new30": return "Nouveaux (30 jours)"
+        case "welcomeNew": return "Bienvenue (nouveau pass)"
+        case "pointsNear50": return "Proche de 50 pts"
+        case "points50": return "50 points — récompense"
+        case "recurrent": return "Clients fidèles"
+        case "birthdayToday": return "Anniversaire du jour"
+        default:
+            return key.isEmpty ? "Segment" : key
         }
-        do {
-            let body = CampaignAutomationAIParseRequestDTO(instruction: instruction)
-            let parsed = try await APIClient.shared.request(
-                .dashboardCampaignAutomationParse(slug: slug, body: body)
-            ) as CampaignAutomationAIParseResponseDTO
-            let title = parsed.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let message = parsed.message?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let eventType = parsed.eventType?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let delay = parsed.delayMinutes ?? 2
-            guard !title.isEmpty, !message.isEmpty, !eventType.isEmpty else { return }
-            applyAIParsedEventDraft(
-                title: title,
-                message: message,
-                eventType: eventType,
-                delayMinutes: delay
-            )
-        } catch {
-            message = (error as? APIError)?.errorDescription ?? error.localizedDescription
-        }
-    }
-
-    private func openEditCustomAutomation(ruleId: String) {
-        customRuleBeingEdited = ruleId
-        let row = campaignAutomation.rules?[ruleId]
-        customDraftTitle = row?.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        customDraftSegment = row?.segment ?? manualSegmentChoices.first?.key ?? "inactive14"
-        customDraftMessage = row?.message ?? ""
-        auxiliarySheet = .customAutomation
-    }
-
-    private func saveCustomAutomationDraft() {
-        let msg = String(customDraftMessage.prefix(200)).trimmingCharacters(in: .whitespacesAndNewlines)
-        let tit = String(customDraftTitle.prefix(80)).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !msg.isEmpty, !tit.isEmpty, !customDraftSegment.isEmpty else { return }
-        let key = customRuleBeingEdited ?? "custom_\(UUID().uuidString)"
-        var r = campaignAutomation.rules ?? [:]
-        let existing = r[key]
-        let row = CampaignAutomationRuleDTO(
-            enabled: existing?.enabled ?? true,
-            message: msg,
-            segment: customDraftSegment,
-            title: tit
-        )
-        r[key] = row
-        campaignAutomation.rules = r
-        auxiliarySheet = nil
-        customRuleBeingEdited = nil
-        scheduleCampaignAutomationSave()
-    }
-
-    private func removeCustomRule(id: String) {
-        var r = campaignAutomation.rules ?? [:]
-        r.removeValue(forKey: id)
-        campaignAutomation.rules = r
-        scheduleCampaignAutomationSave()
     }
 
     private func localWalletMapSection(
@@ -1987,7 +2287,9 @@ struct CampaignNotificationsView: View {
     }
 
     private func familyCard(_ family: CampaignFamilySpec) -> some View {
-        let activeCount = family.rules.filter { (campaignAutomation.rules?[$0.id]?.enabled ?? false) }.count
+        let activeCount = family.rules.filter {
+            hasCustomNotificationIconFromSettings && (campaignAutomation.rules?[$0.id]?.enabled ?? false)
+        }.count
         let totalCount = family.rules.count
         return ZStack(alignment: .topLeading) {
             RoundedRectangle(cornerRadius: AppTheme.Radius.lg, style: .continuous)
@@ -2058,13 +2360,17 @@ struct CampaignNotificationsView: View {
                     }
                     Spacer(minLength: 8)
                     Toggle("", isOn: Binding(
-                        get: { campaignAutomation.rules?[rule.id]?.enabled ?? false },
+                        get: {
+                            hasCustomNotificationIconFromSettings
+                                && (campaignAutomation.rules?[rule.id]?.enabled ?? false)
+                        },
                         set: { on in
+                            if on, !requireNotificationIconForSending() { return }
                             var r = campaignAutomation.rules ?? [:]
-                            var row = r[rule.id] ?? CampaignAutomationRuleDTO(enabled: false, message: defaultRuleMessages[rule.id] ?? "")
+                            var row = r[rule.id] ?? CampaignAutomationRuleDTO(enabled: false, message: defaultAutomationRuleMessages[rule.id] ?? "")
                             row.enabled = on
                             if row.message == nil || row.message?.isEmpty == true {
-                                row.message = defaultRuleMessages[rule.id]
+                                row.message = defaultAutomationRuleMessages[rule.id]
                             }
                             r[rule.id] = row
                             campaignAutomation.rules = r
@@ -2106,13 +2412,17 @@ struct CampaignNotificationsView: View {
                     }
                     Spacer(minLength: 8)
                     Toggle("", isOn: Binding(
-                        get: { campaignAutomation.rules?[rule.id]?.enabled ?? false },
+                        get: {
+                            hasCustomNotificationIconFromSettings
+                                && (campaignAutomation.rules?[rule.id]?.enabled ?? false)
+                        },
                         set: { on in
+                            if on, !requireNotificationIconForSending() { return }
                             var r = campaignAutomation.rules ?? [:]
-                            var row = r[rule.id] ?? CampaignAutomationRuleDTO(enabled: false, message: defaultRuleMessages[rule.id] ?? "")
+                            var row = r[rule.id] ?? CampaignAutomationRuleDTO(enabled: false, message: defaultAutomationRuleMessages[rule.id] ?? "")
                             row.enabled = on
                             if row.message == nil || row.message?.isEmpty == true {
-                                row.message = defaultRuleMessages[rule.id]
+                                row.message = defaultAutomationRuleMessages[rule.id]
                             }
                             r[rule.id] = row
                             campaignAutomation.rules = r
@@ -2257,22 +2567,6 @@ struct CampaignNotificationsView: View {
         }
     }
 
-    private var cronHintCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label("Automatisation serveur", systemImage: "server.rack")
-                .font(AppTheme.Fonts.subheadline())
-                .fontWeight(.medium)
-            Text("Les automatisations par segment sont traitées environ une fois par jour. Les automatisations événementielles (carte / nouveau membre) sont traitées environ toutes les minutes. Il faut un canal actif (Apple Wallet enregistré sur l’appareil ou Web Push) pour recevoir l’alerte ; sinon le serveur réessaie automatiquement.")
-                .font(AppTheme.Fonts.caption())
-                .foregroundStyle(AppTheme.Colors.textSecondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(AppTheme.Spacing.md)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(AppTheme.Colors.cardBackground.opacity(0.6))
-        .clipShape(RoundedRectangle(cornerRadius: AppTheme.Radius.lg, style: .continuous))
-    }
-
     private var syncRequiredCard: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Aucun commerce synchronisé.")
@@ -2316,22 +2610,24 @@ struct CampaignNotificationsView: View {
     private func ruleEditSheet(ruleId: String) -> some View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 12) {
-                Text("Message affiché sur le pass (corps de la notification).")
-                    .font(AppTheme.Fonts.caption())
-                    .foregroundStyle(AppTheme.Colors.textSecondary)
-                TextEditor(text: Binding(
-                    get: { campaignAutomation.rules?[ruleId]?.message ?? defaultRuleMessages[ruleId] ?? "" },
-                    set: { v in
-                        var r = campaignAutomation.rules ?? [:]
-                        var row = r[ruleId] ?? CampaignAutomationRuleDTO(enabled: false, message: v)
-                        row.message = String(v.prefix(200))
-                        r[ruleId] = row
-                        campaignAutomation.rules = r
-                        scheduleCampaignAutomationSave()
-                    }
-                ))
-                .frame(minHeight: 120)
-                .padding(8)
+                TextField(
+                    "Message",
+                    text: Binding(
+                        get: { campaignAutomation.rules?[ruleId]?.message ?? defaultAutomationRuleMessages[ruleId] ?? "" },
+                        set: { v in
+                            var r = campaignAutomation.rules ?? [:]
+                            var row = r[ruleId] ?? CampaignAutomationRuleDTO(enabled: false, message: v)
+                            row.message = String(v.prefix(200))
+                            r[ruleId] = row
+                            campaignAutomation.rules = r
+                            scheduleCampaignAutomationSave()
+                        }
+                    ),
+                    axis: .vertical
+                )
+                .lineLimit(4 ... 12)
+                .textFieldStyle(.plain)
+                .padding(10)
                 .background(Color(uiColor: .secondarySystemBackground))
                 .clipShape(RoundedRectangle(cornerRadius: 12))
                 Spacer()
@@ -2351,6 +2647,9 @@ struct CampaignNotificationsView: View {
         if (id.hasPrefix("custom_") || id.hasPrefix("event_")),
            let t = campaignAutomation.rules?[id]?.title?.trimmingCharacters(in: .whitespacesAndNewlines),
            !t.isEmpty {
+            return t
+        }
+        if let t = automationHubRules.first(where: { $0.id == id })?.title {
             return t
         }
         for f in campaignFamilies {
@@ -2385,7 +2684,12 @@ struct CampaignNotificationsView: View {
         if isNotificationSendInFlight { return }
         do {
             var patch = FullDashboardSettingsPatch()
-            patch.campaignAutomation = campaignAutomation
+            patch.campaignAutomation = campaignAutomationSanitizedForServer(
+                campaignAutomationGatedForIcon(
+                    campaignAutomation,
+                    hasCustomIcon: hasCustomNotificationIconFromSettings
+                )
+            )
             _ = try await APIClient.shared.request(APIEndpoint.patchDashboardSettings(slug: slug, patch: patch)) as EmptyResponse
         } catch {
             if !shouldSuppressCancelledNetworkNoise(error) {
@@ -2413,7 +2717,8 @@ struct CampaignNotificationsView: View {
         do {
             var patch = FullDashboardSettingsPatch()
             let t = perimeterRelevantMessageText.trimmingCharacters(in: .whitespacesAndNewlines)
-            let localEnabled = campaignAutomation.rules?["locationEntry"]?.enabled ?? true
+            let localEnabled = hasCustomNotificationIconFromSettings
+                && (campaignAutomation.rules?["locationEntry"]?.enabled ?? false)
             patch.locationRelevantText = localEnabled ? (t.isEmpty ? nil : String(t.prefix(200))) : nil
             _ = try await APIClient.shared.request(APIEndpoint.patchDashboardSettings(slug: slug, patch: patch)) as EmptyResponse
             isPerimeterRelevantTextDirty = false
@@ -2526,7 +2831,13 @@ struct CampaignNotificationsView: View {
                 throw error
             }
             segments = gotSeg
-            campaignAutomation = mergedAutomation(from: gotSettings.campaignAutomation)
+            let iconReady = !(gotSettings.notificationIconUrl?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            ).isEmpty
+            campaignAutomation = campaignAutomationGatedForIcon(
+                mergedAutomation(from: gotSettings.campaignAutomation),
+                hasCustomIcon: iconReady
+            )
             isApplyingRemoteSettings = true
             let t = gotSettings.notificationTitleOverride?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             if title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -2717,6 +3028,12 @@ struct CampaignNotificationsView: View {
             withAnimation(.easeInOut(duration: 0.38)) { notificationSendProgress = 1.0 }
 
             try? await Task.sleep(nanoseconds: 260_000_000)
+        } catch let api as APIError {
+            if case .notificationIconRequired = api {
+                notificationLogoPopupPresented = true
+            } else {
+                message = api.errorDescription ?? "Erreur lors de l’envoi de la notification."
+            }
         } catch {
             message = (error as? APIError)?.errorDescription ?? error.localizedDescription
         }
@@ -2803,8 +3120,9 @@ private struct NotificationManualLogoCommercePopupCard: View {
     }
 }
 
-/// Plan standard avec **relief / bâtiments 3D** (`.standard(elevation: .realistic)`), aligné sur `PerimeterMapView`.
+/// Plan standard **sans relief 3D** dans le carrousel : le mode realistic saturait le GPU au paging TabView + ScrollView.
 /// La `Map` n’est montée que lorsque la page « localisation » du carrousel est affichée : les autres pages n’affichent qu’un fond léger.
+/// (La feuille périmètre plein écran peut conserver un rendu plus riche si besoin.)
 private struct LocalAutomationReliefMapBackdrop: View {
     let latitude: Double?
     let longitude: Double?
@@ -2840,13 +3158,27 @@ private struct LocalAutomationReliefMapBackdrop: View {
     private func reliefMap(latitude: Double, longitude: Double) -> some View {
         let center = CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
         let radiusCL = CLLocationDistance(max(30, min(1000, radiusMeters ?? 100)))
-        let cameraTaskId = "\(latitude)-\(longitude)-\(radiusCL)-live3d"
+        let cameraTaskId = "\(latitude)-\(longitude)-\(radiusCL)-flat"
         return Map(position: $cameraPosition, interactionModes: []) {
+            Annotation("", coordinate: center) {
+                ZStack {
+                    Circle()
+                        .fill(Color.white)
+                        .frame(width: 14, height: 14)
+                        .shadow(color: .black.opacity(0.2), radius: 2, y: 1)
+                    Circle()
+                        .fill(AppTheme.Colors.primary)
+                        .frame(width: 10, height: 10)
+                }
+            }
             MapCircle(center: center, radius: radiusCL)
                 .foregroundStyle(Color.blue.opacity(0.20))
                 .stroke(Color.blue.opacity(0.66), lineWidth: 2)
         }
-        .mapStyle(.standard(elevation: .realistic))
+        .mapStyle(.standard(elevation: .flat))
+        /// Masque la bande basse MapKit (logo Apple + « Legal ») dans l’aperçu carrousel — recadrage, pas API privée.
+        .padding(.bottom, -44)
+        .clipped()
         .task(id: cameraTaskId) {
             let distanceMeters = min(820, max(300, radiusCL * 5.0))
             cameraPosition = .camera(
@@ -2858,7 +3190,7 @@ private struct LocalAutomationReliefMapBackdrop: View {
 
 // MARK: - Notif liquid glass (carrousel automatisations)
 
-/// Bannière seule (sans faux iPhone) : style notif système, glass, animation d’entrée au slide.
+/// Bannière seule (sans faux iPhone) : style notif système, glass.
 private struct AutomationCarouselLiquidNotificationBanner: View {
     let senderTitle: String
     let messageBody: String
@@ -2867,45 +3199,37 @@ private struct AutomationCarouselLiquidNotificationBanner: View {
     /// Placeholder du `TextField` (ex. message périmètre vs automatisation segment).
     var textFieldPlaceholder: String = "Message de la notification"
     let logoURL: String?
-    let pageIndex: Int
-    let currentPage: Int
     /// `false` pour le périmètre : retours à la ligne **interdits** (texte replié sur plusieurs lignes visuellement) ; la touche « OK » / ✓ ferme le clavier et peut appeler `onSubmitActivate` sans insérer `\n`.
     var useMultilineMessageField: Bool = true
     var onSubmitActivate: (() -> Void)? = nil
 
     @FocusState private var messageFieldFocused: Bool
 
-    private let iconSide: CGFloat = 44
+    private let iconSide: CGFloat = 40
     private let iconCorner: CGFloat = 10
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
             automationIcon
             VStack(alignment: .leading, spacing: 3) {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(senderTitle)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(Color.black)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
-                    Spacer(minLength: 4)
-                    Text("maintenant")
-                        .font(.caption2.weight(.medium))
-                        .foregroundStyle(Color.black.opacity(0.45))
-                }
+                Text(senderTitle)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(Color.black)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
                 if let binding = messageBinding {
                     Group {
                         if useMultilineMessageField {
                             TextField(textFieldPlaceholder, text: binding, axis: .vertical)
                                 .textFieldStyle(.plain)
-                                .font(.subheadline.weight(.regular))
+                                .font(.footnote.weight(.regular))
                                 .foregroundStyle(Color.black.opacity(0.88))
                                 .lineLimit(2 ... 5)
                                 .multilineTextAlignment(.leading)
                         } else {
                             TextField(textFieldPlaceholder, text: binding, axis: .vertical)
                                 .textFieldStyle(.plain)
-                                .font(.subheadline.weight(.regular))
+                                .font(.footnote.weight(.regular))
                                 .foregroundStyle(Color.black.opacity(0.88))
                                 .lineLimit(2 ... 12)
                                 .multilineTextAlignment(.leading)
@@ -2920,7 +3244,7 @@ private struct AutomationCarouselLiquidNotificationBanner: View {
                     .accessibilityLabel("\(textFieldPlaceholder) Modifiable.")
                 } else {
                     Text(messageBody)
-                        .font(.subheadline.weight(.regular))
+                        .font(.footnote.weight(.regular))
                         .foregroundStyle(Color.black.opacity(0.88))
                         .multilineTextAlignment(.leading)
                         .fixedSize(horizontal: false, vertical: true)

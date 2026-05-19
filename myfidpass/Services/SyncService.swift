@@ -110,8 +110,10 @@ final class SyncService: ObservableObject {
     }
 
     /// Recharge serveur → Core Data après une mutation locale enregistrée côté API.
+    /// **Toujours en `force: true`** : sinon le throttle 45 s (`syncThrottleInterval`) annule le pull — les **transactions**
+    /// (fil « Dernières transactions ») ne sont jamais fusionnées et l’accueil reste vide ou obsolète après scan.
     func syncAfterServerMutation() async {
-        await syncIfNeeded(force: false)
+        await syncIfNeeded(force: true)
     }
 
     /// Récupère user + businesses, puis pour le commerce courant (slug) : settings, stats, membres, transactions.
@@ -262,7 +264,7 @@ final class SyncService: ObservableObject {
     /// Met à jour le snapshot d'aperçu carte (UserDefaults) avec l'URL du fond distant issu des settings API,
     /// pour que l'accueil reflète l'état serveur sans que l'utilisateur ait à ouvrir « Ma carte ».
     /// Si aucun snapshot n’existe encore, en crée un minimal depuis `settings` (sinon l’accueil n’avait jamais `cardBackgroundRemoteURL`).
-    /// Préserve `hasLocalCardBackground` (fond photo local) sauf réparation `nil` → disque.
+    /// Préserve `hasLocalCardBackground` (fond photo local) établi depuis « Ma carte » — jamais déduit du fichier global.
     private func updateSnapshotRemoteBackground(settings: BusinessSettingsResponse, slug: String) {
         var snap = CardPreviewDisplaySnapshotStore.load(slug: slug)
         let createdFresh = snap == nil
@@ -291,14 +293,8 @@ final class SyncService: ObservableObject {
             changed = true
         }
 
-        // Réparer les snapshots anciens (hasLocalCardBackground = nil) : vérifier si le fichier est sur disque.
-        if snap.hasLocalCardBackground == nil {
-            let rel = CardLogoStorage.relativeCardBackgroundPath
-            let exists = CardLogoStorage.fullPath(forRelative: rel)
-                .map { FileManager.default.fileExists(atPath: $0) } ?? false
-            snap.hasLocalCardBackground = exists
-            if exists { changed = true }
-        }
+        // Ne pas déduire `hasLocalCardBackground` depuis `CardLogos/cardBackground.png` : ce fichier est **global**
+        // sur disque ; pour un nouveau commerce la sync créerait un snapshot avec `true` par erreur.
 
         if changed {
             CardPreviewDisplaySnapshotStore.save(snap, slug: slug)
@@ -350,9 +346,6 @@ final class SyncService: ObservableObject {
             }
         }
 
-        let rel = CardLogoStorage.relativeCardBackgroundPath
-        let localExists = CardLogoStorage.fullPath(forRelative: rel).map { FileManager.default.fileExists(atPath: $0) } ?? false
-
         return CardPreviewDisplaySnapshot(
             programType: programType,
             displayName: settings.organizationName ?? "Ma Carte",
@@ -369,7 +362,8 @@ final class SyncService: ObservableObject {
             labelMember: settings.labelMember ?? "",
             hasRemoteCardBackground: hasRemote,
             cardBackgroundRemoteURL: bgURL,
-            hasLocalCardBackground: localExists ? true : nil,
+            // Fond local = brouillon « Ma carte » pour **ce** slug uniquement, pas la présence d’un PNG global.
+            hasLocalCardBackground: false,
             stampRewardLabel: settings.stampRewardLabel ?? "",
             stampMidRewardLabel: settings.stampMidRewardLabel,
             startGameRewardLabel: nil,
@@ -489,6 +483,7 @@ final class SyncService: ObservableObject {
                             if c.viewContext.hasChanges {
                                 try c.viewContext.save()
                             }
+                            NotificationCenter.default.post(name: .myfidpassMerchantCoreDataDidMergeFromSync, object: nil)
                             cont.resume()
                         } catch {
                             cont.resume(throwing: error)

@@ -25,6 +25,8 @@ enum DashboardHomeLayoutMetrics {
     static let scrollHorizontalPadding: CGFloat = 16
     /// Aligné sur le bloc carte (`AppTheme.Spacing.lg`) : même bord gauche/droit, plus d’étroitissement excessif du titre.
     static let transactionsSectionExtraHorizontal: CGFloat = AppTheme.Spacing.lg
+    /// Accueil commerçant uniquement : réduit l’inset sous la barre pour remonter la carte (Profil / Périmètre inchangés).
+    static let homeScrollTopPullUp: CGFloat = 8
 }
 
 // MARK: - Pastilles type barre nav / fiche membre (Liquid Glass iOS 26)
@@ -174,11 +176,10 @@ struct DashboardHomeCardModel {
         } else {
             bgRemote = nil
         }
-        /// Fond local : `false` = absent explicitement. `nil` = snapshot ancien (champ absent) → on vérifie le fichier.
-        /// `true` = confirmé présent. On n’affiche jamais un fichier d’un autre compte car `removeAllLocalCardAssets()`
-        /// est appelé à la déconnexion.
+        /// Fond local : uniquement si le snapshot **de ce slug** indique explicitement un brouillon (évite le PNG
+        /// `CardLogos/cardBackground.png` partagé entre commerces).
         let localCardBgRelative: String? = {
-            if snap?.hasLocalCardBackground == false { return nil }
+            guard snap?.hasLocalCardBackground == true else { return nil }
             let rel = CardLogoStorage.relativeCardBackgroundPath
             guard let full = CardLogoStorage.fullPath(forRelative: rel),
                   FileManager.default.fileExists(atPath: full) else { return nil }
@@ -333,7 +334,7 @@ struct FintechHomeLoyaltyCardBlock: View {
         .padding(.horizontal, AppTheme.Spacing.lg)
         .frame(minHeight: DashboardHomeCardChrome.previewMinHeight)
         .scaleEffect(DashboardHomeCardChrome.homeCardScale, anchor: .center)
-        .padding(.top, 2)
+        .padding(.top, 0)
         .padding(.bottom, 0)
         .frame(maxWidth: .infinity)
     }

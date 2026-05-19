@@ -5,15 +5,18 @@
 //  Connexion : héros + Google ; saisie e-mail / identifiant dans une sheet.
 //
 
+import AuthenticationServices
 import Combine
 import SwiftUI
 
 struct AuthSignInView: View {
     @EnvironmentObject private var authService: AuthService
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     var onBack: () -> Void = {}
 
     @State private var showEmailSheet = false
     @State private var googleLoading = false
+    @State private var appleLoading = false
     @State private var googleAlert: String?
     @State private var heroCarouselIndex = 0
     @State private var heroAppeared = false
@@ -25,7 +28,23 @@ struct AuthSignInView: View {
         GeometryReader { geo in
             let fullW = geo.size.width
             let fullH = geo.size.height
-            let heroHeight = fullH * 0.82
+            let heroHeight = fullH * AuthResponsiveLayout.authStackedHeroHeightFraction(
+                width: fullW,
+                horizontalSizeClass: horizontalSizeClass
+            )
+            let heroWidth = AuthResponsiveLayout.authStackedHeroImageWidth(
+                containerWidth: fullW,
+                horizontalSizeClass: horizontalSizeClass
+            )
+            let heroContained = AuthResponsiveLayout.authStackedHeroUsesContainedImage(
+                width: fullW,
+                horizontalSizeClass: horizontalSizeClass
+            )
+            let heroTopPadding = AuthResponsiveLayout.authStackedHeroTopPadding(
+                width: fullW,
+                horizontalSizeClass: horizontalSizeClass,
+                safeTop: geo.safeAreaInsets.top
+            )
             let topSafe = geo.safeAreaInsets.top
             let bottomSafe = max(geo.safeAreaInsets.bottom, 12)
 
@@ -36,24 +55,25 @@ struct AuthSignInView: View {
                     ForEach(0..<Self.heroAssets.count, id: \.self) { i in
                         Image(Self.heroAssets[i])
                             .resizable()
-                            .scaledToFill()
-                            .frame(width: fullW, height: heroHeight, alignment: .top)
+                            .aspectRatio(contentMode: heroContained ? .fit : .fill)
+                            .frame(width: heroWidth, height: heroHeight, alignment: .top)
                             .clipped()
                             .tag(i)
                     }
                 }
                 .tabViewStyle(.page(indexDisplayMode: .never))
-                .frame(width: fullW, height: heroHeight, alignment: .top)
+                .frame(width: heroWidth, height: heroHeight, alignment: .top)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .padding(.top, heroTopPadding)
                 .clipped()
-                .offset(y: -8)
                 .scaleEffect(heroAppeared ? 1 : 1.02)
                 .opacity(heroAppeared ? 1 : 0)
-                .ignoresSafeArea(edges: .top)
 
                 VStack(spacing: 12) {
+                    appleSignInButton
                     googleButton
                     emailPrimaryButton
+                    AuthLegalFooterView()
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.horizontal, 24)
@@ -132,6 +152,24 @@ struct AuthSignInView: View {
         }
         .buttonBorderShape(.capsule)
         .liquidGlassButtonAppearance(.adaptive, cornerRadius: 999)
+        .disabled(socialAuthBusy)
+    }
+
+    private var socialAuthBusy: Bool {
+        googleLoading || appleLoading
+    }
+
+    private var appleSignInButton: some View {
+        AppleSignInRow(
+            intent: .signIn,
+            isLoading: appleLoading,
+            styleOverride: .black,
+            cornerRadius: 26,
+            onAuthorization: { result in
+                handleAppleAuthorization(result)
+            }
+        )
+        .frame(minHeight: 52)
     }
 
     private var googleButton: some View {
@@ -157,7 +195,36 @@ struct AuthSignInView: View {
             .shadow(color: Color.black.opacity(0.14), radius: 10, y: 4)
         }
         .buttonStyle(.plain)
-        .disabled(googleLoading)
+        .disabled(socialAuthBusy)
+    }
+
+    private func handleAppleAuthorization(_ result: Result<ASAuthorization, Error>) {
+        switch result {
+        case .failure(let error):
+            if AuthAppleSignInSupport.isUserCancellation(error) { return }
+            googleAlert = error.localizedDescription
+        case .success:
+            appleLoading = true
+            googleAlert = nil
+            Task {
+                defer { appleLoading = false }
+                do {
+                    try await AuthAppleSignInSupport.handleAuthorization(
+                        result,
+                        intent: .signIn,
+                        authService: authService
+                    )
+                } catch AuthError.missingEstablishment {
+                    authService.rewindWelcomeMerchantPremisesAfterLostEstablishmentContext()
+                } catch AuthError.noAccountInLogiciel {
+                    googleAlert = "Aucun compte MyFidpass lié à cet identifiant Apple. Créez un compte avec l’e-mail ou Google."
+                } catch AuthError.apiMessage(let msg) {
+                    googleAlert = msg
+                } catch {
+                    googleAlert = error.localizedDescription
+                }
+            }
+        }
     }
 
     private func startGoogle() {

@@ -75,7 +75,6 @@ struct CommerceStatsCategoryListCard: View {
                     membersWeeklySparkline: detail.sparkline,
                     segments: [],
                     onTap: nil,
-                    playNeonLineIntro: true,
                     chartLineColor: CommerceStatisticsTheme.accentBlue
                 )
             }
@@ -193,8 +192,6 @@ struct CommerceStatsCategoryListCard: View {
                         .fill(Color.white.opacity(0.08))
                 )
                 .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
-                .animation(.spring(response: 0.35, dampingFraction: 0.88), value: split.activeCount)
-                .animation(.spring(response: 0.35, dampingFraction: 0.88), value: split.inactiveCount)
             }
             .frame(height: 12)
 
@@ -248,8 +245,6 @@ private struct CommerceStatsGoogleReviewsCard: View {
     let row: CommerceCategoryRowData
     let detail: CommerceGoogleReviewsDetail
 
-    @State private var monthBarReveal: CGFloat = 0
-    @State private var cumulativeBarReveal: CGFloat = 0
     @AppStorage("myfidpass.stats.googleReviews.monthlyHistory.v1") private var monthlyHistoryJSON: String = "{}"
     @State private var cachedMonthHistory: [String: Int] = [:]
 
@@ -274,14 +269,6 @@ private struct CommerceStatsGoogleReviewsCard: View {
         .onAppear {
             cachedMonthHistory = parseMonthHistory(monthlyHistoryJSON)
             persistMonthValueIfNeeded()
-            monthBarReveal = 0
-            cumulativeBarReveal = 0
-            withAnimation(.spring(response: 0.56, dampingFraction: 0.84)) {
-                monthBarReveal = 1
-            }
-            withAnimation(.spring(response: 0.64, dampingFraction: 0.86).delay(0.08)) {
-                cumulativeBarReveal = 1
-            }
         }
     }
 
@@ -349,14 +336,14 @@ private struct CommerceStatsGoogleReviewsCard: View {
                 label: "Nouveaux ce mois",
                 valueText: "+\(StatsFR.formatInt(monthValue))",
                 ratio: CGFloat(Double(monthValue) / Double(maxMonth)),
-                reveal: monthBarReveal,
+                reveal: 1,
                 tint: accent
             )
             impactMetricRow(
                 label: "Cumul depuis \(monthLabelFromFirstHistory(defaultKey: key))",
                 valueText: StatsFR.formatInt(cumulative),
                 ratio: CGFloat(Double(cumulative) / Double(cumulativeDenom)),
-                reveal: cumulativeBarReveal,
+                reveal: 1,
                 tint: Color(red: 0.64, green: 0.7, blue: 1.0)
             )
         }
@@ -502,8 +489,6 @@ private struct CommerceStatsAudienceSplitCard: View {
 
     let row: CommerceCategoryRowData
     let split: CommerceAudienceSplitData
-    @State private var activeBarReveal: CGFloat = 0
-    @State private var inactiveBarReveal: CGFloat = 0
 
     private var g: Bool { commerceStatsGlassOverlay }
     private let activeColor = Color(red: 0.33, green: 0.94, blue: 0.66)
@@ -546,16 +531,6 @@ private struct CommerceStatsAudienceSplitCard: View {
         .padding(.leading, 18)
         .padding(.trailing, 16)
         .frame(maxWidth: .infinity, alignment: .topLeading)
-        .onAppear {
-            activeBarReveal = 0
-            inactiveBarReveal = 0
-            withAnimation(.spring(response: 0.55, dampingFraction: 0.84)) {
-                activeBarReveal = 1
-            }
-            withAnimation(.spring(response: 0.62, dampingFraction: 0.86).delay(0.08)) {
-                inactiveBarReveal = 1
-            }
-        }
     }
 
     private var audienceBarsBlock: some View {
@@ -565,7 +540,7 @@ private struct CommerceStatsAudienceSplitCard: View {
                 count: split.activeCount,
                 pct: split.activeFraction * 100,
                 tint: activeColor,
-                reveal: activeBarReveal,
+                reveal: 1,
                 glowOpacity: 0.34
             )
             audienceMetricRow(
@@ -573,7 +548,7 @@ private struct CommerceStatsAudienceSplitCard: View {
                 count: split.inactiveCount,
                 pct: split.inactiveFraction * 100,
                 tint: inactiveColor,
-                reveal: inactiveBarReveal,
+                reveal: 1,
                 glowOpacity: 0.28
             )
         }

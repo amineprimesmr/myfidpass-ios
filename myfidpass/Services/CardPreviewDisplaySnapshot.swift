@@ -55,6 +55,33 @@ enum CardPreviewDisplaySnapshotStore {
         return try? JSONDecoder().decode(CardPreviewDisplaySnapshot.self, from: data)
     }
 
+    /// Carte commerçant enregistrée et complète (mêmes critères que l’accueil / notifications).
+    static func isMerchantCardConfigured(slug: String) -> Bool {
+        guard let snap = load(slug: slug) else { return false }
+        return MyCardCompletionRequirements.missingRequirements(
+            primaryHex: snap.primaryHex,
+            accentHex: snap.accentHex,
+            labelHex: snap.labelHex,
+            stripDisplayMode: snap.stripDisplayMode,
+            stripText: snap.stripText,
+            displayName: snap.displayName,
+            logoURL: snap.logoURL,
+            programType: snap.programType,
+            cardBackgroundImagePath: snap.hasLocalCardBackground == true ? CardLogoStorage.relativeCardBackgroundPath : nil,
+            cardBackgroundRemoteURL: snap.cardBackgroundRemoteURL,
+            cardBackgroundWasRemoved: false,
+            stampEmoji: snap.stampEmoji,
+            stampIconPendingBase64: snap.stampIconPendingBase64,
+            stampIconWasRemoved: snap.stampIconWasRemoved ?? false,
+            serverHasStampIcon: snap.hasServerStampIcon ?? false,
+            tierPoints: snap.tierPoints ?? [],
+            tierLabels: snap.tierLabels ?? [],
+            requiredStamps: snap.requiredStamps,
+            stampRewardLabel: snap.stampRewardLabel,
+            stampMidRewardLabel: snap.stampMidRewardLabel ?? ""
+        ).isEmpty
+    }
+
     static func save(_ snapshot: CardPreviewDisplaySnapshot, slug: String) {
         let k = key(for: slug)
         if let data = try? JSONEncoder().encode(snapshot) {

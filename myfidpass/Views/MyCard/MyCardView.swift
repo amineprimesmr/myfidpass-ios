@@ -450,7 +450,10 @@ struct MyCardView: View {
                             let ok = await saveTemplate()
                             await MainActor.run {
                                 cardSettingsSaveInFlight = false
-                                if ok { triggerSavedFeedback() }
+                                if ok {
+                                    triggerSavedFeedback()
+                                    schedulePostCardFlyerPromoIfEligible()
+                                }
                             }
                         }
                     } label: {
@@ -1665,6 +1668,13 @@ struct MyCardView: View {
             }
             return false
         }
+    }
+
+    /// Mis en attente jusqu’à l’onglet **Accueil** — voir `DashboardView` (`PostCardFlyerPromoEligibility`).
+    private func schedulePostCardFlyerPromoIfEligible() {
+        guard let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines), !slug.isEmpty else { return }
+        guard PostCardFlyerPromoEligibility.stillNeedsFlyerPromo(for: slug) else { return }
+        PostCardFlyerPromoEligibility.queuePresentationOnMerchantHome(for: slug)
     }
 
     private func triggerSavedFeedback() {

@@ -42,13 +42,15 @@ struct MerchantStatisticsDashboardScreen: View {
 
     var body: some View {
         let keys = statsMonthKeys
-        let clampedIndex = min(selectedStatsMonthIndex, max(0, keys.count - 1))
+        let maxIdx = max(0, keys.count - 1)
         CommerceStatisticsDashboardView(
             vm: vm,
             statsMonthKeys: keys,
             selectedMonthIndex: Binding(
-                get: { clampedIndex },
-                set: { selectedStatsMonthIndex = $0 }
+                get: { min(selectedStatsMonthIndex, maxIdx) },
+                set: { newVal in
+                    selectedStatsMonthIndex = min(max(0, newVal), maxIdx)
+                }
             ),
             onClose: {
                 if let onOverlayDismiss {

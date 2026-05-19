@@ -158,11 +158,38 @@ struct CafeDesArtsCardPreview: View {
         return "DANS \(need) PASSAGES"
     }
 
+    /// Hauteur d’affichage **serrée** pour le mode scan (`stampsOnly`) : uniquement la grille + marges, pas toute la carte Wallet.
+    static func stampsOnlyDisplayHeight(cardWidth: CGFloat, requiredStamps: Int32, compact: Bool) -> CGFloat {
+        let cols = 5
+        let total = max(1, Int(requiredStamps))
+        let rows = max(1, (total + cols - 1) / cols)
+        let horizontalInset = compact ? 14.0 : 18.0
+        let verticalPad: CGFloat = compact ? 10 : 12
+        let gap: CGFloat = compact ? 4 : 5
+        let innerW = max(1, cardWidth - horizontalInset * 2)
+        let cellW = (innerW - CGFloat(max(0, cols - 1)) * gap) / CGFloat(cols)
+        let cellSize = min(cellW * 0.92, compact ? 40 : 44)
+        let gridH = CGFloat(rows) * cellSize + CGFloat(max(0, rows - 1)) * gap
+        return gridH + verticalPad * 2
+    }
+
+    /// Ratio largeur / hauteur pour `aspectRatio` — calé sur une largeur de référence (le contenu scale de façon cohérente).
+    private var stampsOnlyLayoutAspect: CGFloat {
+        let ref: CGFloat = 375
+        let h = Self.stampsOnlyDisplayHeight(cardWidth: ref, requiredStamps: requiredStamps, compact: compact)
+        return ref / max(h, 1)
+    }
+
     var body: some View {
         GeometryReader { geo in
             let w = max(1, geo.size.width.isFinite ? geo.size.width : 1)
-            let h = max(1, w / walletCardAspectRatio)
             let corner: CGFloat = compact ? 9 : 14
+            let h: CGFloat = {
+                if stampsOnly {
+                    return Self.stampsOnlyDisplayHeight(cardWidth: w, requiredStamps: requiredStamps, compact: compact)
+                }
+                return max(1, w / walletCardAspectRatio)
+            }()
 
             cardContent(cardWidth: w)
                 .frame(width: w, height: h)
@@ -186,7 +213,7 @@ struct CafeDesArtsCardPreview: View {
                 .shadow(color: .black.opacity(0.25), radius: compact ? 10 : 14, x: 0, y: 6)
                 .frame(maxWidth: .infinity)
         }
-        .aspectRatio(walletCardAspectRatio, contentMode: .fit)
+        .aspectRatio(stampsOnly ? stampsOnlyLayoutAspect : walletCardAspectRatio, contentMode: .fit)
         .animation(.easeOut(duration: 0.25), value: primaryColorHex)
         .animation(.easeOut(duration: 0.2), value: stampsCount)
         .animation(.easeOut(duration: 0.2), value: requiredStamps)
@@ -200,7 +227,14 @@ struct CafeDesArtsCardPreview: View {
     @ViewBuilder
     private func cardContent(cardWidth: CGFloat) -> some View {
         if stampsOnly {
-            stampsOnlySection(cardWidth: cardWidth)
+            stampsOnlySection(
+                cardWidth: cardWidth,
+                envelopeHeight: Self.stampsOnlyDisplayHeight(
+                    cardWidth: cardWidth,
+                    requiredStamps: requiredStamps,
+                    compact: compact
+                )
+            )
         } else {
             VStack(spacing: 0) {
                 // zIndex : bandeau image au-dessus du corps si le layout chevauche (évite tampons / texte « par-dessus » la photo).
@@ -217,18 +251,18 @@ struct CafeDesArtsCardPreview: View {
         }
     }
 
-    private func stampsOnlySection(cardWidth: CGFloat) -> some View {
-        let fullHeight = max(1, cardWidth / walletCardAspectRatio)
-        // En scan "tampons only", on évite un grand aplat vide:
-        // la grille occupe une bande centrale plus compacte.
-        let compactGridHeight = max(110, min(fullHeight * (compact ? 0.56 : 0.62), compact ? 170 : 220))
+    private func stampsOnlySection(cardWidth: CGFloat, envelopeHeight: CGFloat) -> some View {
         let insetH: CGFloat = compact ? 14 : 18
         return ZStack {
             primaryColor
-            stampGridBannerFitted(cardWidth: cardWidth, bannerHeight: compactGridHeight, horizontalInset: insetH)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+            stampGridBannerFitted(
+                cardWidth: cardWidth,
+                bannerHeight: max(40, envelopeHeight),
+                horizontalInset: insetH
+            )
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(width: cardWidth, height: envelopeHeight)
+        .clipped()
     }
 
     private func cafeBannerHeight(cardWidth: CGFloat) -> CGFloat {
@@ -376,17 +410,25 @@ struct CafeDesArtsCardPreview: View {
         .padding(.vertical, verticalPad)
     }
 
+    /// 5ᵉ tampon = palier intermédiaire (Silver), dernier = récompense finale (Gold). Même logique en mode `stampsOnly` (scan).
+    /// Pas d’icône cadeau si moins de 5 tampons au total (carte courte).
     private func rewardIconKey(for index: Int, total: Int) -> String? {
-        if stampsOnly { return nil }
-        if total >= 10 && index == 9 { return "giftgold" }
-        if total >= 5 && index == 4 { return "giftsilver" }
+        guard total >= 5 else { return nil }
+        let lastIndex = total - 1
+        let midIndex = 4
+        if index == midIndex, midIndex == lastIndex { return "giftgold" }
+        if index == midIndex { return "giftsilver" }
+        if index == lastIndex { return "giftgold" }
         return nil
     }
 
-    /// Prochain palier cadeau : argent avant le 5e tampon, or entre le 5e et le 10e — affiché en couleur même vide.
+    /// Prochain palier cadeau : mise en avant teintée avant remplissage (5ᵉ puis dernier).
     private func isNextGiftTeaser(index: Int, total: Int, filledStampCount: Int) -> Bool {
-        if total >= 5 && index == 4 && filledStampCount < 5 { return true }
-        if total >= 10 && index == 9 && filledStampCount >= 5 && filledStampCount < 10 { return true }
+        guard total >= 5 else { return false }
+        let lastIndex = total - 1
+        let midIndex = 4
+        if filledStampCount < 5, index == midIndex { return true }
+        if midIndex != lastIndex, filledStampCount >= 5, filledStampCount < total, index == lastIndex { return true }
         return false
     }
 

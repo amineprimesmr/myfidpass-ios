@@ -109,6 +109,7 @@ struct BorderBeamEffect: ViewModifier {
 // MARK: - Barre basse identique à ContentView / CustomBottomBar (+ branchement notif)
 
 struct BorderBeamManualNotificationComposerView: View {
+    @Binding var notificationTitle: String
     @Binding var messageBody: String
     @Binding var segment: String?
     let segmentChoices: [(key: String, label: String)]
@@ -123,6 +124,7 @@ struct BorderBeamManualNotificationComposerView: View {
     let sendSuccessCount: Int?
     let onSend: () -> Void
 
+    @FocusState private var titleFieldFocused: Bool
     @FocusState private var messageFieldFocused: Bool
     @State private var placeholderCharIndex: Int = 0
     @State private var placeholderLoopTask: Task<Void, Never>?
@@ -193,7 +195,21 @@ struct BorderBeamManualNotificationComposerView: View {
     /// Copie de `ContentView.CustomBottomBar()` : mêmes `spacing`, `padding`, `TextField`, `HStack`, icônes.
     @ViewBuilder
     private func customBottomBarLikeBorderBeam() -> some View {
-        VStack(alignment: .leading, spacing: 25) {
+        VStack(alignment: .leading, spacing: 18) {
+            TextField("Titre (facultatif)", text: $notificationTitle, axis: .vertical)
+                .focused($titleFieldFocused)
+                .disabled(sendingLocked)
+                .lineLimit(1 ... 2)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(Color.primary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 10)
+                .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .submitLabel(.next)
+                .onSubmit {
+                    messageFieldFocused = true
+                }
+
             ZStack(alignment: .topLeading) {
                 TextField("", text: $messageBody, axis: .vertical)
                     .focused($messageFieldFocused)
@@ -315,6 +331,7 @@ struct BorderBeamManualNotificationComposerView: View {
 #if DEBUG
 #Preview {
     BorderBeamManualNotificationComposerView(
+        notificationTitle: .constant(""),
         messageBody: .constant(""),
         segment: .constant(nil),
         segmentChoices: [

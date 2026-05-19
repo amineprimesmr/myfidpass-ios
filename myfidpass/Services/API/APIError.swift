@@ -24,6 +24,8 @@ enum APIError: LocalizedError {
     case missingEstablishment(String)
     /// HTTP 409 avec `code: business_place_already_linked` — ce commerce est déjà rattaché à un autre compte.
     case businessPlaceAlreadyLinked(String)
+    /// HTTP 422 avec `code: notification_icon_required` — envoi campagne sans icône notif personnalisée.
+    case notificationIconRequired(String)
 
     var errorDescription: String? {
         switch self {
@@ -52,6 +54,8 @@ enum APIError: LocalizedError {
         case .missingEstablishment(let message):
             return message
         case .businessPlaceAlreadyLinked(let message):
+            return message
+        case .notificationIconRequired(let message):
             return message
         }
     }

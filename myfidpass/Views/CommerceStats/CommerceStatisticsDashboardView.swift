@@ -21,8 +21,6 @@ private struct MerchantStatsZoomDetailItem: Identifiable, Equatable {
 }
 
 enum CommerceStatsRuntimeSession {
-    /// Evite de rejouer les animations lourdes à chaque navigation; reset automatique au relaunch app.
-    static var hasPlayedMembersLineIntro = false
     static var hasRevealedEmbeddedDetailSections = false
 }
 
@@ -142,11 +140,13 @@ struct CommerceStatisticsDashboardView: View {
         max(UIScreen.main.bounds.height - 48, 300)
     }
 
-    private func refreshCachedPresentations() {
+    /// Recalcule les tuiles du carrousel KPI (tous les mois) — coûteux : à n’appeler que quand les snapshots ou le paywall changent, **pas** au simple swipe de mois.
+    private func refreshMonthCarouselCachesOnly() {
         let demoPayloads = CommerceStatisticsPreviewMock.payloadsByMonthKeys(statsMonthKeys)
         let unlocked = commerceStatsInsightsUnlocked
 
         var updated: [String: CommerceStatisticsPresentation] = [:]
+        updated.reserveCapacity(statsMonthKeys.count)
         for key in statsMonthKeys {
             let realPres = vm.presentationForMonthCarousel(monthKey: key)
             if unlocked {
@@ -163,29 +163,64 @@ struct CommerceStatisticsDashboardView: View {
             }
         }
         cachedMonthPresentations = updated
+    }
+
+    /// Section « Plus de données » + campagnes : léger — peut suivre le mois sélectionné sans recalculer tout le carrousel.
+    private func refreshDetailCachesOnly() {
+        let demoPayloads = CommerceStatisticsPreviewMock.payloadsByMonthKeys(statsMonthKeys)
+        let unlocked = commerceStatsInsightsUnlocked
+        let key = selectedMonthKey
+            ?? statsMonthKeys.last
+            ?? CommerceStatsMonthNavigator.calendarMonthKey(for: Date())
 
         if unlocked {
-            cachedDetailPresentation = CommerceStatisticsDataBuilder.build(
-                stats: vm.stats,
-                evolution: vm.evolution,
-                panierRepereEuro: vm.baselinePanierRepereEUR
-            )
+            if let pres = cachedMonthPresentations[key] {
+                cachedDetailPresentation = pres
+            } else {
+                cachedDetailPresentation = vm.presentationForMonthCarousel(monthKey: key)
+            }
             cachedNotificationCampaigns = Array(vm.notificationCampaignsForPresentation.prefix(40))
+        } else if let mockPayload = demoPayloads[key] {
+            cachedDetailPresentation = CommerceStatisticsDataBuilder.build(
+                stats: mockPayload.stats,
+                evolution: mockPayload.evolution,
+                panierRepereEuro: mockPayload.stats.baselineAvgBasketEur
+            )
+            cachedNotificationCampaigns = CommerceStatisticsPreviewMock.paywallTeaserNotificationCampaigns
         } else {
-            let key = selectedMonthKey
-                ?? statsMonthKeys.last
-                ?? CommerceStatsMonthNavigator.calendarMonthKey(for: Date())
+            cachedDetailPresentation = CommerceStatisticsDataBuilder.build(stats: nil, evolution: [], panierRepereEuro: nil)
+            cachedNotificationCampaigns = CommerceStatisticsPreviewMock.paywallTeaserNotificationCampaigns
+        }
+    }
+
+    private func updateMonthCarouselCache(forMonthKey key: String) {
+        guard statsMonthKeys.contains(key) else {
+            refreshMonthCarouselCachesOnly()
+            return
+        }
+        let demoPayloads = CommerceStatisticsPreviewMock.payloadsByMonthKeys(statsMonthKeys)
+        let unlocked = commerceStatsInsightsUnlocked
+        let realPres = vm.presentationForMonthCarousel(monthKey: key)
+        let newPres: CommerceStatisticsPresentation = {
+            if unlocked { return realPres }
             if let mockPayload = demoPayloads[key] {
-                cachedDetailPresentation = CommerceStatisticsDataBuilder.build(
+                let mockPres = CommerceStatisticsDataBuilder.build(
                     stats: mockPayload.stats,
                     evolution: mockPayload.evolution,
                     panierRepereEuro: mockPayload.stats.baselineAvgBasketEur
                 )
-            } else {
-                cachedDetailPresentation = CommerceStatisticsDataBuilder.build(stats: nil, evolution: [], panierRepereEuro: nil)
+                return CommerceStatisticsDataBuilder.paywallTeaserMerging(real: realPres, mock: mockPres)
             }
-            cachedNotificationCampaigns = CommerceStatisticsPreviewMock.paywallTeaserNotificationCampaigns
-        }
+            return realPres
+        }()
+        var next = cachedMonthPresentations
+        next[key] = newPres
+        cachedMonthPresentations = next
+    }
+
+    private func refreshCachedPresentations() {
+        refreshMonthCarouselCachesOnly()
+        refreshDetailCachesOnly()
     }
 
     private func presentCommerceStatsPaywall() {
@@ -313,9 +348,7 @@ struct CommerceStatisticsDashboardView: View {
                     .ignoresSafeArea()
                     .contentShape(Rectangle())
                     .onTapGesture {
-                        withAnimation(.spring(response: 0.34, dampingFraction: 0.9)) {
-                            panierRepereSheetPresented = false
-                        }
+                        panierRepereSheetPresented = false
                         schedulePanierRepereNudgeIfNeeded()
                     }
                     .zIndex(28)
@@ -323,9 +356,7 @@ struct CommerceStatisticsDashboardView: View {
                 MerchantStatsPanierRepereCompactSheet(
                     initialEuro: vm.baselinePanierRepereEUR,
                     onClose: {
-                        withAnimation(.spring(response: 0.34, dampingFraction: 0.9)) {
-                            panierRepereSheetPresented = false
-                        }
+                        panierRepereSheetPresented = false
                         schedulePanierRepereNudgeIfNeeded()
                     },
                     onSave: { value, clear in
@@ -335,7 +366,7 @@ struct CommerceStatisticsDashboardView: View {
                 .frame(maxWidth: 430)
                 .padding(.horizontal, 18)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-                .transition(.scale(scale: 0.97).combined(with: .opacity))
+                .transition(.identity)
                 .zIndex(29)
             }
         }
@@ -347,7 +378,8 @@ struct CommerceStatisticsDashboardView: View {
             showDeferredDetailSections = false
         }
         .onAppear {
-            refreshCachedPresentations()
+            refreshMonthCarouselCachesOnly()
+            refreshDetailCachesOnly()
             if isEmbeddedCommerceStats {
                 /// Affichage immédiat en embarqué: évite l'effet "les blocs arrivent après".
                 showDeferredDetailSections = true
@@ -360,8 +392,14 @@ struct CommerceStatisticsDashboardView: View {
         .onReceive(NotificationCenter.default.publisher(for: .myfidpassCommerceStatsTabDidBecomeSelected)) { _ in
             schedulePanierRepereNudgeIfNeeded()
         }
-        .onChange(of: vm.lastSuccessfullyLoadedPeriod) { _, _ in
-            refreshCachedPresentations()
+        .onChange(of: vm.lastSuccessfullyLoadedPeriod) { _, newPeriod in
+            let p = newPeriod?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !p.isEmpty, statsMonthKeys.contains(p) {
+                updateMonthCarouselCache(forMonthKey: p)
+                refreshDetailCachesOnly()
+            } else {
+                refreshCachedPresentations()
+            }
         }
         .onChange(of: vm.baselinePanierRepereEUR) { _, newVal in
             refreshCachedPresentations()
@@ -409,7 +447,6 @@ struct CommerceStatisticsDashboardView: View {
                     .presentationCornerRadius(28)
             }
         }
-        .animation(.spring(response: 0.34, dampingFraction: 0.9), value: panierRepereSheetPresented)
         .onChange(of: authService.merchantSubscription?.status) { _, _ in
             refreshCachedPresentations()
         }
@@ -600,7 +637,6 @@ struct CommerceStatisticsDashboardView: View {
             }
         }
         .padding(.top, 6)
-        .animation(.smooth(duration: 0.28), value: selectedMonthIndex)
     }
 
     @ViewBuilder
@@ -613,7 +649,6 @@ struct CommerceStatisticsDashboardView: View {
                     .font(CommerceStatisticsTheme.statsChromeSectionTitle(size: 32, weight: .bold))
                     .foregroundStyle(CommerceStatisticsTheme.pageTitle(forGlassOverlay: g))
                     .multilineTextAlignment(.leading)
-                    .animation(.easeInOut(duration: 0.22), value: selectedMonthIndex)
                 Spacer()
             }
             .padding(.bottom, kpiMonthTitleBottomInset)
@@ -649,7 +684,7 @@ struct CommerceStatisticsDashboardView: View {
             }
             .onChange(of: selectedMonthIndex) { old, new in
                 guard old != new else { return }
-                refreshCachedPresentations()
+                refreshDetailCachesOnly()
                 if !accessibilityReduceMotion {
                     let g = UISelectionFeedbackGenerator()
                     g.prepare()
@@ -658,11 +693,6 @@ struct CommerceStatisticsDashboardView: View {
             }
             .padding(.horizontal, -kpiBlockHorizontalOutdent)
         }
-    }
-
-    /// Ressort aligné sur l’écran notifs (carrousel + pastilles cliquables).
-    private var monthCarouselPageIndicatorSpring: Animation {
-        .spring(response: 0.44, dampingFraction: 0.86, blendDuration: 0.1)
     }
 
     @ViewBuilder
@@ -677,9 +707,7 @@ struct CommerceStatisticsDashboardView: View {
             HStack(spacing: 0) {
                 ForEach(0..<n, id: \.self) { idx in
                     Button {
-                        withAnimation(monthCarouselPageIndicatorSpring) {
-                            selectedMonthIndex = (n - 1) - idx
-                        }
+                        selectedMonthIndex = (n - 1) - idx
                     } label: {
                         Capsule()
                             .fill(idx == active ? activePill : Color.black.opacity(g ? 0.24 : 0.18))
@@ -690,7 +718,6 @@ struct CommerceStatisticsDashboardView: View {
                 }
             }
             .frame(maxWidth: .infinity)
-            .animation(monthCarouselPageIndicatorSpring, value: active)
             .padding(.top, 4)
             .accessibilityElement(children: .combine)
             .accessibilityLabel("Mois affiché")
@@ -723,8 +750,7 @@ struct CommerceStatisticsDashboardView: View {
                     }
                 },
                 zoomTransitionSourceID: zoomID,
-                zoomTransitionNamespace: statsZoomNamespace,
-                playNeonLineIntro: selectedMonthKey == monthKey
+                zoomTransitionNamespace: statsZoomNamespace
             )
             .frame(height: membersKpiCardFixedHeight, alignment: .top)
             .scaleEffect(kpiCardsMicroScale, anchor: .top)
@@ -961,9 +987,7 @@ struct CommerceStatisticsDashboardView: View {
             guard zoomDetailSheetItem == nil else { return }
             guard !accountingPackPresented else { return }
             guard !panierRepereSheetPresented else { return }
-            withAnimation(.spring(response: 0.34, dampingFraction: 0.9)) {
-                panierRepereSheetPresented = true
-            }
+            panierRepereSheetPresented = true
         }
     }
 

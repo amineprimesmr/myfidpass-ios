@@ -100,6 +100,16 @@ final class AuthService: NSObject, ObservableObject {
         return hasPaidStripeSubscription
     }
 
+    /// Plein écran « reprenez vos activités » : essai terminé (ou jamais résolu côté client) sans abonnement — **après** un `/me` réussi.
+    /// Tant que `merchantSubscriptionEligibilityResolved` est faux, on n’affiche pas l’écran (évite flash au cold start).
+    var shouldShowMerchantAccessRenewalFullscreen: Bool {
+        if isPlatformAdmin { return false }
+        guard AuthStorage.isLoggedIn else { return false }
+        guard currentScreen == .authenticated else { return false }
+        guard merchantSubscriptionEligibilityResolved else { return false }
+        return !subscriptionAccessUnlocked()
+    }
+
     /// Verrou post-inscription : tant que ce flag n’est pas consommé par le paywall,
     /// l’accès doit rester bloqué pour forcer l’étape paiement.
     var mustOpenMandatoryPaywallAfterSignup: Bool {

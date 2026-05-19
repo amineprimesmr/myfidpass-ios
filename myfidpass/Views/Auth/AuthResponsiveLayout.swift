@@ -21,4 +21,50 @@ enum AuthResponsiveLayout {
     }
 
     static func heroWidthFractionSplit() -> CGFloat { 0.5 }
+
+    // MARK: - Carrousel auth empilé (Connexion / Inscription, iPad portrait)
+
+    /// Hauteur du carrousel : iPhone quasi plein écran ; iPad réduit mais lisible (~55 %).
+    static func authStackedHeroHeightFraction(
+        width: CGFloat,
+        horizontalSizeClass: UserInterfaceSizeClass?
+    ) -> CGFloat {
+        if horizontalSizeClass == .regular { return 0.55 }
+        if width >= 600 { return 0.58 }
+        return 0.82
+    }
+
+    /// Largeur du carrousel (centré sur grands écrans).
+    static func authStackedHeroImageWidth(
+        containerWidth: CGFloat,
+        horizontalSizeClass: UserInterfaceSizeClass?
+    ) -> CGFloat {
+        if horizontalSizeClass == .regular {
+            return min(520, containerWidth * 0.68)
+        }
+        if containerWidth >= 600 {
+            return min(480, containerWidth * 0.65)
+        }
+        return containerWidth
+    }
+
+    /// `true` → image entière visible (plus petite), pas de recadrage plein écran.
+    static func authStackedHeroUsesContainedImage(
+        width: CGFloat,
+        horizontalSizeClass: UserInterfaceSizeClass?
+    ) -> Bool {
+        horizontalSizeClass == .regular || width >= 600
+    }
+
+    /// Décalage vertical du carrousel sous la barre de statut (iPad).
+    static func authStackedHeroTopPadding(
+        width: CGFloat,
+        horizontalSizeClass: UserInterfaceSizeClass?,
+        safeTop: CGFloat
+    ) -> CGFloat {
+        if horizontalSizeClass == .regular || width >= 600 {
+            return max(safeTop, 44) + 4
+        }
+        return -8
+    }
 }

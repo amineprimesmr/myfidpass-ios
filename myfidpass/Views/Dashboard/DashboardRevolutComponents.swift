@@ -279,3 +279,27 @@ enum FlyerEditorSurfaceColors {
     /// Halo bleu-gris derrière les blocs flyer (`#242d3b`).
     static let glowDepth = Color(red: 36 / 255, green: 45 / 255, blue: 59 / 255)
 }
+
+/// Même halo radial que Paywall PRO / surfaces « Flyer » (assistant, blocs halo).
+struct FlyerEditorCanvasBackdrop: View {
+    var body: some View {
+        GeometryReader { proxy in
+            let endR = max(proxy.size.width, proxy.size.height) * 0.95
+            ZStack {
+                FlyerEditorSurfaceColors.canvas
+                RadialGradient(
+                    colors: [
+                        FlyerEditorSurfaceColors.glowDepth.opacity(0.65),
+                        FlyerEditorSurfaceColors.glowDepth.opacity(0.28),
+                        FlyerEditorSurfaceColors.canvas.opacity(0),
+                    ],
+                    center: UnitPoint(x: 0.5, y: 0.08),
+                    startRadius: 0,
+                    endRadius: endR
+                )
+                .blur(radius: 24)
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height)
+        }
+    }
+}

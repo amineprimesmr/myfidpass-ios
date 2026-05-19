@@ -200,9 +200,7 @@ struct MerchantStatisticRevolutDetailScreen: View {
         let on = chartMode == mode
         return Button {
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
-            withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
-                chartMode = mode
-            }
+            chartMode = mode
         } label: {
             Image(systemName: systemImage)
                 .font(CommerceStatisticsTheme.statsText(size: 14, weight: .semibold))

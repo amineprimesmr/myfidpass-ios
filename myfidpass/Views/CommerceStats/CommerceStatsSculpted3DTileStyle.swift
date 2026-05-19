@@ -161,7 +161,7 @@ struct CommerceStatsSculpted3DKpiButtonStyle: ButtonStyle {
         .clipShape(shape)
         .contentShape(shape)
         .scaleEffect(c ? 0.965 : 1.0)
-        .animation(.easeOut(duration: 0.11), value: c)
+        .animation(nil, value: c)
     }
 }
 

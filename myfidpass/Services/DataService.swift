@@ -88,9 +88,18 @@ final class DataService: ObservableObject {
     private let viewContext: NSManagedObjectContext
     /// Déclenche les mises à jour des vues qui utilisent ce service.
     @Published private(set) var updateTrigger: Int = 0
+    /// Réagit aux fusions synchro → Core Data (`SyncService`) qui ne passent pas par `save()` ici.
+    private var coreDataMergeCancellable: AnyCancellable?
 
     init(context: NSManagedObjectContext) {
         self.viewContext = context
+        coreDataMergeCancellable = NotificationCenter.default
+            .publisher(for: .myfidpassMerchantCoreDataDidMergeFromSync)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.updateTrigger += 1
+            }
     }
 
     // MARK: - Business

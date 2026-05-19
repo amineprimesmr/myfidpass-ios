@@ -80,6 +80,9 @@ MyFidpass permet aux commerçants de fidéliser leurs clients avec des cartes da
 • Consultez votre activité et la liste des membres depuis l’app.
 
 Connectez-vous ou créez votre compte commerçant sur myfidpass.fr pour activer votre carte.
+
+Conditions d’utilisation (EULA) : https://myfidpass.fr/cgu
+Politique de confidentialité : https://myfidpass.fr/confidentialite
 ```
 
 **Mots-clés (exemple)** :  

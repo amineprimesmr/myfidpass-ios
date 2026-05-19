@@ -224,6 +224,15 @@ private struct HomeSetupGlassButtonModifier: ViewModifier {
     }
 }
 
+private struct MerchantHomeFlyerPromoSheetContext: Identifiable, Equatable {
+    let id = UUID()
+    let businessSlug: String
+
+    static func == (lhs: MerchantHomeFlyerPromoSheetContext, rhs: MerchantHomeFlyerPromoSheetContext) -> Bool {
+        lhs.id == rhs.id && lhs.businessSlug == rhs.businessSlug
+    }
+}
+
 struct DashboardView: View {
     private let homeTopPreviewCardHeight: CGFloat = 152
     @Environment(\.managedObjectContext) private var viewContext
@@ -233,6 +242,7 @@ struct DashboardView: View {
     @EnvironmentObject private var tabRouter: MainTabRouter
     @EnvironmentObject private var authService: AuthService
     @Environment(\.merchantWorkspaceMode) private var merchantWorkspaceMode
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var dataService: DataService
 
     @State private var showScanner: Bool = false
@@ -275,6 +285,11 @@ struct DashboardView: View {
     @AppStorage("myfidpass.merchantHomeCardOpenedFromHome.v1") private var merchantHomeCardOpenedFromHome = false
     /// Aligné sur `ContentView` : pas d’indicateur sync en haut pendant le tutoriel (snapshots / overlay).
     @AppStorage("myfidpass.homeTutorial.v1") private var homeTutorialCompleted = false
+    /// Feuille « Créer le flyer » tant que pas de flyer enregistré — à la réouverture de l’app + file post « Ma carte ».
+    @State private var merchantHomeFlyerPromoPresentation: MerchantHomeFlyerPromoSheetContext?
+    @State private var merchantFlyerPromoQueuedPresentationWorkItem: DispatchWorkItem?
+    /// Évite de marquer « fermé pour la session » quand on ouvre l’éditeur flyer depuis le CTA.
+    @State private var skipFlyerPromoSuppressOnDismiss = false
     private var palette: DashboardRevolutPalette { DashboardRevolutPalette(colorScheme: colorScheme) }
 
     init(context: NSManagedObjectContext) {
@@ -375,7 +390,9 @@ struct DashboardView: View {
             .scrollIndicators(.hidden)
             .background(palette.canvas)
             .clipShape(DashboardTopRoundedPanel.shape)
-            .padding(.top, DashboardHomeChrome.showMinimalTopBar ? DashboardHomeMinimalTopBarLayout.scrollContentTopInset : 0)
+            .padding(.top, DashboardHomeChrome.showMinimalTopBar
+                ? (DashboardHomeMinimalTopBarLayout.scrollContentTopInset - DashboardHomeLayoutMetrics.homeScrollTopPullUp)
+                : 0)
             .ignoresSafeArea(edges: .bottom)
             .refreshable {
                 await syncService.syncIfNeeded(force: true)
@@ -472,126 +489,233 @@ struct DashboardView: View {
 
     var body: some View {
         let _ = dataService.updateTrigger
+        applyDashboardPresentations(to: applyDashboardListeners(to: dashboardNavigationStack))
+    }
+
+    private var dashboardNavigationStack: some View {
         NavigationStack(path: $navigationPath) {
             dashboardHomeRoot
         }
-        .onChange(of: navigationPath) { _, path in
-            tabRouter.isDashboardAtRoot = path.isEmpty
-        }
-        .onChange(of: tabRouter.selectedTab) { _, newTab in
-            if showHomeMerchantStatistics {
-                showHomeMerchantStatistics = false
+    }
+
+    private func applyDashboardListeners<V: View>(to content: V) -> some View {
+        applyDashboardListenersPhase2(to: applyDashboardListenersPhase1(to: content))
+    }
+
+    private func applyDashboardListenersPhase1<V: View>(to content: V) -> some View {
+        content
+            .onChange(of: navigationPath) { _, path in
+                tabRouter.isDashboardAtRoot = path.isEmpty
             }
-            if newTab == 0 {
+            .onChange(of: tabRouter.selectedTab) { _, newTab in
+                if newTab != 0 {
+                    merchantFlyerPromoQueuedPresentationWorkItem?.cancel()
+                    merchantFlyerPromoQueuedPresentationWorkItem = nil
+                }
+                if showHomeMerchantStatistics {
+                    showHomeMerchantStatistics = false
+                }
+                if newTab == 0 {
+                    refreshHomeFlyerAvailability()
+                    Task { await refreshHomeNotificationIconStatusIfNeeded() }
+                }
+            }
+            .onAppear {
+                tabRouter.isDashboardAtRoot = navigationPath.isEmpty
+                tabRouter.isDashboardSetupMode = isHomeSetupMode
+                tabRouter.hasResolvedDashboardSetupMode = true
+                FlyerEmbedWarmup.startIfNeeded()
                 refreshHomeFlyerAvailability()
                 Task { await refreshHomeNotificationIconStatusIfNeeded() }
+                scheduleMerchantFlyerPromoSheetIfEligible()
             }
-        }
-        .onAppear {
-            tabRouter.isDashboardAtRoot = navigationPath.isEmpty
-            tabRouter.isDashboardSetupMode = isHomeSetupMode
-            tabRouter.hasResolvedDashboardSetupMode = true
-            FlyerEmbedWarmup.startIfNeeded()
-            refreshHomeFlyerAvailability()
-            Task { await refreshHomeNotificationIconStatusIfNeeded() }
-        }
-        .onDisappear {
-            tabRouter.isDashboardSetupMode = false
-            tabRouter.hasResolvedDashboardSetupMode = false
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .myfidpassCardPreviewDisplayDidChange)) { _ in
-            cardPreviewDisplayRefresh += 1
-            refreshHomeFlyerAvailability()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .myfidpassOpenMerchantFlyerHub)) { note in
-            let startCreate = Self.flyerHubStartCreateAssistant(from: note)
-            openFlyerHubFromHome(forEdit: false, startCreateAssistant: startCreate)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .myfidpassOpenHomeMyCardFullScreen)) { _ in
-            showMyCardFullScreen = true
-        }
-        .onChange(of: showMyCardFullScreen) { _, isOpen in
-            if !isOpen {
-                refreshHomeCardSetupThumbnail()
+            .onDisappear {
+                tabRouter.isDashboardSetupMode = false
+                tabRouter.hasResolvedDashboardSetupMode = false
             }
-        }
-
-        .fullScreenCover(item: $scanResultSheet) { data in
-            scanAddPointsSheet(for: data)
-        }
-        .fullScreenCover(item: $scanStampSheet) { data in
-            AddStampVisitSheet(
-                data: data,
-                isSubmitting: $isStampVisitSubmitting,
-                onDismiss: { scanStampSheet = nil },
-                onConfirm: {
-                    await submitStampVisit(slug: data.slug, barcode: data.barcode)
-                },
-                onRedeemFinalReward: {
-                    await redeemStampRewardFromScan(slug: data.slug, barcode: data.barcode)
+            .onChange(of: scenePhase) { oldPhase, newPhase in
+                if newPhase == .background {
+                    PostCardFlyerPromoEligibility.resetSessionSuppressionForAppOpen()
                 }
-            )
-        }
-        /// « Ma carte » : zoom iOS 18+ (comme la feuille détail stats) — `NavigationStack` + push ne déclenche pas `navigationTransition(.zoom)`.
-        .fullScreenCover(isPresented: $showMyCardFullScreen) {
-            NavigationStack {
-                MyCardView(context: viewContext)
-                    .environmentObject(syncService)
+                if newPhase == .active && oldPhase == .background {
+                    scheduleMerchantFlyerPromoSheetIfEligible()
+                }
             }
-            .environment(\.managedObjectContext, viewContext)
-            .statsDetailZoomTransition(sourceID: HomeMyCardZoom.previewSourceID, namespace: homeMyCardZoomNamespace)
-        }
-        .fullScreenCover(isPresented: $showHomeFlyerHubFullScreen) {
-            NavigationStack {
-                MerchantProgramHubView(
-                    context: viewContext,
-                    seedOpenFlyerForEdit: homeFlyerHubOpenedForEdit,
-                    startInCreateFromEditBack: homeFlyerHubStartCreateAssistant,
-                    liveCommerceSnapshot: homeFlyerHubOpenedForEdit ? CommerceFlyerLiveSnapshot(
-                        bootstrapPreviewB64: homeFlyerBootstrapB64,
-                        customBgDataURL: homeFlyerCustomBgDataURL,
-                        shareURL: homeFlyerPublicPageURLString
-                    ) : nil,
-                    onFlyerSaveSuccessReturnToCommerce: { showHomeFlyerHubFullScreen = false },
-                    onExitFlyerHubPopCommerce: { showHomeFlyerHubFullScreen = false }
-                )
-                .environmentObject(syncService)
-                .environmentObject(authService)
-            }
-            .environment(\.managedObjectContext, viewContext)
-        }
-        .fullScreenCover(isPresented: $showHomeMerchantStatistics) {
-            homeMerchantStatisticsOverlay
-                .statsDetailZoomTransition(sourceID: HomeMerchantStatsZoom.sourceID, namespace: homeMerchantStatsZoomNamespace)
-                .merchantFluidZoomFullScreenTransparentChrome()
-        }
-        .onChange(of: currentBusinessSlug) { _, _ in
-            homeHasNotificationIconConfigured = false
-            homeNotificationIconURL = nil
-            homeNotificationIconLastCheckAt = nil
-            homeNotificationIconLastSlug = nil
-            refreshHomeFlyerAvailability()
-            Task { await refreshHomeNotificationIconStatusIfNeeded(force: true) }
-        }
-        .onChange(of: isHomeSetupMode) { _, newValue in
-            tabRouter.isDashboardSetupMode = newValue
-        }
-        .onChange(of: homeFlyerBootstrapB64) { _, newB64 in
-            let raw = newB64?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if !raw.isEmpty, let parsed = FlyerBootstrapPreviewPayloadBuilder.flyerStateFromBootstrapBase64(raw) {
-                cachedFlyerUnderlayState = parsed
-            } else {
-                var d = FlyerStateDTO.default
-                d.normalizeClamps()
-                cachedFlyerUnderlayState = d
-            }
-        }
-        .onChange(of: showHomeFlyerHubFullScreen) { _, isPresented in
-            if !isPresented {
-                homeFlyerHubStartCreateAssistant = false
+    }
+
+    private func applyDashboardListenersPhase2<V: View>(to content: V) -> some View {
+        content
+            .onReceive(NotificationCenter.default.publisher(for: .myfidpassCardPreviewDisplayDidChange)) { _ in
+                cardPreviewDisplayRefresh += 1
                 refreshHomeFlyerAvailability()
+                scheduleMerchantFlyerPromoSheetIfEligible()
             }
+            .onReceive(NotificationCenter.default.publisher(for: .myfidpassOpenMerchantFlyerHub)) { note in
+                handleOpenMerchantFlyerHubNotification(note)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .myfidpassOpenHomeMyCardFullScreen)) { _ in
+                showMyCardFullScreen = true
+            }
+            .onChange(of: showMyCardFullScreen) { _, isOpen in
+                if !isOpen {
+                    refreshHomeCardSetupThumbnail()
+                    if PostCardFlyerPromoEligibility.hasQueuedPendingMerchantHomeSlug() {
+                        scheduleMerchantFlyerPromoSheetIfEligible()
+                    }
+                }
+            }
+            .onChange(of: merchantHomeFlyerPromoPresentation) { old, new in
+                guard let previous = old, new == nil else { return }
+                if skipFlyerPromoSuppressOnDismiss {
+                    skipFlyerPromoSuppressOnDismiss = false
+                    return
+                }
+                if PostCardFlyerPromoEligibility.stillNeedsFlyerPromo(for: previous.businessSlug) {
+                    PostCardFlyerPromoEligibility.markDismissedWithoutCompletingFlyer()
+                }
+            }
+            .onChange(of: currentBusinessSlug) { _, _ in
+                homeHasNotificationIconConfigured = false
+                homeNotificationIconURL = nil
+                homeNotificationIconLastCheckAt = nil
+                homeNotificationIconLastSlug = nil
+                refreshHomeFlyerAvailability()
+                Task { await refreshHomeNotificationIconStatusIfNeeded(force: true) }
+            }
+            .onChange(of: isHomeSetupMode) { _, newValue in
+                tabRouter.isDashboardSetupMode = newValue
+            }
+            .onChange(of: homeFlyerBootstrapB64) { _, newB64 in
+                applyHomeFlyerBootstrapB64Change(newB64)
+            }
+            .onChange(of: showHomeFlyerHubFullScreen) { _, isPresented in
+                if !isPresented {
+                    homeFlyerHubStartCreateAssistant = false
+                    refreshHomeFlyerAvailability()
+                }
+            }
+    }
+
+    private func applyHomeFlyerBootstrapB64Change(_ newB64: String?) {
+        let raw = newB64?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !raw.isEmpty, let parsed = FlyerBootstrapPreviewPayloadBuilder.flyerStateFromBootstrapBase64(raw) {
+            cachedFlyerUnderlayState = parsed
+        } else {
+            var d = FlyerStateDTO.default
+            d.normalizeClamps()
+            cachedFlyerUnderlayState = d
         }
+    }
+
+    private func handleOpenMerchantFlyerHubNotification(_ note: Notification) {
+        let startCreate = Self.flyerHubStartCreateAssistant(from: note)
+        openFlyerHubFromHome(forEdit: false, startCreateAssistant: startCreate)
+    }
+
+    private func applyDashboardPresentations<V: View>(to content: V) -> some View {
+        applyDashboardFullScreenCovers(to: applyDashboardSheetPresentations(to: content))
+    }
+
+    private func applyDashboardSheetPresentations<V: View>(to content: V) -> some View {
+        content
+            .sheet(item: $merchantHomeFlyerPromoPresentation) { ctx in
+                merchantHomeFlyerPromoSheet(ctx)
+            }
+            .fullScreenCover(item: $scanResultSheet) { data in
+                scanAddPointsSheet(for: data)
+            }
+            .fullScreenCover(item: $scanStampSheet) { data in
+                dashboardScanStampSheet(data)
+            }
+    }
+
+    private func applyDashboardFullScreenCovers<V: View>(to content: V) -> some View {
+        content
+            .fullScreenCover(isPresented: $showMyCardFullScreen) {
+                dashboardMyCardFullScreen
+            }
+            .fullScreenCover(isPresented: $showHomeFlyerHubFullScreen) {
+                dashboardHomeFlyerHubFullScreen
+            }
+            .fullScreenCover(isPresented: $showHomeMerchantStatistics) {
+                homeMerchantStatisticsOverlay
+                    .statsDetailZoomTransition(sourceID: HomeMerchantStatsZoom.sourceID, namespace: homeMerchantStatsZoomNamespace)
+                    .merchantFluidZoomFullScreenTransparentChrome()
+            }
+    }
+
+    @ViewBuilder
+    private func merchantHomeFlyerPromoSheet(_ ctx: MerchantHomeFlyerPromoSheetContext) -> some View {
+        PostCardFlyerPromoSheet(
+            slug: ctx.businessSlug,
+            isPresented: Binding(
+                get: { merchantHomeFlyerPromoPresentation != nil },
+                set: { if !$0 { merchantHomeFlyerPromoPresentation = nil } }
+            ),
+            onCreateFlyerTapped: {
+                skipFlyerPromoSuppressOnDismiss = true
+                merchantHomeFlyerPromoPresentation = nil
+                openFlyerHubFromHome(forEdit: false, startCreateAssistant: true)
+            }
+        )
+    }
+
+    @ViewBuilder
+    private func dashboardScanStampSheet(_ data: ScanStampSheetData) -> some View {
+        AddStampVisitSheet(
+            data: data,
+            isSubmitting: $isStampVisitSubmitting,
+            onDismiss: { scanStampSheet = nil },
+            onStampVisitSuccess: { response in
+                successToast = Toast.scanStampSuccess(
+                    memberName: response.member?.name ?? data.memberName,
+                    pointsCapped: response.pointsCapped == true,
+                    pointsRequested: response.pointsRequested,
+                    pointsAdded: response.pointsAdded,
+                    stampCycleCompleted: response.stampCycleCompleted == true
+                )
+                showToast = true
+            },
+            onConfirm: {
+                await submitStampVisit(slug: data.slug, barcode: data.barcode)
+            }
+        )
+    }
+
+    @ViewBuilder
+    private var dashboardMyCardFullScreen: some View {
+        NavigationStack {
+            MyCardView(context: viewContext)
+                .environmentObject(syncService)
+        }
+        .environment(\.managedObjectContext, viewContext)
+        .statsDetailZoomTransition(sourceID: HomeMyCardZoom.previewSourceID, namespace: homeMyCardZoomNamespace)
+    }
+
+    @ViewBuilder
+    private var dashboardHomeFlyerHubFullScreen: some View {
+        NavigationStack {
+            MerchantProgramHubView(
+                context: viewContext,
+                seedOpenFlyerForEdit: homeFlyerHubOpenedForEdit,
+                startInCreateFromEditBack: homeFlyerHubStartCreateAssistant,
+                liveCommerceSnapshot: homeFlyerHubLiveSnapshot,
+                onFlyerSaveSuccessReturnToCommerce: { showHomeFlyerHubFullScreen = false },
+                onExitFlyerHubPopCommerce: { showHomeFlyerHubFullScreen = false }
+            )
+            .environmentObject(syncService)
+            .environmentObject(authService)
+        }
+        .environment(\.managedObjectContext, viewContext)
+    }
+
+    private var homeFlyerHubLiveSnapshot: CommerceFlyerLiveSnapshot? {
+        guard homeFlyerHubOpenedForEdit else { return nil }
+        return CommerceFlyerLiveSnapshot(
+            bootstrapPreviewB64: homeFlyerBootstrapB64,
+            customBgDataURL: homeFlyerCustomBgDataURL,
+            shareURL: homeFlyerPublicPageURLString
+        )
     }
 
     /// Même plein écran que l’onglet Commerce (icône graphique) : « Outils d’analyse » + KPI.
@@ -702,7 +826,7 @@ struct DashboardView: View {
                 } else {
                     fintechHomeTopAndCardOwner
                     fintechTransactionsSection
-                        .padding(.top, 8)
+                        .padding(.top, 2)
                         .transition(.asymmetric(insertion: .opacity.combined(with: .move(edge: .bottom)), removal: .opacity))
                 }
             }
@@ -931,8 +1055,8 @@ struct DashboardView: View {
             homeMyCardSlide
                 .environment(\.homeCarouselPress, .inactive)
                 .frame(maxWidth: .infinity)
-                .padding(.top, -8)
-                .padding(.bottom, -4)
+                .padding(.top, -14)
+                .padding(.bottom, -10)
         }
     }
 
@@ -994,6 +1118,36 @@ struct DashboardView: View {
             }
         }
         .frame(maxWidth: .infinity)
+    }
+
+    /// Feuille « Créer le flyer » tant que pas de flyer enregistré : lancement Accueil, retour après arrière-plan, file post « Ma carte ».
+    private func scheduleMerchantFlyerPromoSheetIfEligible() {
+        guard merchantWorkspaceMode != .staff else { return }
+        guard tabRouter.selectedTab == 0 else { return }
+        guard !showMyCardFullScreen else { return }
+        guard !showHomeFlyerHubFullScreen else { return }
+        guard !showHomeMerchantStatistics else { return }
+        guard merchantHomeFlyerPromoPresentation == nil else { return }
+
+        merchantFlyerPromoQueuedPresentationWorkItem?.cancel()
+        let work = DispatchWorkItem {
+            guard merchantWorkspaceMode != .staff else { return }
+            guard tabRouter.selectedTab == 0 else { return }
+            guard !showMyCardFullScreen else { return }
+            guard !showHomeFlyerHubFullScreen else { return }
+            guard !showHomeMerchantStatistics else { return }
+            guard merchantHomeFlyerPromoPresentation == nil else { return }
+
+            let slugQueued = PostCardFlyerPromoEligibility.dequeuePendingSlugIfEligible()
+            let activeRaw = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let slug = slugQueued ?? (activeRaw.isEmpty ? nil : activeRaw)
+
+            guard let slug, PostCardFlyerPromoEligibility.shouldOffer(for: slug) else { return }
+
+            merchantHomeFlyerPromoPresentation = MerchantHomeFlyerPromoSheetContext(businessSlug: slug)
+        }
+        merchantFlyerPromoQueuedPresentationWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
     }
 
     private func openFlyerHubFromHome(forEdit: Bool = false, startCreateAssistant: Bool = false) {
@@ -1477,10 +1631,18 @@ struct DashboardView: View {
 
                 if shouldPresentStampVisitSheetAfterScan(settings) {
                     let stampModel = await MainActor.run {
-                        DashboardHomeCardModel.resolveStampScanPreview(
+                        let api = lookup.member.points ?? 0
+                        let bc = barcode.trimmingCharacters(in: .whitespacesAndNewlines)
+                        let merged: Int = {
+                            guard let t = dataService.currentCardTemplate(), !bc.isEmpty,
+                                  let card = dataService.clientCard(byQRCodeValue: bc),
+                                  card.template == t else { return api }
+                            return max(api, Int(card.stampsCount))
+                        }()
+                        return DashboardHomeCardModel.resolveStampScanPreview(
                             dataService: dataService,
                             memberName: memberName,
-                            memberStampBalance: lookup.member.points,
+                            memberStampBalance: merged,
                             settings: settings
                         )
                     }
@@ -1543,22 +1705,6 @@ struct DashboardView: View {
         } catch {
             await MainActor.run {
                 scanError = (error as? APIError)?.errorDescription ?? "Erreur lors de l’enregistrement du tampon."
-                appState.showError(scanError ?? "Erreur")
-            }
-            return nil
-        }
-    }
-
-    private func redeemStampRewardFromScan(slug: String, barcode: String) async -> RedeemResponse? {
-        isStampVisitSubmitting = true
-        defer { Task { @MainActor in isStampVisitSubmitting = false } }
-        do {
-            let response = try await APIClient.shared.request(.redeemReward(slug: slug, memberId: barcode, type: .stamps)) as RedeemResponse
-            await syncService.syncAfterServerMutation()
-            return response
-        } catch {
-            await MainActor.run {
-                scanError = (error as? APIError)?.errorDescription ?? "Impossible d'utiliser la recompense."
                 appState.showError(scanError ?? "Erreur")
             }
             return nil

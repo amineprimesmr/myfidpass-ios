@@ -1,8 +1,10 @@
 # Réponse App Store Connect — informations pour la revue (copier-coller)
 
-Ce message Apple n’est **pas** un rejet pour bug : il manque des **informations dans App Store Connect** et, souvent, une **vidéo** + **compte de test**. Collez les blocs ci-dessous dans **App Store Connect → votre app → App Review Information → Notes** (et joignez la vidéo si le champ pièce jointe est disponible, ou indiquez un lien sécurisé si Apple l’accepte).
+**Rejet du 19 mai 2026 (v1.03)** — trois points : **4.8** Sign in with Apple, **2.1(b)** IAP non soumis, **3.1.2(c)** CGU + infos abonnement. Le code iOS et la page `/paiement` ont été mis à jour ; il reste des actions **obligatoires dans App Store Connect** (section 6 ci-dessous).
 
-Vérifiez que les URLs **https://myfidpass.fr/cgu** et **https://myfidpass.fr/confidentialite** existent et s’affichent correctement (sinon mettez à jour `LegalURLs.swift` dans le projet).
+Collez les blocs ci-dessous dans **App Store Connect → votre app → App Review Information → Notes** (et joignez une **vidéo** sur iPhone réel).
+
+Vérifiez que les URLs **https://myfidpass.fr/cgu** et **https://myfidpass.fr/confidentialite** existent et s’affichent correctement.
 
 ---
 
@@ -33,8 +35,9 @@ INSTRUCTIONS POUR LA REVUE
 2) Compte de démonstration (À REMPLIR par vous avant envoi) :
    - Email : …
    - Mot de passe : …
-3) Parcours : Tableau de bord → Scanner (caméra pour lire le QR du pass client) → Ma Carte (personnalisation) → Profil (établissement, notifications, périmètre, déconnexion, suppression de compte).
-4) Abonnement : l’app ne propose pas d’In-App Purchase. L’abonnement se souscrit sur notre site via Stripe (bouton dans Espace pro → Compte pro). Le détail des offres (titre, durée, prix) s’affiche sur la page de paiement Stripe. Liens légaux : https://myfidpass.fr/cgu et https://myfidpass.fr/confidentialite (également accessibles dans l’app : Connexion / Inscription / Profil / Compte pro).
+3) Parcours : Tableau de bord → Scanner (caméra) → Ma Carte → Profil (déconnexion, suppression de compte).
+4) Connexion : écran « Se connecter » propose **Sign in with Apple** (au-dessus de Google), **Continuer avec Google**, et e-mail. Même chose à l’inscription.
+5) Abonnement : facturation via **Stripe** sur myfidpass.fr/paiement (pas d’achat in-app StoreKit). Titre **MyFidpass Pro**, durée et prix (mensuel 49,99 €/mois ou annuel 399 €/an après 1 € le 1er mois) sont affichés sur la page de paiement et dans le bandeau légal sous le paywall dans l’app. CGU : https://myfidpass.fr/cgu — Confidentialité : https://myfidpass.fr/confidentialite (aussi sur Connexion / Inscription / paywall / Profil).
 
 SERVICES EXTERNES (fonctionnalité principale)
 - API backend MyFidpass (https://api.myfidpass.fr) : compte, sync commerce, membres, cartes, scans.
@@ -97,7 +100,40 @@ Same features worldwide (French-first). Not a regulated financial/medical/legal 
 
 ## 5. Modifications code réalisées pour la conformité
 
-- **Guideline 5.1.1** : textes d’usage **caméra**, **photos** et **localisation** enrichis (Info.plist + projet Xcode).  
-- **Guideline 3.1.2** : écran **Compte pro** : mention « pas d’IAP », liens **CGU** + **confidentialité** ; liens aussi **Connexion / Inscription / Profil**.  
-- **Privacy manifest** : `PrivacyInfo.xcprivacy` avec déclaration **UserDefaults** (raison **CA92.1**, exemple officiel TN3183).  
-- **Bug critique inscription** : le bouton principal en mode « Inscription » appelait par erreur la connexion — corrigé (`LoginView`).  
+- **4.8** : **Sign in with Apple** sur les écrans Connexion et Inscription (`AppleSignInRow` + `AuthAppleSignInSupport`).  
+- **3.1.2(c)** : bandeau légal abonnement (titre, durée, prix, CGU, confidentialité) sur le paywall WebView iOS + page `/paiement` + écrans auth.  
+- **5.1.1** : textes caméra / photos / localisation (Info.plist).  
+- **Privacy manifest** : `PrivacyInfo.xcprivacy` (UserDefaults CA92.1).
+
+---
+
+## 6. Actions obligatoires App Store Connect (avant resoumission)
+
+### A) Métadonnées — CGU / EULA (3.1.2c)
+
+| Champ | Valeur |
+|--------|--------|
+| **Politique de confidentialité** | `https://myfidpass.fr/confidentialite` |
+| **Description de l’app** (fin du texte) | `Conditions d’utilisation (EULA) : https://myfidpass.fr/cgu` |
+| **EULA personnalisée** (option) | Importer le PDF/texte CGU **ou** laisser EULA standard Apple **et** garder le lien CGU dans la description |
+
+### B) Achats intégrés — 2.1(b)
+
+L’app **ne utilise pas StoreKit** : paiement **Stripe** uniquement.
+
+- **Si des abonnements IAP existent** dans Connect (brouillon, non soumis) : **supprimez-les** (Monétisation → Abonnements) **OU** soumettez-les avec capture + binaire en précisant dans les Notes que la facturation réelle est Stripe (risque de confusion).
+- **Recommandé** : **aucun produit IAP** dans Connect + Notes explicites « pas d’In-App Purchase » (comme section 2).
+- Sur la **fiche de version**, ne cochez **aucun** IAP à inclure dans la review si vous n’en avez pas.
+
+### C) Notes pour la review (à ajouter)
+
+```
+Sign in with Apple : écran Connexion / Inscription, bouton natif au-dessus de Google.
+Abonnement : MyFidpass Pro — durée et prix visibles sur /paiement et bandeau légal dans l’app.
+EULA : https://myfidpass.fr/cgu | Confidentialité : https://myfidpass.fr/confidentialite
+Pas d’achat in-app StoreKit ; Stripe sur le web.
+```
+
+### D) Nouvelle build
+
+Archive Xcode → upload build **1.04+** → associer à la version → **Soumettre pour examen**.  

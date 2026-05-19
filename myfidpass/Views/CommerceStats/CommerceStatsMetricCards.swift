@@ -152,7 +152,6 @@ private struct MembersSparklineAreaShape: Shape {
 
 struct CommerceStatsLargeMetricCard: View {
     @Environment(\.commerceStatsGlassOverlay) private var commerceStatsGlassOverlay
-    @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
 
     let title: String
     let value: String
@@ -166,14 +165,8 @@ struct CommerceStatsLargeMetricCard: View {
     /// Transition zoom (iOS 18+) : fournir `id` + `namespace` avec `onTap`.
     var zoomTransitionSourceID: String? = nil
     var zoomTransitionNamespace: Namespace.ID? = nil
-    /// Animation néon + tracé à l’ouverture (carte Membres).
-    var playNeonLineIntro: Bool = true
     /// Couleur principale de la courbe/zone.
     var chartLineColor: Color = Color(red: 0, green: 1, blue: 133.0 / 255.0) // #00ff85
-
-    @State private var membersLineTrim: CGFloat = 0
-    @State private var membersNeonWeight: CGFloat = 1
-    @State private var membersAreaReveal: CGFloat = 0
 
     var body: some View {
         Group {
@@ -199,10 +192,6 @@ struct CommerceStatsLargeMetricCard: View {
             } else {
                 membersMetricCardLabel
             }
-        }
-        .task(id: chartSignature) {
-            // Évite les mutations d'état pendant le cycle de rendu SwiftUI.
-            await scheduleMembersChartIntroAnimation()
         }
     }
 
@@ -271,7 +260,6 @@ struct CommerceStatsLargeMetricCard: View {
     private func membersAreaChart(lineColor: Color) -> some View {
         let points = chartPoints
         let lineWidth: CGFloat = 4
-        let neon = max(0, min(1, membersNeonWeight))
         return GeometryReader { geo in
             let w = max(1, geo.size.width)
             let hTotal = max(1, geo.size.height)
@@ -285,102 +273,22 @@ struct CommerceStatsLargeMetricCard: View {
                             endPoint: .bottom
                         )
                     )
-                    .opacity(membersAreaReveal)
 
-                if neon > 0.01 {
-                    MembersSparklineLineShape(points: points, trimEnd: membersLineTrim)
-                        .stroke(
-                            lineColor.opacity(0.28 + 0.35 * neon),
-                            style: StrokeStyle(lineWidth: lineWidth + 12 * neon, lineCap: .round, lineJoin: .round)
-                        )
-                        .blur(radius: 9 * neon)
-
-                    MembersSparklineLineShape(points: points, trimEnd: membersLineTrim)
-                        .stroke(
-                            lineColor.opacity(0.55 + 0.25 * neon),
-                            style: StrokeStyle(lineWidth: lineWidth + 5 * neon, lineCap: .round, lineJoin: .round)
-                        )
-                        .blur(radius: 4.5 * neon)
-
-                    MembersSparklineLineShape(points: points, trimEnd: membersLineTrim)
-                        .stroke(
-                            Color.white.opacity(0.55 * neon),
-                            style: StrokeStyle(lineWidth: max(1, lineWidth * 0.35 * neon), lineCap: .round, lineJoin: .round)
-                        )
-                        .blur(radius: 2 * neon)
-                }
-
-                MembersSparklineLineShape(points: points, trimEnd: membersLineTrim)
+                MembersSparklineLineShape(points: points, trimEnd: 1)
                     .stroke(
                         lineColor,
                         style: StrokeStyle(lineWidth: lineWidth, lineCap: .round, lineJoin: .round)
                     )
 
             }
-            .drawingGroup()
             .frame(width: w, height: hTotal, alignment: .topLeading)
         }
-    }
-
-    @MainActor
-    private func scheduleMembersChartIntroAnimation() async {
-        await Task.yield()
-        runMembersChartIntroAnimation()
-    }
-
-    private func runMembersChartIntroAnimation() {
-        guard playNeonLineIntro, !CommerceStatsRuntimeSession.hasPlayedMembersLineIntro else {
-            // Replay léger à chaque arrivée / mise à jour données (sans néon), clairement visible.
-            membersLineTrim = 0
-            membersNeonWeight = 0
-            membersAreaReveal = 0.22
-            if accessibilityReduceMotion {
-                membersLineTrim = 1
-                membersAreaReveal = 1
-                return
-            }
-            withAnimation(.timingCurve(0.22, 0.08, 0.2, 1.0, duration: 0.62)) {
-                membersLineTrim = 1
-            }
-            withAnimation(.easeOut(duration: 0.42).delay(0.06)) {
-                membersAreaReveal = 1
-            }
-            return
-        }
-        if accessibilityReduceMotion {
-            membersLineTrim = 1
-            membersNeonWeight = 0
-            membersAreaReveal = 1
-            CommerceStatsRuntimeSession.hasPlayedMembersLineIntro = true
-            return
-        }
-
-        membersLineTrim = 0
-        membersNeonWeight = 1
-        membersAreaReveal = 0
-
-        withAnimation(.timingCurve(0.22, 0.08, 0.2, 1.0, duration: 1.45)) {
-            membersLineTrim = 1
-        }
-        withAnimation(.easeOut(duration: 0.72).delay(0.06)) {
-            membersAreaReveal = 1
-        }
-        withAnimation(.easeInOut(duration: 1.52).delay(0.62)) {
-            membersNeonWeight = 0
-        }
-        CommerceStatsRuntimeSession.hasPlayedMembersLineIntro = true
     }
 
     private var chartPoints: [CGFloat] {
         if !membersWeeklySparkline.isEmpty { return membersWeeklySparkline }
         // Pas de donnée d’évolution : ligne neutre (évite une fausse « forme » toujours identique).
         return [0.5, 0.5, 0.5, 0.5, 0.5]
-    }
-
-    private var chartSignature: String {
-        chartPoints
-            .map { String(format: "%.4f", Double($0)) }
-            .joined(separator: "|")
     }
 }
 

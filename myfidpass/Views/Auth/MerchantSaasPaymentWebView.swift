@@ -12,9 +12,11 @@ import WebKit
 /// WKWebView pour la page de paiement du site (cohérent avec la vitrine / Stripe Payment Link).
 struct MerchantSaasPaymentWebContent: UIViewRepresentable {
     let url: URL
+    /// Appelé après chaque chargement réussi — injection session web alignée sur `AuthStorage` natif.
+    var onPageDidFinish: ((WKWebView) -> Void)?
 
     func makeCoordinator() -> Coordinator {
-        Coordinator()
+        Coordinator(onPageDidFinish: onPageDidFinish)
     }
 
     func makeUIView(context: Context) -> WKWebView {
@@ -41,6 +43,16 @@ struct MerchantSaasPaymentWebContent: UIViewRepresentable {
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
+        private let onPageDidFinish: ((WKWebView) -> Void)?
+
+        init(onPageDidFinish: ((WKWebView) -> Void)?) {
+            self.onPageDidFinish = onPageDidFinish
+        }
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            onPageDidFinish?(webView)
+        }
+
         /// Liens `target="_blank"` : même WebView (CTA Stripe).
         func webView(
             _ webView: WKWebView,
@@ -97,6 +109,7 @@ struct MerchantSaasPaymentWebContent: UIViewRepresentable {
 /// Conteneur SwiftUI : page web plein écran + fermeture optionnelle (feuille modale).
 struct MerchantSaasPaymentWebView: View {
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var authService: AuthService
 
     /// Paywall bloquant : pas de bouton fermer.
     var allowsCloseButton: Bool = true
@@ -107,13 +120,39 @@ struct MerchantSaasPaymentWebView: View {
     var webContentExtraTopInset: CGFloat = 18
 
     @State private var isCloseButtonRevealed = false
+    @State private var paymentWebViewRef: WKWebView?
 
+    /// URL stable (sans `#fid_auth`) : la session est injectée en JS après chargement pour éviter tokens périmés + rechargements en boucle.
     private var paymentURL: URL {
-        buildPaymentURLWithAuthHandoff(base: LegalURLs.merchantSaasProPaymentPage)
+        LegalURLs.merchantSaasProPaymentPage
+    }
+
+    /// Commerce actif (`slug` stocké) ou premier commerce du compte — affiché comme contexte de paiement.
+    private var paymentBusinessDisplayName: String? {
+        let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let list = authService.businesses
+        guard !list.isEmpty else { return nil }
+        let biz: BusinessDTO = {
+            if !slug.isEmpty, let m = list.first(where: { $0.slug == slug }) { return m }
+            return list[0]
+        }()
+        let org = biz.organizationName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !org.isEmpty { return org }
+        let n = biz.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return n.isEmpty ? nil : n
+    }
+
+    /// Espace sous la zone chrome ; sans chrome, conserve l’ancien retrait pour la sheet arrondie.
+    private var webViewTopInsetAfterChrome: CGFloat {
+        shouldShowPaymentTopChrome ? 4 : webContentExtraTopInset
+    }
+
+    private var shouldShowPaymentTopChrome: Bool {
+        paymentBusinessDisplayName != nil || (allowsCloseButton && isCloseButtonRevealed)
     }
 
     var body: some View {
-        ZStack(alignment: .topTrailing) {
+        ZStack {
             GeometryReader { proxy in
                 let endR = max(proxy.size.width, proxy.size.height) * 0.95
                 ZStack {
@@ -134,31 +173,32 @@ struct MerchantSaasPaymentWebView: View {
             }
             .ignoresSafeArea()
 
-            MerchantSaasPaymentWebContent(url: paymentURL)
-                .padding(.top, webContentExtraTopInset)
-                .ignoresSafeArea()
-
-            if allowsCloseButton, isCloseButtonRevealed {
-                Button {
-                    if let onCloseRequested {
-                        onCloseRequested()
-                    } else {
-                        dismiss()
-                    }
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 13, weight: .semibold, design: .default))
-                        .foregroundStyle(.white.opacity(0.55))
-                        .frame(minWidth: 44, minHeight: 44)
-                        .contentShape(Rectangle())
+            VStack(spacing: 0) {
+                if shouldShowPaymentTopChrome {
+                    paymentPageTopChrome
                 }
-                .buttonStyle(.plain)
-                .padding(.top, headerExtraTopPadding + 8 + webContentExtraTopInset)
-                .padding(.trailing, 12)
-                .accessibilityLabel("Fermer")
+                MerchantSaasPaymentWebContent(url: paymentURL, onPageDidFinish: { webView in
+                    paymentWebViewRef = webView
+                    Task { @MainActor in
+                        await APIClient.shared.ensureValidAccessToken()
+                        Self.injectNativeAuthSession(into: webView)
+                    }
+                })
+                    .padding(.top, webViewTopInsetAfterChrome)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+            .ignoresSafeArea(edges: .bottom)
         }
         .preferredColorScheme(.dark)
+        .task {
+            await APIClient.shared.ensureValidAccessToken()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .myfidpassAuthTokensUpdated)) { _ in
+            guard let webView = paymentWebViewRef else { return }
+            Task { @MainActor in
+                Self.injectNativeAuthSession(into: webView)
+            }
+        }
         .task(id: "\(allowsCloseButton)-\(closeButtonRevealDelay)") {
             guard allowsCloseButton else {
                 isCloseButtonRevealed = false
@@ -173,29 +213,141 @@ struct MerchantSaasPaymentWebView: View {
         }
     }
 
-    /// Handoff explicite des tokens via hash pour que `myfidpass.fr/paiement` restaure
-    /// la session web sans redemander la connexion.
-    private func buildPaymentURLWithAuthHandoff(base: URL) -> URL {
-        guard var components = URLComponents(url: base, resolvingAgainstBaseURL: false) else { return base }
-        var items = components.queryItems ?? []
-        if !items.contains(where: { $0.name == "app_embed" }) {
-            items.append(URLQueryItem(name: "app_embed", value: "1"))
-        }
-        components.queryItems = items
-        if let access = AuthStorage.authToken?.trimmingCharacters(in: .whitespacesAndNewlines), !access.isEmpty {
-            let refresh = AuthStorage.refreshToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let accessEncoded = access.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? access
-            let refreshEncoded = refresh.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? refresh
-            var fragment = "fid_auth=\(accessEncoded)"
-            if !refreshEncoded.isEmpty {
-                fragment += "&fid_refresh=\(refreshEncoded)"
+    private var paymentPageTopChrome: some View {
+        HStack(alignment: .top, spacing: 10) {
+            if let name = paymentBusinessDisplayName {
+                paymentBusinessContextCard(displayName: name)
             }
-            components.fragment = fragment
+            Spacer(minLength: 4)
+            if allowsCloseButton, isCloseButtonRevealed {
+                paymentCloseButton
+            }
         }
-        return components.url ?? base
+        .padding(.horizontal, 12)
+        /// Avec carte commerce : retrait modéré ; croix seule : même logique que l’ancienne overlay (sheet + tiret).
+        .padding(
+            .top,
+            headerExtraTopPadding + 6 + (paymentBusinessDisplayName == nil ? webContentExtraTopInset : 0)
+        )
+        .padding(.bottom, paymentBusinessDisplayName != nil ? 8 : 6)
+        .animation(.easeOut(duration: 0.28), value: isCloseButtonRevealed)
+    }
+
+    private var paymentCloseButton: some View {
+        Button {
+            if let onCloseRequested {
+                onCloseRequested()
+            } else {
+                dismiss()
+            }
+        } label: {
+            Image(systemName: "xmark")
+                .font(.system(size: 13, weight: .semibold, design: .default))
+                .foregroundStyle(.white.opacity(0.55))
+                .frame(width: 40, height: 40)
+                .background(
+                    Circle()
+                        .fill(Color.white.opacity(0.08))
+                )
+                .overlay(
+                    Circle()
+                        .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Fermer")
+    }
+
+    private func paymentBusinessContextCard(displayName: String) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color(red: 0.58, green: 0.38, blue: 0.99).opacity(0.95),
+                                Color(red: 0.38, green: 0.28, blue: 0.88).opacity(0.82)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                Image(systemName: "storefront.fill")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.95))
+            }
+            .frame(width: 40, height: 40)
+            .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Abonnement pour")
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.42))
+                    .textCase(.uppercase)
+                    .tracking(0.85)
+                Text(displayName)
+                    .font(.system(.body, design: .rounded).weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.96))
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                    .minimumScaleFactor(0.82)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.leading, 12)
+        .padding(.trailing, 14)
+        .padding(.vertical, 11)
+        .background {
+            RoundedRectangle(cornerRadius: 17, style: .continuous)
+                .fill(.ultraThinMaterial)
+            RoundedRectangle(cornerRadius: 17, style: .continuous)
+                .strokeBorder(
+                    LinearGradient(
+                        colors: [
+                            Color.white.opacity(0.22),
+                            Color.white.opacity(0.06)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 1
+                )
+        }
+        .shadow(color: Color.black.opacity(0.35), radius: 14, y: 6)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Abonnement pour \(displayName)")
+    }
+
+    /// Écrit `fidpass_token` / `fidpass_refresh_token` dans le localStorage de la WebView (mêmes clés que le site).
+    @MainActor
+    private static func injectNativeAuthSession(into webView: WKWebView) {
+        guard let access = AuthStorage.authToken?.trimmingCharacters(in: .whitespacesAndNewlines), !access.isEmpty else { return }
+        let refresh = AuthStorage.refreshToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let accessEsc = jsStringLiteral(access)
+        let refreshEsc = jsStringLiteral(refresh)
+        let script = """
+        (function() {
+          try {
+            localStorage.setItem('fidpass_token', '\(accessEsc)');
+            if ('\(refreshEsc)'.length) localStorage.setItem('fidpass_refresh_token', '\(refreshEsc)');
+            window.dispatchEvent(new CustomEvent('fidpass-auth-restored'));
+          } catch (e) {}
+        })();
+        """
+        webView.evaluateJavaScript(script, completionHandler: nil)
+    }
+
+    private static func jsStringLiteral(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "'", with: "\\'")
+            .replacingOccurrences(of: "\n", with: "")
+            .replacingOccurrences(of: "\r", with: "")
     }
 }
 
 #Preview {
     MerchantSaasPaymentWebView()
+        .environmentObject(AuthService())
 }

@@ -42,6 +42,7 @@ struct ContentView: View {
     var body: some View {
         ZStack {
             mainMerchantTabStack
+                .disabled(authService.shouldShowMerchantAccessRenewalFullscreen)
                 .onReceive(NotificationCenter.default.publisher(for: .myfidpassOpenMerchantSubscriptionSheet)) { _ in
                     guard !authService.isMerchantStaffUser else { return }
                     showMerchantSubscriptionSheet = true
@@ -100,12 +101,41 @@ struct ContentView: View {
                     await authService.reconcileStripeSubscriptionFromServer(force: true)
                 }
 
+            if authService.shouldShowMerchantAccessRenewalFullscreen {
+                MerchantSubscriptionExpiredBlockingView(
+                    businessName: merchantAccessBlockingBusinessTitle,
+                    onOpenSettings: {
+                        showGlobalSettingsSheet = true
+                    },
+                    onContinueToPayment: {
+                        showMerchantSubscriptionSheet = true
+                    }
+                )
+                .transition(.opacity)
+                .zIndex(150)
+            }
+
             if showPaymentThankYouOverlay {
                 paymentThankYouOverlay
                     .transition(.opacity.combined(with: .scale(scale: 0.98)))
                     .zIndex(200)
             }
         }
+    }
+
+    /// Titre commerce pour l’écran de renouvellement (slug courant ou premier de la liste).
+    private var merchantAccessBlockingBusinessTitle: String {
+        let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !slug.isEmpty,
+           let match = authService.businesses.first(where: { $0.slug == slug }) {
+            let name = match.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !name.isEmpty { return name }
+        }
+        if let first = authService.businesses.first {
+            let name = first.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !name.isEmpty { return name }
+        }
+        return "Mon commerce"
     }
 
     /// Après inscription : marqueur « lancer le tutoriel une fois l’écran débloqué » (paywall ou accès direct).

@@ -41,6 +41,8 @@ struct MerchantSubscriptionGateView: View {
             didEmitPaidNotificationThisPresentation = false
         }
         .task {
+            // Rafraîchir la session native AVANT la WebView paiement (évite 401 « Authentification requise » + refresh concurrent).
+            await APIClient.shared.ensureValidAccessToken()
             await authService.reconcileStripeSubscriptionFromServer(force: true)
         }
         .onChange(of: authService.merchantSubscription?.status) { _, _ in

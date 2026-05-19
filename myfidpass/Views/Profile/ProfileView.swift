@@ -125,9 +125,14 @@ struct ProfileView: View {
             .onAppear {
                 loadProfile()
                 hydrateCommerceFromDiskCache()
-                if !mountCommerceStats {
-                    preparedCommerceSlugForRender = activeCommerceSlugForRender
-                    mountCommerceStats = true
+                // Ne pas monter `MerchantStatisticsDashboardScreen` tant que l’onglet Commerce n’est pas choisi :
+                // sinon le TabView précharge souvent cet onglet au cold start → GPU/WebKit + navigation SwiftUI se battent
+                // avec l’accueil (« NavigationRequestObserver… », gel au lancement).
+                if tabRouter.selectedTab == 2 {
+                    if !mountCommerceStats {
+                        preparedCommerceSlugForRender = activeCommerceSlugForRender
+                        mountCommerceStats = true
+                    }
                 }
                 if !didRunInitialCommerceServerLoad {
                     didRunInitialCommerceServerLoad = true
@@ -160,7 +165,10 @@ struct ProfileView: View {
                 Task { @MainActor in
                     await Task.yield()
                     preparedCommerceSlugForRender = newSlug
-                    mountCommerceStats = true
+                    // Ne remonter les stats que si l’utilisateur est sur l’onglet Commerce (évite arbre lourd en arrière-plan).
+                    if tabRouter.selectedTab == 2 {
+                        mountCommerceStats = true
+                    }
                     schedulePassiveProfileReload()
                 }
             }

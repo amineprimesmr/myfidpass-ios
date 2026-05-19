@@ -1923,6 +1923,13 @@ private struct FlyerAIGeneratorSheet: View {
     @State private var isShareFlyerSheetPresented = false
     /// Clés `template1`… détectées dans l’asset catalog (rafraîchies à l’affichage du carrousel fond).
     @State private var flyerBackgroundTemplateKeysState: [String] = FlyerAIGeneratorSheet.discoverFlyerBackgroundTemplateKeys()
+    /// Feuille « concept commerce » + génération fond IA (OpenAI via backend), depuis **Modifier le flyer**.
+    @State private var showFlyerAiBackgroundConceptSheet = false
+    @State private var flyerAiCommerceConceptText = ""
+    @State private var isFlyerAiBackgroundGenerating = false
+    /// Progression affichée pendant l’appel IA (simulation asymptotique + fin à 100 % au succès).
+    @State private var flyerAiGenerationProgress: Double = 0
+    @State private var flyerAiProgressSimulationTask: Task<Void, Never>?
 
     private var selectedBackgroundTemplateKey: String? {
         if case .template(let key) = flyerModel.backgroundSelectionState { return key }
@@ -2280,72 +2287,76 @@ private struct FlyerAIGeneratorSheet: View {
     private var flyerAIGeneratorScrollAndChrome: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                /// Retour + bouton contextuel (Modifier en vue, Sauvegarder en édition).
-                HStack(spacing: 0) {
-                    Button {
-                        handleFlyerBackButtonTap()
-                    } label: {
-                        Image(systemName: "chevron.left")
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(FlyerAIEditorTheme.textPrimary)
-                            .frame(width: 34, height: 34)
-                    }
-                    .modifier(TopBarLiquidGlassButtonModifier())
-                    .accessibilityLabel("Retour")
+                if !isFlyerAiBackgroundGenerating {
+                    HStack(spacing: 0) {
+                        Button {
+                            handleFlyerBackButtonTap()
+                        } label: {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(FlyerAIEditorTheme.textPrimary)
+                                .frame(width: 34, height: 34)
+                        }
+                        .modifier(TopBarLiquidGlassButtonModifier())
+                        .accessibilityLabel("Retour")
 
-                    Spacer(minLength: 0)
+                        Spacer(minLength: 0)
 
-                    if flyerIsViewMode && flyerHasSavedState {
-                            Button {
-                                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                                flyerUserEnteredEditMode = true
-                                withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) {
-                                    flyerIsViewMode = false
+                        if flyerIsViewMode && flyerHasSavedState {
+                                Button {
+                                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                                    flyerUserEnteredEditMode = true
+                                    withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) {
+                                        flyerIsViewMode = false
+                                    }
+                                } label: {
+                                    Text("Modifier")
+                                        .font(.subheadline.weight(.semibold))
+                                        .foregroundStyle(FlyerAIEditorTheme.textPrimary)
+                                        .padding(.horizontal, 12)
+                                        .frame(minWidth: 40, minHeight: 40)
                                 }
-                            } label: {
-                                Text("Modifier")
-                                    .font(.subheadline.weight(.semibold))
-                                    .foregroundStyle(FlyerAIEditorTheme.textPrimary)
-                                    .padding(.horizontal, 12)
-                                    .frame(minWidth: 40, minHeight: 40)
-                            }
-                            .accessibilityLabel("Modifier le flyer")
-                            .modifier(LiquidGlassCapsuleButtonModifier(
-                                tint: LiquidGlassNativeTint.darkRegular,
-                                controlSize: .regular
-                            ))
-                        } else if showTopBarFlyerSave {
-                            Button {
-                                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                                performSaveFlyerEdits()
-                            } label: {
-                                Group {
-                                    if isSavingFlyerEdits, flyerModel.isSaving {
-                                        ProgressView()
-                                            .tint(FlyerAIEditorTheme.textPrimary)
-                                            .frame(width: 40, height: 40)
-                                    } else {
-                                        Text("Sauvegarder")
-                                            .font(.subheadline.weight(.semibold))
-                                            .foregroundStyle(FlyerAIEditorTheme.textPrimary)
-                                            .padding(.horizontal, 12)
-                                            .frame(minWidth: 40, minHeight: 40)
+                                .accessibilityLabel("Modifier le flyer")
+                                .modifier(LiquidGlassCapsuleButtonModifier(
+                                    tint: LiquidGlassNativeTint.darkRegular,
+                                    controlSize: .regular
+                                ))
+                            } else if showTopBarFlyerSave {
+                                Button {
+                                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                                    performSaveFlyerEdits()
+                                } label: {
+                                    Group {
+                                        if isSavingFlyerEdits, flyerModel.isSaving {
+                                            ProgressView()
+                                                .tint(FlyerAIEditorTheme.textPrimary)
+                                                .frame(width: 40, height: 40)
+                                        } else {
+                                            Text("Sauvegarder")
+                                                .font(.subheadline.weight(.semibold))
+                                                .foregroundStyle(FlyerAIEditorTheme.textPrimary)
+                                                .padding(.horizontal, 12)
+                                                .frame(minWidth: 40, minHeight: 40)
+                                        }
                                     }
                                 }
+                                .accessibilityLabel("Sauvegarder le flyer")
+                                .modifier(LiquidGlassCapsuleButtonModifier(
+                                    tint: LiquidGlassNativeTint.darkRegular,
+                                    controlSize: .regular
+                                ))
+                                .disabled(flyerModel.isLoading || (isSavingFlyerEdits && flyerModel.isSaving))
+                                .opacity(!flyerModel.isLoading ? 1 : (isSavingFlyerEdits ? 0.55 : 0.4))
+                            } else {
+                                Color.clear
+                                    .frame(width: 40, height: 40)
                             }
-                            .accessibilityLabel("Sauvegarder le flyer")
-                            .modifier(LiquidGlassCapsuleButtonModifier(
-                                tint: LiquidGlassNativeTint.darkRegular,
-                                controlSize: .regular
-                            ))
-                            .disabled(flyerModel.isLoading || (isSavingFlyerEdits && flyerModel.isSaving))
-                            .opacity(!flyerModel.isLoading ? 1 : (isSavingFlyerEdits ? 0.55 : 0.4))
-                        } else {
-                            Color.clear
-                                .frame(width: 40, height: 40)
-                        }
+                    }
+                    .padding(.top, 0)
+                } else {
+                    Color.clear
+                        .frame(height: 8)
                 }
-                .padding(.top, 0)
 
                 flyerDashboardFetchChrome
 
@@ -2408,12 +2419,20 @@ private struct FlyerAIGeneratorSheet: View {
                 .ignoresSafeArea()
         }
         .safeAreaInset(edge: .bottom) {
-            if flyerIsViewMode && flyerHasSavedState && flyerHeroRevealed {
+            if !isFlyerAiBackgroundGenerating, flyerIsViewMode && flyerHasSavedState && flyerHeroRevealed {
                 downloadFlyerBar
-            } else if flyerShowMainComposer, showBottomFlyerActionBar {
+            } else if !isFlyerAiBackgroundGenerating, flyerShowMainComposer, showBottomFlyerActionBar {
                 stickyGenerateBar
             }
         }
+        .overlay {
+            if showFlyerAiBackgroundConceptSheet {
+                flyerAiConceptLiquidGlassOverlay
+                    .transition(.opacity.combined(with: .scale(scale: 0.94, anchor: .center)))
+                    .zIndex(200)
+            }
+        }
+        .animation(.spring(response: 0.42, dampingFraction: 0.86), value: showFlyerAiBackgroundConceptSheet)
     }
 
     private var downloadFlyerBar: some View {
@@ -2849,6 +2868,228 @@ private struct FlyerAIGeneratorSheet: View {
         }
     }
 
+    private func startFlyerAiProgressSimulation() {
+        flyerAiProgressSimulationTask?.cancel()
+        flyerAiGenerationProgress = 0.04
+        flyerAiProgressSimulationTask = Task { @MainActor in
+            let start = Date()
+            while !Task.isCancelled {
+                let t = Date().timeIntervalSince(start)
+                let p = min(0.92, 0.04 + 0.88 * (1 - exp(-t / 21)))
+                withAnimation(.linear(duration: 0.12)) {
+                    flyerAiGenerationProgress = p
+                }
+                try? await Task.sleep(nanoseconds: 110_000_000)
+            }
+        }
+    }
+
+    private func cancelFlyerAiProgressSimulation() {
+        flyerAiProgressSimulationTask?.cancel()
+        flyerAiProgressSimulationTask = nil
+    }
+
+    /// Génère un fond flyer via `POST …/flyer/ai-generate` (job async + polling), puis applique comme un fond personnalisé.
+    @MainActor
+    private func performFlyerAiBackgroundGenerationFromSheet() async {
+        let concept = flyerAiCommerceConceptText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !concept.isEmpty else {
+            errorMessage = "Décrivez votre commerce ou votre concept pour générer un fond."
+            return
+        }
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        errorMessage = nil
+
+        withAnimation(.spring(response: 0.42, dampingFraction: 0.88)) {
+            showFlyerAiBackgroundConceptSheet = false
+        }
+        try? await Task.sleep(nanoseconds: 270_000_000)
+
+        isFlyerAiBackgroundGenerating = true
+        flyerAiGenerationProgress = 0
+        startFlyerAiProgressSimulation()
+
+        let accent = Self.normalizeHex(flyerPalettePriorityHexes.first ?? flyerModel.state.ctaBannerBgColor) ?? "#FF0066"
+        let secondary = Self.flyerMonochromeSecondaryHex(fromAccentHex: accent)
+        var palette = flyerPalettePriorityHexes.compactMap { Self.normalizeHex($0) }
+        if palette.isEmpty { palette = [accent] }
+        let brandTrim = brandName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let brandFinal = brandTrim.isEmpty ? "Mon commerce" : String(brandTrim.prefix(80))
+        let logoB64 = await flyerModel.exportLogoDataURLForAIGenerate(logoPickerUIImage: logoPreview)
+        let body = FlyerAIGenerateRequestDTO(
+            brandName: brandFinal,
+            cuisineOrConcept: String(concept.prefix(400)),
+            accentColorHex: accent,
+            secondaryColorHex: secondary,
+            extraContext: nil,
+            paletteColorsHex: Array(palette.prefix(3)),
+            logoBase64: logoB64,
+            styleReferenceImagesBase64: nil
+        )
+
+        func resetGenerationUI() {
+            cancelFlyerAiProgressSimulation()
+            withAnimation(.spring(response: 0.38, dampingFraction: 0.88)) {
+                isFlyerAiBackgroundGenerating = false
+                flyerAiGenerationProgress = 0
+            }
+        }
+
+        do {
+            let result = try await FlyerAIGenerateAPI.generateAndWaitForImage(slug: slug, body: body)
+            if let unlimited = result.flyerAiUnlimited {
+                flyerModel.flyerAiUnlimited = unlimited
+            }
+            if flyerModel.flyerAiUnlimited {
+                flyerModel.flyerAiGenerationsRemaining = 999
+            } else if let rem = result.flyerAiGenerationsRemaining {
+                flyerModel.flyerAiGenerationsRemaining = max(0, rem)
+            } else if let used = result.flyerAiGenerationsUsed {
+                flyerModel.flyerAiGenerationsRemaining = max(0, 3 - used)
+            }
+
+            guard let rawB64 = result.imageBase64?.trimmingCharacters(in: .whitespacesAndNewlines), !rawB64.isEmpty else {
+                errorMessage = "Image générée introuvable."
+                resetGenerationUI()
+                return
+            }
+            let decoded: UIImage?
+            if let data = Data(base64Encoded: rawB64), let im = UIImage(data: data) {
+                decoded = im
+            } else {
+                decoded = FlyerGeneratedImageDecode.uiImage(fromBase64PNG: rawB64)
+            }
+            guard let img = decoded else {
+                errorMessage = "Impossible d’afficher l’image générée."
+                resetGenerationUI()
+                return
+            }
+
+            cancelFlyerAiProgressSimulation()
+            withAnimation(.spring(response: 0.48, dampingFraction: 0.82)) {
+                flyerAiGenerationProgress = 1
+            }
+            try? await Task.sleep(nanoseconds: 480_000_000)
+            applyFlyerBgAfterCrop(flyerFullBleedBackgroundImage(img), selectionState: .custom)
+            flyerAiCommerceConceptText = ""
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+            resetGenerationUI()
+        } catch {
+            resetGenerationUI()
+            if let api = error as? APIError {
+                errorMessage = api.errorDescription ?? api.localizedDescription
+            } else {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    /// Pop-up « Liquid Glass » (effet verre natif iOS 26 / matériau sinon) — saisie du concept avant génération.
+    private var flyerAiConceptLiquidGlassOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.52)
+                .ignoresSafeArea()
+                .onTapGesture {
+                    if !isFlyerAiBackgroundGenerating {
+                        withAnimation(.spring(response: 0.38, dampingFraction: 0.9)) {
+                            showFlyerAiBackgroundConceptSheet = false
+                        }
+                    }
+                }
+
+            VStack(alignment: .leading, spacing: 16) {
+                HStack(alignment: .top, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("Fond avec l’IA")
+                            .font(.system(size: 22, weight: .bold, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.96))
+                        Text("Décrivez votre commerce")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.white.opacity(0.52))
+                    }
+                    Spacer(minLength: 8)
+                    Button {
+                        withAnimation(.spring(response: 0.38, dampingFraction: 0.9)) {
+                            showFlyerAiBackgroundConceptSheet = false
+                        }
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 28, weight: .regular))
+                            .symbolRenderingMode(.hierarchical)
+                            .foregroundStyle(.white.opacity(0.45))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Fermer")
+                }
+
+                Text(
+                    "Secteur, ambiance visuelle, produits ou services à suggérer en arrière-plan. Pas de texte ni logo dans l’image — la roue et le QR sont ajoutés par l’app."
+                )
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.white.opacity(0.55))
+                .fixedSize(horizontal: false, vertical: true)
+
+                TextField("Ex. boulangerie artisanale, tons dorés, pains et viennoiseries…", text: $flyerAiCommerceConceptText, axis: .vertical)
+                    .lineLimit(4...10)
+                    .textFieldStyle(.plain)
+                    .padding(14)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(Color.white.opacity(0.08))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .strokeBorder(Color.white.opacity(0.14), lineWidth: 1)
+                    )
+                    .foregroundStyle(.white.opacity(0.92))
+
+                if let err = errorMessage?.trimmingCharacters(in: .whitespacesAndNewlines), !err.isEmpty {
+                    Text(err)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(Color(red: 1, green: 0.48, blue: 0.42))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Button {
+                    Task { await performFlyerAiBackgroundGenerationFromSheet() }
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "sparkles")
+                            .font(.system(size: 16, weight: .semibold))
+                        Text("Générer le fond")
+                            .font(.system(.body, design: .rounded).weight(.bold))
+                    }
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 15)
+                }
+                .buttonStyle(.plain)
+                .background(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [FlyerStudioTheme.accent, FlyerStudioTheme.accent.opacity(0.72)],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.22), lineWidth: 1)
+                )
+                .shadow(color: FlyerStudioTheme.accent.opacity(0.35), radius: 16, y: 8)
+                .disabled(flyerAiCommerceConceptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .opacity(flyerAiCommerceConceptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.45 : 1)
+            }
+            .padding(22)
+            .frame(maxWidth: 360)
+            .glassEffectRegularDark(cornerRadius: 28)
+            .shadow(color: Color.black.opacity(0.5), radius: 44, y: 22)
+            .padding(.horizontal, 22)
+        }
+    }
+
     /// Assure un fond flyer plein cadre (ratio 2:3) sans bandes sur les bords.
     private func flyerFullBleedBackgroundImage(_ image: UIImage) -> UIImage {
         let targetAspect = ImageCropSpec.flyerCustomBackground.aspectWidthOverHeight
@@ -2960,14 +3201,14 @@ private struct FlyerAIGeneratorSheet: View {
             VStack(alignment: .leading, spacing: 14) {
                 if flyerHeroRevealed {
                     flyerPostGenerationPreviewBlock
-                    if flyerIsViewMode && flyerHasSavedState {
+                    if flyerIsViewMode && flyerHasSavedState && !isFlyerAiBackgroundGenerating {
                         FlyerViewModeUsageGuideCard()
                             .transition(.opacity.combined(with: .move(edge: .bottom)))
                     }
-                    if canCompareRecreateIllustrationVersions {
+                    if canCompareRecreateIllustrationVersions && !isFlyerAiBackgroundGenerating {
                         recreateVersionChoiceRow
                     }
-                    if !flyerIsViewMode {
+                    if !flyerIsViewMode && !isFlyerAiBackgroundGenerating {
                         flyerInlineModificationForm
                             .transition(.asymmetric(
                                 insertion: .opacity.combined(with: .move(edge: .bottom)),
@@ -2990,6 +3231,7 @@ private struct FlyerAIGeneratorSheet: View {
             }
             .animation(.spring(response: 0.52, dampingFraction: 0.86), value: flyerHeroRevealed)
             .animation(.spring(response: 0.42, dampingFraction: 0.86), value: flyerIsViewMode)
+            .animation(.spring(response: 0.45, dampingFraction: 0.86), value: isFlyerAiBackgroundGenerating)
         }
         .frame(maxWidth: .infinity)
     }
@@ -3161,6 +3403,44 @@ private struct FlyerAIGeneratorSheet: View {
                     }
                     .buttonStyle(.plain)
 
+                    Button {
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        errorMessage = nil
+                        withAnimation(.spring(response: 0.45, dampingFraction: 0.86)) {
+                            showFlyerAiBackgroundConceptSheet = true
+                        }
+                    } label: {
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        FlyerStudioTheme.accent.opacity(0.92),
+                                        FlyerStudioTheme.accent.opacity(0.58)
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                            .overlay(
+                                VStack(spacing: 6) {
+                                    Image(systemName: "sparkles")
+                                        .font(.system(size: 18, weight: .bold))
+                                        .foregroundStyle(.white)
+                                    Text("IA")
+                                        .font(.caption.weight(.bold))
+                                        .foregroundStyle(.white.opacity(0.95))
+                                }
+                            )
+                            .frame(width: 84, height: 126)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .strokeBorder(FlyerAIEditorTheme.hairline.opacity(0.8), lineWidth: 1)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isFlyerAiBackgroundGenerating)
+                    .accessibilityLabel("Générer le fond du flyer avec l’IA")
+
                     if shouldShowCurrentBackgroundTile, let currentBg = flyerCurrentBackgroundCarouselUIImage {
                         Button {
                             applyFlyerBgAfterCrop(flyerFullBleedBackgroundImage(currentBg), selectionState: .custom)
@@ -3310,11 +3590,75 @@ private struct FlyerAIGeneratorSheet: View {
     }
 
     private var flyerPostGenerationPreviewBlock: some View {
-        HStack {
-            Spacer(minLength: 0)
-            flyerPostGenerationMainPreview
-            Spacer(minLength: 0)
+        VStack(spacing: 18) {
+            HStack {
+                Spacer(minLength: 0)
+                flyerPostGenerationMainPreview
+                    .modifier(FlyerAiGenerationHeroMotionModifier(isActive: isFlyerAiBackgroundGenerating))
+                Spacer(minLength: 0)
+            }
+            .padding(.vertical, isFlyerAiBackgroundGenerating ? 18 : 0)
+            if isFlyerAiBackgroundGenerating {
+                flyerAiGenerationProgressChrome
+                    .transition(.opacity.combined(with: .move(edge: .bottom)).combined(with: .scale(scale: 0.96, anchor: .top)))
+            }
         }
+    }
+
+    private var flyerAiGenerationProgressChrome: some View {
+        VStack(spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [FlyerStudioTheme.accent, FlyerStudioTheme.accent.opacity(0.75)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                Text("L’IA compose votre fond…")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(FlyerAIEditorTheme.textPrimary)
+            }
+            GeometryReader { geo in
+                let w = geo.size.width
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(Color.white.opacity(0.1))
+                    Capsule()
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    FlyerStudioTheme.accent,
+                                    Color(red: 0.72, green: 0.48, blue: 1)
+                                ],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                        .frame(width: max(10, w * flyerAiGenerationProgress))
+                        .shadow(color: FlyerStudioTheme.accent.opacity(0.45), radius: 8, y: 0)
+                }
+            }
+            .frame(height: 8)
+            Text("Quelques instants — création d’image sur nos serveurs")
+                .font(.caption)
+                .foregroundStyle(FlyerAIEditorTheme.textTertiary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity)
+        }
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(FlyerAIEditorTheme.sourceCard.opacity(0.42))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(FlyerAIEditorTheme.hairline.opacity(0.55), lineWidth: 1)
+        )
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Génération du fond par l’IA en cours")
     }
 
     @ViewBuilder
@@ -3881,6 +4225,47 @@ private struct FlyerAIGeneratorSheet: View {
         let gg = UInt8(max(0, min(255, Int(round(g * 255)))))
         let bb = UInt8(max(0, min(255, Int(round(b * 255)))))
         return String(format: "#%02X%02X%02X", rr, gg, bb)
+    }
+}
+
+private struct FlyerAiGenerationHeroMotionModifier: ViewModifier {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let isActive: Bool
+
+    func body(content: Content) -> some View {
+        Group {
+            if isActive && !reduceMotion {
+                TimelineView(.animation(minimumInterval: 1.0 / 45.0)) { timeline in
+                    let t = timeline.date.timeIntervalSinceReferenceDate
+                    let tilt = sin(t * 1.15) * 12.5 + sin(t * 0.38) * 3.8
+                    let yaw = sin(t * 0.82) * 6.2
+                    content
+                        .rotation3DEffect(
+                            .degrees(tilt),
+                            axis: (x: 1, y: -0.22, z: 0),
+                            anchor: .center,
+                            anchorZ: 0,
+                            perspective: 0.5
+                        )
+                        .rotation3DEffect(
+                            .degrees(yaw),
+                            axis: (x: 0.1, y: 1, z: 0),
+                            anchor: .center,
+                            anchorZ: 0,
+                            perspective: 0.62
+                        )
+                        .scaleEffect(1.05)
+                        .shadow(color: Color.black.opacity(0.52), radius: 28, x: 0, y: 16)
+                }
+            } else if isActive && reduceMotion {
+                content
+                    .scaleEffect(1.02)
+                    .shadow(color: Color.black.opacity(0.35), radius: 18, x: 0, y: 10)
+            } else {
+                content
+            }
+        }
+        .animation(.spring(response: 0.55, dampingFraction: 0.86), value: isActive)
     }
 }
 

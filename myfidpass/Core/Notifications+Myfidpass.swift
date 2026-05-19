@@ -20,6 +20,8 @@ extension Notification.Name {
     static let myfidpassOpenCampaignsTab = Notification.Name("myfidpass.openCampaignsTab")
     /// Dernière synchro en erreur (hors annulation) : `userInfo["message"]` = texte localisé.
     static let myfidpassRemoteSyncDidFail = Notification.Name("myfidpass.remoteSyncDidFail")
+    /// Fusion `SyncService` → `viewContext` terminée (membres + transactions importés). Rafraîchit le fil « Dernières transactions » (Core Data) sans passer par `DataService.save()`.
+    static let myfidpassMerchantCoreDataDidMergeFromSync = Notification.Name("myfidpass.merchantCoreDataDidMergeFromSync")
     /// Connexion OAuth réseau (Meta / YouTube / TikTok) réussie : le serveur a mis à jour les liens missions — recharger le profil établissement.
     static let myfidpassEngagementOAuthDidComplete = Notification.Name("myfidpass.engagementOAuthDidComplete")
     /// Universal Link https://myfidpass.fr/oauth/… relayé en myfidpass:// (object : URL).
