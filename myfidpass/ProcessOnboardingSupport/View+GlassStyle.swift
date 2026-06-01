@@ -47,7 +47,7 @@ struct GlassButtonStyleFallback: ButtonStyle {
 }
 
 /// Repli iOS 17–25 : `adaptive` = matériau léger ; `regularTint` = couche charcoal **opaque** (lisible sur fond noir).
-private struct LiquidGlassLegacyMaterialButtonStyle: ButtonStyle {
+struct LiquidGlassLegacyMaterialButtonStyle: ButtonStyle {
     var appearance: LiquidGlassButtonAppearance
     var cornerRadius: CGFloat
 
@@ -119,6 +119,13 @@ extension View {
     func glassStyleDark(cornerRadius: CGFloat = 20) -> some View {
         liquidGlassButtonAppearance(.regularTint(LiquidGlassNativeTint.darkRegular), cornerRadius: cornerRadius)
     }
+
+    /// Boutons ronds header onboarding (retour, drapeau) — même verre clair adaptatif que `.glassStyle()` (Process).
+    @ViewBuilder
+    func onboardingHeaderChromeGlass(cornerRadius: CGFloat = 17) -> some View {
+        liquidGlassButtonAppearance(.adaptive, cornerRadius: cornerRadius)
+    }
+
 }
 
 // MARK: - View Extension - glassEffect() avec compatibilité

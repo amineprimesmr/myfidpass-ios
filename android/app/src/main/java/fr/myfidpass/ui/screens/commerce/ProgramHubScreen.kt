@@ -38,6 +38,7 @@ fun ProgramHubScreen(
     onSocial: () -> Unit,
     onTools: () -> Unit,
     onEstablishment: () -> Unit,
+    onGoogleBusiness: () -> Unit = {},
 ) {
     Scaffold(
         topBar = {
@@ -72,6 +73,8 @@ fun ProgramHubScreen(
             ProgRow(Icons.Default.Build, "Caisse : reçu, clients", onTools)
             Spacer(Modifier.height(10.dp))
             ProgRow(Icons.Default.Store, "Fiche établissement (PATCH)", onEstablishment)
+            Spacer(Modifier.height(10.dp))
+            ProgRow(Icons.Default.Campaign, "Google Business (avis, posts…)", onGoogleBusiness)
         }
     }
 }

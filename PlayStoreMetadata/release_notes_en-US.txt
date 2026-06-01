@@ -1,0 +1,6 @@
+First Android release of MyFidpass:
+• Merchant onboarding (email + OTP code)
+• Dashboard, QR scanner, customizable loyalty card
+• Google Wallet card preview
+• Campaigns and push notifications
+• Pro subscription via secure payment (Stripe)

@@ -251,17 +251,6 @@ struct MyCardView: View {
         return baseline != makePersistedSnapshot()
     }
 
-    /// Zones de l’aperçu à mettre en évidence (pastilles) quand des éléments obligatoires manquent.
-    private var cardCompletionPreviewZones: Set<CardPreviewEditZone> {
-        Set(cardMissingRequirements.map(\.suggestedEditZone))
-    }
-
-    /// Les pastilles « Configurer » doivent être visibles dès l’ouverture si la carte n’est pas complète,
-    /// même sans changement local (première visite de « Ma carte »).
-    private var shouldShowCompletionPills: Bool {
-        !cardMissingRequirements.isEmpty
-    }
-
     /// Blocage enregistrement / Wallet tant que la checklist obligatoire n’est pas remplie.
     private var cardMissingRequirements: [CardMissingRequirement] {
         MyCardCompletionRequirements.missingRequirements(
@@ -284,7 +273,20 @@ struct MyCardView: View {
             tierLabels: tierLabels,
             requiredStamps: requiredStamps,
             stampRewardLabel: stampRewardLabel,
-            stampMidRewardLabel: stampMidRewardLabel
+            stampMidRewardLabel: stampMidRewardLabel,
+            startGameRewardLabel: startGameRewardLabel
+        )
+    }
+
+    private var rewardsConfigurationComplete: Bool {
+        MyCardCompletionRequirements.hasRecompensesCompletes(
+            programType: programType,
+            tierPoints: tierPoints,
+            tierLabels: tierLabels,
+            requiredStamps: requiredStamps,
+            stampRewardLabel: stampRewardLabel,
+            stampMidRewardLabel: stampMidRewardLabel,
+            startGameRewardLabel: startGameRewardLabel
         )
     }
 
@@ -318,86 +320,139 @@ struct MyCardView: View {
         return m.isEmpty ? "MEMBRE" : m
     }
 
-    var body: some View {
-        ScrollView(.vertical, showsIndicators: true) {
-            VStack(spacing: AppTheme.Spacing.lg) {
-                programModePickerSection
-                previewSection
-                actionsSection
-            }
-            .padding(.bottom, bottomScrollPadding)
+    private var cardCompletionPreviewZones: Set<CardPreviewEditZone> {
+        var zones = Set(cardMissingRequirements.map(\.suggestedEditZone))
+        if cardMissingRequirements.contains(.couleursCarte) {
+            zones.insert(.cardAppearance)
         }
-        .scrollBounceBehavior(.basedOnSize)
+        return zones
+    }
+
+    private var shouldShowCompletionPills: Bool {
+        !cardMissingRequirements.isEmpty
+    }
+
+    var body: some View {
+        myCardNavigationContent
+    }
+
+    private var myCardScrollContent: some View {
+        VStack(spacing: AppTheme.Spacing.lg) {
+            programModePickerSection
+            previewSection
+            Spacer(minLength: 0)
+            actionsSection
+        }
+        .padding(.bottom, bottomScrollPadding)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .transaction { $0.disablesAnimations = true }
         .background(AppTheme.Colors.background)
         .background(MyCardNavigationPopGate(blockInteractivePop: hasUnsavedCardChanges))
-        .onAppear {
-            loadCurrentTemplate()
-            restoreLocalBackgroundFromSnapshot()
-            mergeStampIconFromDisplaySnapshotIfNeeded()
-            Task {
-                await loadCardSettingsFromAPI()
-                await MainActor.run {
-                    syncPreviewBalancesFromSyncedMembers()
-                    // Si le GET a échoué, dernier snapshot local (sans réécraser le logo : applyDisplaySnapshot ne touche plus à logoURL).
-                    if !dashboardSettingsHydrated,
-                       let slug = AuthStorage.currentBusinessSlug,
-                       let snap = CardPreviewDisplaySnapshotStore.load(slug: slug) {
-                        applyDisplaySnapshot(snap, restoreLogoFromSnapshot: true)
-                        syncPreviewBalancesFromSyncedMembers()
-                    }
-                    capturePersistedBaseline()
-                }
-                await prefetchCardMediaFromCurrentState()
+    }
+
+    private var myCardInteractiveContent: some View {
+        myCardScrollWithLifecycle
+            .sheet(item: $customizationZone) { zone in
+                MyCardCustomizationSheetContainer(
+                    zone: zone,
+                    pack: cardCustomizationBindPack,
+                    actions: cardCustomizationActions,
+                    cardImageSuggestedColors: cardImageSuggestedColors,
+                    dashboardSettingsHydrated: dashboardSettingsHydrated,
+                    canSaveRewards: rewardsConfigurationComplete,
+                    rewardsSaveInFlight: cardSettingsSaveInFlight,
+                    hasUnsavedCardChanges: hasUnsavedCardChanges,
+                    onHeaderRightSave: myCardHeaderRightSaveAction,
+                    onCropComplete: applyMyCardCroppedImage,
+                    refreshSuggestedColors: refreshCardImageSuggestedColors,
+                    reloadWalletPassBackSettings: { await loadCardSettingsFromAPI(respectingUnsavedEdits: true) }
+                )
             }
-        }
-        .onChange(of: syncService.lastSyncDate) { _, newDate in
-            guard newDate != nil else { return }
-            Task {
-                await loadCardSettingsFromAPI()
-                await MainActor.run { syncPreviewBalancesFromSyncedMembers() }
-            }
-        }
-        .task(id: "\(logoURL)|\(cardBackgroundImagePath ?? "")|\(cardBackgroundRemoteURL ?? "")|\(cardBackgroundWasRemoved)") {
-            await refreshCardImageSuggestedColors()
-        }
-        .onChange(of: requiredStamps) { _, new in
-            if previewStampsCount > new { previewStampsCount = new }
-        }
-        .sheet(item: $customizationZone) { zone in
-            CardElementCustomizationSheet(
-                zone: zone,
-                pack: cardCustomizationBindPack,
-                actions: cardCustomizationActions,
-                cardImageSuggestedColors: cardImageSuggestedColors,
-                dashboardSettingsHydrated: dashboardSettingsHydrated,
-                onCropComplete: { cropped, spec in await applyMyCardCroppedImage(cropped, spec: spec) }
-            )
-            .task(id: zone.id) {
-                if zone == .walletPassBack {
+            .overlay { walletPassPresenterOverlay }
+    }
+
+    private var myCardScrollWithLifecycle: some View {
+        myCardScrollContent
+            .onAppear {
+                loadCurrentTemplate()
+                restoreLocalBackgroundFromSnapshot()
+                mergeStampIconFromDisplaySnapshotIfNeeded()
+                Task {
                     await loadCardSettingsFromAPI()
+                    await MainActor.run {
+                        syncPreviewBalancesFromSyncedMembers()
+                        // Si le GET a échoué, dernier snapshot local (sans réécraser le logo : applyDisplaySnapshot ne touche plus à logoURL).
+                        if !dashboardSettingsHydrated,
+                           let slug = AuthStorage.currentBusinessSlug,
+                           let snap = CardPreviewDisplaySnapshotStore.load(slug: slug) {
+                            applyDisplaySnapshot(snap, restoreLogoFromSnapshot: true)
+                            syncPreviewBalancesFromSyncedMembers()
+                        }
+                        capturePersistedBaseline()
+                    }
+                    await prefetchCardMediaFromCurrentState()
                 }
             }
-        }
-        .overlay {
-            if walletPassData != nil {
-                AddToWalletPresenter(passData: walletPassData) {
-                    walletPassData = nil
+            .onChange(of: syncService.lastSyncDate) { _, newDate in
+                guard newDate != nil else { return }
+                guard !hasUnsavedCardChanges else { return }
+                Task {
+                    await loadCardSettingsFromAPI(respectingUnsavedEdits: true)
+                    await MainActor.run { syncPreviewBalancesFromSyncedMembers() }
                 }
+            }
+            .onChange(of: requiredStamps) { _, new in
+                if previewStampsCount > new { previewStampsCount = new }
+            }
+    }
+
+    private func myCardHeaderRightSaveAction() async -> Bool {
+        await MainActor.run { cardSettingsSaveInFlight = true }
+        let ok = await saveRewardsOnly()
+        await MainActor.run {
+            cardSettingsSaveInFlight = false
+            if ok {
+                triggerSavedFeedback()
+                customizationZone = nil
+            }
+        }
+        return ok
+    }
+
+    @ViewBuilder
+    private var walletPassPresenterOverlay: some View {
+        if walletPassData != nil {
+            AddToWalletPresenter(passData: walletPassData, onDismiss: dismissWalletPassPresenter)
                 .frame(width: 1, height: 1)
-            }
         }
-        .alert(cardMissingRequirements.isEmpty ? "Aperçu Wallet indisponible" : "Carte incomplète", isPresented: .constant(walletErrorMessage != nil)) {
+    }
+
+    private func dismissWalletPassPresenter() {
+        walletPassData = nil
+    }
+
+    private var myCardWalletAlertContent: some View {
+        myCardInteractiveContent
+        .alert(walletErrorAlertTitle, isPresented: .constant(walletErrorMessage != nil)) {
             Button("OK", role: .cancel) { walletErrorMessage = nil }
         } message: {
             if let msg = walletErrorMessage {
                 Text(msg)
             }
         }
+    }
+
+    private var myCardSaveLogoAlertContent: some View {
+        myCardWalletAlertContent
         .alert("Enregistrement", isPresented: .constant(saveLogoError != nil)) {
             Button("OK") { saveLogoError = nil }
         } message: {
             if let msg = saveLogoError { Text(msg) }
         }
+    }
+
+    private var myCardUnsavedLeaveAlertContent: some View {
+        myCardSaveLogoAlertContent
         .alert("Modifications non enregistrées", isPresented: $showUnsavedLeaveAlert) {
             Button("Enregistrer") {
                 Task {
@@ -425,6 +480,14 @@ struct MyCardView: View {
         } message: {
             Text("Voulez-vous enregistrer les modifications avant de quitter ?")
         }
+    }
+
+    private var walletErrorAlertTitle: String {
+        cardMissingRequirements.isEmpty ? "Aperçu Wallet indisponible" : "Carte incomplète"
+    }
+
+    private var myCardNavigationContent: some View {
+        myCardUnsavedLeaveAlertContent
         .navigationTitle("Ma carte")
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(true)
@@ -432,58 +495,52 @@ struct MyCardView: View {
         .toolbar(.visible, for: .navigationBar)
         .toolbarBackground(AppTheme.Colors.background, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button {
-                    requestLeaveMyCard()
-                } label: {
-                    Image(systemName: "chevron.left")
-                        .fontWeight(.semibold)
-                }
-                .accessibilityLabel("Retour")
+        .toolbar { myCardToolbar }
+    }
+
+    @ToolbarContentBuilder
+    private var myCardToolbar: some ToolbarContent {
+        ToolbarItem(placement: .topBarLeading) {
+            Button {
+                requestLeaveMyCard()
+            } label: {
+                Image(systemName: "chevron.left")
+                    .fontWeight(.semibold)
             }
-            ToolbarItem(placement: .topBarTrailing) {
-                if hasUnsavedCardChanges {
-                    Button {
-                        Task {
-                            cardSettingsSaveInFlight = true
-                            let ok = await saveTemplate()
-                            await MainActor.run {
-                                cardSettingsSaveInFlight = false
-                                if ok {
-                                    triggerSavedFeedback()
-                                    schedulePostCardFlyerPromoIfEligible()
-                                }
-                            }
-                        }
-                    } label: {
-                        Group {
-                            if cardSettingsSaveInFlight {
-                                ProgressView()
-                            } else {
-                                Text("Enregistrer")
+            .accessibilityLabel("Retour")
+        }
+        ToolbarItem(placement: .topBarTrailing) {
+            if hasUnsavedCardChanges {
+                Button {
+                    Task {
+                        cardSettingsSaveInFlight = true
+                        let ok = await saveTemplate()
+                        await MainActor.run {
+                            cardSettingsSaveInFlight = false
+                            if ok {
+                                triggerSavedFeedback()
+                                schedulePostCardFlyerPromoIfEligible()
                             }
                         }
                     }
-                    .fontWeight(.semibold)
-                    .disabled(cardSettingsSaveInFlight || !canPersistCardDraft)
+                } label: {
+                    if cardSettingsSaveInFlight {
+                        ProgressView()
+                    } else {
+                        Text("Enregistrer")
+                    }
                 }
+                .fontWeight(.semibold)
+                .disabled(cardSettingsSaveInFlight || !canPersistCardDraft)
             }
         }
     }
 
-    /// Quitter la page : alerte si brouillon non sauvé (le swipe natif est désactivé dans ce cas).
+    /// Quitter la page : alerte si brouillon non sauvé (ne pas enregistrer ni fermer sans choix explicite).
     private func requestLeaveMyCard() {
         customizationZone = nil
         if hasUnsavedCardChanges {
-            Task {
-                cardSettingsSaveInFlight = true
-                _ = await saveTemplate()
-                await MainActor.run {
-                    cardSettingsSaveInFlight = false
-                    dismiss()
-                }
-            }
+            showUnsavedLeaveAlert = true
         } else {
             dismiss()
         }
@@ -509,6 +566,9 @@ struct MyCardView: View {
         pointsMinAmountEur = snap.pointsMinAmountEur
         tierPoints = Self.normalizeTierStrings(snap.tierPoints)
         tierLabels = Self.normalizeTierStrings(snap.tierLabels)
+        if programType == "points" {
+            MyCardProgramDefaults.sanitizeEditableTierSlots(tierPoints: &tierPoints, tierLabels: &tierLabels)
+        }
         stampRewardLabel = snap.stampRewardLabel
         expiryMonths = snap.expiryMonths
         sector = snap.sector
@@ -538,8 +598,6 @@ struct MyCardView: View {
 
     // MARK: - Aperçu carte (Wallet uniquement)
 
-    private let previewMinHeight: CGFloat = 438
-
     /// Choix Points / Tampons : au-dessus de la carte (plus simple que dans les feuilles de modification).
     private var programModePickerSection: some View {
         Picker("", selection: $programType) {
@@ -549,24 +607,37 @@ struct MyCardView: View {
         .pickerStyle(.segmented)
         .accessibilityLabel(Text("Type de programme : Points ou Tampons"))
         .onChange(of: programType) { _, new in
-            welcomeBonusEnabled = true
-            welcomeBonusAmount = new == "points" ? 10 : 1
-            if new == "stamps" {
-                requiredStamps = 10
-                if previewStampsCount > 10 { previewStampsCount = 10 }
-                CardLogoStorage.removeLocalCardBackgroundFile()
-                cardBackgroundImagePath = nil
-                cardBackgroundPhotoItem = nil
-                cardBackgroundRemoteURL = nil
-                cardBackgroundWasRemoved = true
-                if let slug = AuthStorage.currentBusinessSlug {
-                    persistDisplaySnapshot(slug: slug)
-                }
-            }
+            applyProgramTypeSideEffects(for: new)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, AppTheme.Spacing.lg)
         .padding(.top, AppTheme.Spacing.sm)
+    }
+
+    private func applyProgramTypeSideEffects(for new: String) {
+        welcomeBonusEnabled = true
+        welcomeBonusAmount = new == "points" ? 10 : 1
+        if new == "points" {
+            MyCardProgramDefaults.fillDefaultPointsTiersIfNeeded(
+                tierPoints: &tierPoints,
+                tierLabels: &tierLabels
+            )
+            if pointsPerEuro < 1 { pointsPerEuro = 1 }
+        } else if new == "stamps" {
+            requiredStamps = 10
+            if previewStampsCount > 10 { previewStampsCount = 10 }
+            cardBackgroundPhotoItem = nil
+            MyCardProgramDefaults.fillDefaultStampRewardsIfNeeded(
+                requiredStamps: &requiredStamps,
+                stampRewardLabel: &stampRewardLabel,
+                stampMidRewardLabel: &stampMidRewardLabel,
+                startGameRewardLabel: &startGameRewardLabel,
+                stampEmoji: &stampEmoji
+            )
+        }
+        if let slug = AuthStorage.currentBusinessSlug {
+            persistDisplaySnapshot(slug: slug)
+        }
     }
 
     /// Même URL que le lien « Lien et QR code » / page carte publique.
@@ -578,78 +649,65 @@ struct MyCardView: View {
 
     private var previewSection: some View {
         VStack(spacing: AppTheme.Spacing.md) {
-            GeometryReader { geo in
-                ZStack {
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .fill(AppTheme.Colors.shadow)
-                        .blur(radius: 18)
-                        .offset(y: 6)
-                        .opacity(0.4)
-
-                    Group {
-                        if programType == "stamps" {
-                            CafeDesArtsCardPreview(
-                                displayName: displayName.isEmpty ? "Ma Carte Fidélité" : displayName,
-                                requiredStamps: Int32(requiredStamps),
-                                stampsCount: Int32(previewStampsCount),
-                                primaryColorHex: primaryHex,
-                                accentColorHex: accentHex,
-                                stripColorHex: nil,
-                                logoURL: logoURL.isEmpty ? nil : logoURL,
-                                stripDisplayMode: stripDisplayMode,
-                                stripText: stripText.isEmpty ? nil : stripText,
-                                stampEmoji: stampEmoji.isEmpty ? nil : stampEmoji,
-                                stampIconDataURL: stampIconPendingBase64,
-                                stampIconRemoteURL: stampIconRemoteURLForPreview(),
-                                cardBackgroundImagePath: CardLogoStorage.resolvedDisplayPath(forStoredPath: cardBackgroundImagePath),
-                                cardBackgroundRemoteURL: cardBackgroundRemoteURL,
-                                labelColorHex: labelHex.trimmingCharacters(in: .whitespaces).isEmpty ? nil : labelHex,
-                                headerRightText: CardRewardsHeaderLink.displayText,
-                                memberPreviewText: cardMemberPreviewText,
-                                memberColumnTitle: previewMemberColumnTitle,
-                                stampMidRewardLabel: stampMidRewardLabel,
-                                stampRewardLabel: stampRewardLabel,
-                                restantsCaption: labelRestants.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Restants" : labelRestants.trimmingCharacters(in: .whitespacesAndNewlines),
-                                compact: false,
-                                onEditZoneTap: { handleCardPreviewZoneTap($0) },
-                                fidelityQRPayloadURL: fidelityCardPageURLString,
-                                completionHighlightZones: shouldShowCompletionPills ? cardCompletionPreviewZones : []
-                            )
-                        } else {
-                            WalletCardPreview(
-                                displayName: displayName.isEmpty ? "Ma Carte Fidélité" : displayName,
-                                requiredStamps: Int32(requiredStamps),
-                                stampsCount: Int32(previewPointsCount),
-                                primaryColorHex: primaryHex,
-                                accentColorHex: accentHex,
-                                stripColorHex: nil,
-                                logoURL: logoURL.isEmpty ? nil : logoURL,
-                                stripDisplayMode: stripDisplayMode,
-                                stripText: stripText.isEmpty ? nil : stripText,
-                                stampEmoji: stampEmoji.isEmpty ? nil : stampEmoji,
-                                cardBackgroundImagePath: CardLogoStorage.resolvedDisplayPath(forStoredPath: cardBackgroundImagePath),
-                                cardBackgroundRemoteURL: cardBackgroundRemoteURL,
-                                labelColorHex: labelHex.trimmingCharacters(in: .whitespaces).isEmpty ? nil : labelHex,
-                                headerRightText: CardRewardsHeaderLink.displayText,
-                                memberPreviewText: cardMemberPreviewText,
-                                memberColumnTitle: previewMemberColumnTitle,
-                                compact: false,
-                                onEditZoneTap: { handleCardPreviewZoneTap($0) },
-                                fidelityQRPayloadURL: fidelityCardPageURLString,
-                                completionHighlightZones: shouldShowCompletionPills ? cardCompletionPreviewZones : []
-                            )
-                        }
+            ZStack {
+                Group {
+                    if programType == "stamps" {
+                        CafeDesArtsCardPreview(
+                            displayName: displayName.isEmpty ? "Ma Carte Fidélité" : displayName,
+                            requiredStamps: Int32(requiredStamps),
+                            stampsCount: Int32(previewStampsCount),
+                            primaryColorHex: primaryHex,
+                            accentColorHex: accentHex,
+                            stripColorHex: nil,
+                            logoURL: logoURL.isEmpty ? nil : logoURL,
+                            stripDisplayMode: stripDisplayMode,
+                            stripText: stripText.isEmpty ? nil : stripText,
+                            stampEmoji: stampEmoji.isEmpty ? nil : stampEmoji,
+                            stampIconDataURL: stampIconPendingBase64,
+                            stampIconRemoteURL: stampIconRemoteURLForPreview(),
+                            cardBackgroundImagePath: CardLogoStorage.resolvedDisplayPath(forStoredPath: cardBackgroundImagePath),
+                            cardBackgroundRemoteURL: cardBackgroundRemoteURL,
+                            labelColorHex: labelHex.trimmingCharacters(in: .whitespaces).isEmpty ? nil : labelHex,
+                            headerRightText: CardRewardsHeaderLink.displayText,
+                            memberPreviewText: cardMemberPreviewText,
+                            memberColumnTitle: previewMemberColumnTitle,
+                            stampMidRewardLabel: stampMidRewardLabel,
+                            stampRewardLabel: stampRewardLabel,
+                            restantsCaption: labelRestants.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Restants" : labelRestants.trimmingCharacters(in: .whitespacesAndNewlines),
+                            compact: false,
+                            onEditZoneTap: { handleCardPreviewZoneTap($0) },
+                            fidelityQRPayloadURL: fidelityCardPageURLString,
+                            completionHighlightZones: shouldShowCompletionPills ? cardCompletionPreviewZones : []
+                        )
+                    } else {
+                        WalletCardPreview(
+                            displayName: displayName.isEmpty ? "Ma Carte Fidélité" : displayName,
+                            requiredStamps: Int32(requiredStamps),
+                            stampsCount: Int32(previewPointsCount),
+                            primaryColorHex: primaryHex,
+                            accentColorHex: accentHex,
+                            stripColorHex: nil,
+                            logoURL: logoURL.isEmpty ? nil : logoURL,
+                            stripDisplayMode: stripDisplayMode,
+                            stripText: stripText.isEmpty ? nil : stripText,
+                            stampEmoji: stampEmoji.isEmpty ? nil : stampEmoji,
+                            cardBackgroundImagePath: CardLogoStorage.resolvedDisplayPath(forStoredPath: cardBackgroundImagePath),
+                            cardBackgroundRemoteURL: cardBackgroundRemoteURL,
+                            labelColorHex: labelHex.trimmingCharacters(in: .whitespaces).isEmpty ? nil : labelHex,
+                            headerRightText: CardRewardsHeaderLink.displayText,
+                            memberPreviewText: cardMemberPreviewText,
+                            memberColumnTitle: previewMemberColumnTitle,
+                            compact: false,
+                            onEditZoneTap: { handleCardPreviewZoneTap($0) },
+                            fidelityQRPayloadURL: fidelityCardPageURLString,
+                            completionHighlightZones: shouldShowCompletionPills ? cardCompletionPreviewZones : []
+                        )
                     }
-                    .padding(.horizontal, AppTheme.Spacing.lg)
-                    .frame(minHeight: previewMinHeight)
                 }
-                .frame(width: geo.size.width, height: geo.size.height)
-                .id(
-                    "\(programType)-\(primaryHex)-\(accentHex)-\(labelHex)-\(logoURL)-\(stripDisplayMode)-\(stripText)-\(displayName)-\(requiredStamps)-\(previewStampsCount)-\(previewPointsCount)-\(cardBackgroundImagePath ?? "")-\(cardBackgroundRemoteURL ?? "")-\(cardMemberPreviewText)-\(previewMemberColumnTitle)-\(stampEmoji)-\(stampRewardLabel)-\(stampMidRewardLabel)-\(labelRestants)-\(stampIconPendingBase64?.prefix(32) ?? "")-\(serverStampIconURLString ?? "")-\(stampIconWasRemoved)"
-                )
+                .padding(.horizontal, AppTheme.Spacing.lg)
             }
-            .frame(height: previewMinHeight + 36)
-            .padding(.vertical, AppTheme.Spacing.xs)
+            .frame(maxWidth: .infinity, alignment: .top)
+            .transaction { $0.disablesAnimations = true }
         }
         .padding(.top, AppTheme.Spacing.md)
         .padding(.bottom, AppTheme.Spacing.sm)
@@ -850,7 +908,7 @@ struct MyCardView: View {
                 stripColor: bgHex,
                 stripDisplayMode: stripDisplayMode,
                 stripText: stripText.trimmingCharacters(in: .whitespaces).isEmpty ? nil : stripText.trimmingCharacters(in: .whitespaces),
-                template: isCafeDesArts ? "cafe" : nil,
+                template: programType == "stamps" ? "cafe" : (isCafeDesArts ? "cafe" : nil),
                 labelColor: labelHexForPass.isEmpty ? nil : (labelHexForPass.hasPrefix("#") ? String(labelHexForPass.dropFirst()) : labelHexForPass),
                 previewPoints: previewBalance,
                 catalogStampOnly: catalogStampOnly
@@ -1079,8 +1137,13 @@ struct MyCardView: View {
     private func syncPreviewBalancesFromSyncedMembers() {
         guard let t = dataService.currentCardTemplate(),
               let first = dataService.uniqueClientCards(for: t).first else {
-            previewPointsCount = 0
-            previewStampsCount = 0
+            if programType == "points" {
+                previewPointsCount = 0
+            } else {
+                // Aperçu commerçant sans membre sync : garder des tampons « obtenus » démo (grille colorée).
+                let cap = max(1, requiredStamps)
+                previewStampsCount = min(3, cap)
+            }
             return
         }
         let balance = Int(first.stampsCount)
@@ -1118,6 +1181,9 @@ struct MyCardView: View {
         }
         if let tp = s.tierPoints { tierPoints = Self.normalizeTierStrings(tp) }
         if let tl = s.tierLabels { tierLabels = Self.normalizeTierStrings(tl) }
+        if programType == "points" {
+            MyCardProgramDefaults.sanitizeEditableTierSlots(tierPoints: &tierPoints, tierLabels: &tierLabels)
+        }
         let localBG = !(cardBackgroundImagePath ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         if !localBG {
             // Restaurer le fichier local si le snapshot indique qu'il existe sur disque.
@@ -1178,7 +1244,10 @@ struct MyCardView: View {
     }
 
     private func buildDisplaySnapshot(slug: String) -> CardPreviewDisplaySnapshot {
-        let hasBG = cardBackgroundRemoteURL?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        let hasRemoteBG = !cardBackgroundWasRemoved
+            && cardBackgroundRemoteURL?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        let hasLocalBG = !cardBackgroundWasRemoved
+            && !(cardBackgroundImagePath ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         return CardPreviewDisplaySnapshot(
             programType: programType,
             displayName: displayName,
@@ -1193,9 +1262,9 @@ struct MyCardView: View {
             requiredStamps: requiredStamps,
             headerRightText: CardRewardsHeaderLink.displayText,
             labelMember: labelMember,
-            hasRemoteCardBackground: hasBG,
-            cardBackgroundRemoteURL: hasBG ? cardBackgroundRemoteURL : nil,
-            hasLocalCardBackground: !(cardBackgroundImagePath ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            hasRemoteCardBackground: hasRemoteBG,
+            cardBackgroundRemoteURL: hasRemoteBG ? cardBackgroundRemoteURL : nil,
+            hasLocalCardBackground: hasLocalBG,
             stampRewardLabel: stampRewardLabel,
             stampMidRewardLabel: stampMidRewardLabel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : stampMidRewardLabel,
             startGameRewardLabel: startGameRewardLabel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : startGameRewardLabel,
@@ -1231,22 +1300,11 @@ struct MyCardView: View {
     }
 
     private func prefetchCardMediaURLs(logoURLString: String, backgroundURLString: String?, stampIconURLString: String? = nil) async {
-        let logo = logoURLString.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !logo.isEmpty, let u = APIResourceURL.resolved(from: logo),
-           APIResourceURL.isOurAPIHost(u), u.path.hasSuffix("/logo") {
-            let bust = MerchantLogoAssetCache.stripeLogoDisplayURL(u)
-            await AuthenticatedMediaLoader.prefetch(url: bust)
-        }
-        if let bg = backgroundURLString?.trimmingCharacters(in: .whitespacesAndNewlines), !bg.isEmpty,
-           let u = APIResourceURL.resolved(from: bg),
-           APIResourceURL.isOurAPIHost(u), u.path.contains("card-background") {
-            await AuthenticatedMediaLoader.prefetch(url: u)
-        }
-        if let st = stampIconURLString?.trimmingCharacters(in: .whitespacesAndNewlines), !st.isEmpty,
-           let u = APIResourceURL.resolved(from: st),
-           APIResourceURL.isOurAPIHost(u) {
-            await AuthenticatedMediaLoader.prefetch(url: u)
-        }
+        await AuthenticatedMediaLoader.prefetchCardAssets(
+            logoURLString: logoURLString,
+            backgroundURLString: backgroundURLString,
+            stampIconURLString: stampIconURLString
+        )
     }
 
     private func prefetchCardMediaFromCurrentState() async {
@@ -1254,12 +1312,15 @@ struct MyCardView: View {
     }
 
     /// Charge les réglages complets depuis l’API (design + règles) pour que l’aperçu et le pass « Tester dans l’Apple Wallet » reflètent les changements faits sur le SaaS ou ailleurs.
-    private func loadCardSettingsFromAPI() async {
+    /// - Parameter respectingUnsavedEdits: si `true`, n’écrase pas un brouillon local non enregistré.
+    private func loadCardSettingsFromAPI(respectingUnsavedEdits: Bool = true) async {
         guard let slug = AuthStorage.currentBusinessSlug else { return }
+        if respectingUnsavedEdits, hasUnsavedCardChanges { return }
         do {
             let settings = try await APIClient.shared.request(APIEndpoint.businessSettings(slug: slug)) as BusinessSettingsResponse
             MerchantLogoAssetCache.applyMerchantLogoTimestamps(from: settings)
             await MainActor.run {
+                if respectingUnsavedEdits, hasUnsavedCardChanges { return }
                 if let name = settings.organizationName, !name.isEmpty {
                     displayName = name
                 }
@@ -1279,30 +1340,40 @@ struct MyCardView: View {
                 stripText = settings.stripText ?? ""
                 programType = (settings.programType ?? "points").lowercased()
                 if programType != "points" && programType != "stamps" { programType = "points" }
-                if let rs = settings.requiredStamps, rs > 0 {
+                if programType == "stamps", let rs = settings.requiredStamps, rs > 0 {
                     requiredStamps = rs
                 }
                 pointsPerEuro = settings.pointsPerEuro ?? 1
                 pointsPerVisit = settings.pointsPerVisit ?? 0
                 pointsMinAmountEur = settings.pointsMinAmountEur.map { String(format: "%.2f", $0) } ?? ""
                 if let tiers = settings.pointsRewardTiers, !tiers.isEmpty {
-                    let sorted = tiers.filter { $0.points > 0 }.sorted { $0.points < $1.points }
-                    for i in 0..<MyCardPointsRewardTiers.slotCount {
-                        if i < sorted.count {
-                            tierPoints[i] = String(sorted[i].points)
-                            tierLabels[i] = sorted[i].label.isEmpty ? "Récompense" : sorted[i].label
-                        } else {
-                            tierPoints[i] = ""
-                            tierLabels[i] = ""
-                        }
+                    let split = MyCardProgramDefaults.splitPointsTiersFromAPI(
+                        tiers,
+                        apiStartGameLabel: settings.startGameRewardLabel
+                    )
+                    startGameRewardLabel = split.startGameRewardLabel
+                    tierPoints = split.tierPoints
+                    tierLabels = split.tierLabels
+                    if programType == "points" {
+                        MyCardProgramDefaults.sanitizeEditableTierSlots(tierPoints: &tierPoints, tierLabels: &tierLabels)
+                        MyCardProgramDefaults.ensureStartGameRewardLabel(&startGameRewardLabel)
                     }
                 } else {
                     tierPoints = Array(repeating: "", count: MyCardPointsRewardTiers.slotCount)
                     tierLabels = Array(repeating: "", count: MyCardPointsRewardTiers.slotCount)
+                    let apiStart = settings.startGameRewardLabel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    if !apiStart.isEmpty { startGameRewardLabel = apiStart }
+                    if programType == "points" {
+                        MyCardProgramDefaults.ensureStartGameRewardLabel(&startGameRewardLabel)
+                    }
                 }
                 stampRewardLabel = settings.stampRewardLabel ?? ""
                 let midSaved = settings.stampMidRewardLabel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 stampMidRewardLabel = midSaved
+                let startSaved = settings.startGameRewardLabel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                if programType == "stamps", !startSaved.isEmpty {
+                    startGameRewardLabel = startSaved
+                }
                 serverHasStampIconAsset = (settings.hasStampIcon == true)
                 if settings.hasStampIcon == true,
                    let su = settings.stampIconUrl?.trimmingCharacters(in: .whitespacesAndNewlines), !su.isEmpty {
@@ -1364,8 +1435,13 @@ struct MyCardView: View {
                     }
                     cardBackgroundRemoteURL = bgURL
                     cardBackgroundWasRemoved = false
-                } else {
-                    cardBackgroundRemoteURL = nil
+                } else if !cardBackgroundWasRemoved {
+                    let localRel = cardBackgroundImagePath?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    let hasLocal = !localRel.isEmpty
+                        || FileManager.default.fileExists(atPath: CardLogoStorage.fullPath(forRelative: CardLogoStorage.relativeCardBackgroundPath) ?? "")
+                    if !hasLocal {
+                        cardBackgroundRemoteURL = nil
+                    }
                 }
                 dashboardSettingsHydrated = true
                 rulesLoadedFromAPI = true
@@ -1494,6 +1570,70 @@ struct MyCardView: View {
         }.value
     }
 
+    /// Enregistre uniquement les récompenses (feuille « Récompenses ») — toutes obligatoires, y compris « Début du jeu ».
+    @discardableResult
+    private func saveRewardsOnly() async -> Bool {
+        guard rewardsConfigurationComplete else {
+            await MainActor.run {
+                saveLogoError = "Renseignez toutes les récompenses, y compris « Début du jeu »."
+            }
+            return false
+        }
+        guard let slug = AuthStorage.currentBusinessSlug else {
+            await MainActor.run { capturePersistedBaseline() }
+            return true
+        }
+
+        var patch = FullDashboardSettingsPatch()
+        patch.welcomeBonusEnabled = 1
+        patch.welcomeBonusAmount = programType == "stamps" ? 1 : 10
+        patch.programType = programType
+        MyCardProgramDefaults.ensureStartGameRewardLabel(&startGameRewardLabel)
+        patch.startGameRewardLabel = String(startGameRewardLabel.prefix(120))
+
+        if programType == "points" {
+            MyCardProgramDefaults.fillDefaultPointsTiersIfNeeded(
+                tierPoints: &tierPoints,
+                tierLabels: &tierLabels
+            )
+            patch.pointsRewardTiers = MyCardProgramDefaults.buildPointsRewardTiersForAPI(
+                startGameRewardLabel: startGameRewardLabel,
+                tierPoints: tierPoints,
+                tierLabels: tierLabels
+            )
+            patch.loyaltyMode = "points_cash"
+        } else {
+            patch.requiredStamps = max(1, requiredStamps)
+            patch.stampRewardLabel = stampRewardLabel.isEmpty
+                ? nil
+                : String(stampRewardLabel.prefix(120))
+            let mid = stampMidRewardLabel.trimmingCharacters(in: .whitespaces)
+            if mid.isEmpty {
+                patch.stampMidRewardLabelIsExplicitNull = true
+            } else {
+                patch.stampMidRewardLabel = String(mid.prefix(120))
+            }
+            patch.pointsRewardTiersIsExplicitNull = true
+            patch.loyaltyMode = "points_cash"
+        }
+
+        do {
+            _ = try await APIClient.shared.request(APIEndpoint.patchDashboardSettings(slug: slug, patch: patch)) as EmptyResponse
+            await MainActor.run {
+                saveLogoError = nil
+                persistDisplaySnapshot(slug: slug)
+                capturePersistedBaseline()
+            }
+            await loadCardSettingsFromAPI(respectingUnsavedEdits: true)
+            return true
+        } catch {
+            await MainActor.run {
+                saveLogoError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            }
+            return false
+        }
+    }
+
     /// Retourne `false` si l'envoi des réglages au serveur a échoué (réseau, validation, etc.).
     /// - Parameter skipPostSaveReload: si `true`, pas de `GET dashboard/settings` après succès (ex. flux Apple Wallet : évite un aller-retour réseau inutile).
     @discardableResult
@@ -1532,15 +1672,16 @@ struct MyCardView: View {
         )
         var rewardTiers: [PointsRewardTierPayload]? = nil
         if programType == "points" {
-            var tiers: [PointsRewardTierPayload] = []
-            for i in 0..<MyCardPointsRewardTiers.slotCount {
-                let ptsStr = tierPoints[i].trimmingCharacters(in: .whitespaces)
-                let lab = tierLabels[i].trimmingCharacters(in: .whitespaces)
-                guard let pts = Int(ptsStr), pts >= 0, !lab.isEmpty else { continue }
-                tiers.append(PointsRewardTierPayload(points: pts, label: String(lab.prefix(120))))
-            }
-            tiers.sort { $0.points < $1.points }
-            if !tiers.isEmpty { rewardTiers = tiers }
+            MyCardProgramDefaults.fillDefaultPointsTiersIfNeeded(
+                tierPoints: &tierPoints,
+                tierLabels: &tierLabels
+            )
+            MyCardProgramDefaults.ensureStartGameRewardLabel(&startGameRewardLabel)
+            rewardTiers = MyCardProgramDefaults.buildPointsRewardTiersForAPI(
+                startGameRewardLabel: startGameRewardLabel,
+                tierPoints: tierPoints,
+                tierLabels: tierLabels
+            )
         }
         let ptsMinEur: Double? = Double(pointsMinAmountEur.trimmingCharacters(in: .whitespaces)).flatMap { $0 >= 0 ? $0 : nil }
         let sectorVal = sector.trimmingCharacters(in: .whitespaces)
@@ -1559,16 +1700,28 @@ struct MyCardView: View {
                 patch.logoBase64 = logoBase64
                 patch.logoUrl = logoUrl
                 patch.stampEmoji = stampEmoji.isEmpty ? nil : String(stampEmoji.prefix(32))
-                // Image de fond : uniquement en mode points ; en tampons on supprime le fond côté serveur.
-                patch.cardBackgroundBase64 = programType == "points" ? cardBackgroundBase64 : ""
+                // Tampons : ne pas envoyer de fond vide (conserver l’image côté serveur pour le retour en mode points).
+                if cardBackgroundWasRemoved {
+                    patch.cardBackgroundBase64 = ""
+                } else if let bg = cardBackgroundBase64 {
+                    patch.cardBackgroundBase64 = bg
+                }
                 patch.programType = programType
                 patch.pointsPerEuro = programType == "points" ? pointsPerEuro : nil
                 patch.pointsPerVisit = programType == "points" ? pointsPerVisit : nil
                 patch.pointsMinAmountEur = programType == "points" ? ptsMinEur : nil
-                patch.pointsRewardTiers = programType == "points" ? rewardTiers : nil
+                if programType == "points" {
+                    patch.pointsRewardTiers = rewardTiers
+                    patch.loyaltyMode = "points_cash"
+                } else {
+                    patch.pointsRewardTiersIsExplicitNull = true
+                    patch.loyaltyMode = "points_cash"
+                }
                 patch.stampRewardLabel = stampRewardLabel.isEmpty ? nil : String(stampRewardLabel.prefix(120))
                 patch.welcomeBonusEnabled = 1
                 patch.welcomeBonusAmount = programType == "stamps" ? 1 : 10
+                MyCardProgramDefaults.ensureStartGameRewardLabel(&startGameRewardLabel)
+                patch.startGameRewardLabel = String(startGameRewardLabel.prefix(120))
                 if programType == "stamps" {
                     let mid = stampMidRewardLabel.trimmingCharacters(in: .whitespaces)
                     if mid.isEmpty {
@@ -1579,11 +1732,8 @@ struct MyCardView: View {
                 }
                 patch.sector = sectorVal.isEmpty ? nil : String(sectorVal.prefix(64))
                 patch.stripColor = bgHex
-                patch.stripDisplayMode = stripDisplayMode
-                patch.stripText = stripText.trimmingCharacters(in: .whitespaces)
-                if programType == "points" {
-                    patch.loyaltyMode = "points_cash"
-                }
+                patch.stripDisplayMode = "logo"
+                patch.stripText = ""
                 if dashboardSettingsHydrated {
                     patch.backTerms = backTerms
                     patch.backContact = backContact
@@ -1637,7 +1787,7 @@ struct MyCardView: View {
                         capturePersistedBaseline()
                     }
                 } else {
-                    await loadCardSettingsFromAPI()
+                    await loadCardSettingsFromAPI(respectingUnsavedEdits: false)
                     // `loadCardSettingsFromAPI` met déjà à jour l’aperçu + `syncPreviewBalancesFromSyncedMembers`.
                 }
                 // La sync complète (membres + transactions) peut prendre plusieurs secondes : arrière-plan.
@@ -1679,6 +1829,43 @@ struct MyCardView: View {
 
     private func triggerSavedFeedback() {
         UINotificationFeedbackGenerator().notificationOccurred(.success)
+    }
+}
+
+// MARK: - Feuille personnalisation (conteneur léger pour le type-checker Swift)
+
+private struct MyCardCustomizationSheetContainer: View {
+    let zone: CardPreviewEditZone
+    let pack: CardCustomizationBindPack
+    let actions: CardCustomizationActions
+    let cardImageSuggestedColors: [String]
+    let dashboardSettingsHydrated: Bool
+    let canSaveRewards: Bool
+    let rewardsSaveInFlight: Bool
+    let hasUnsavedCardChanges: Bool
+    let onHeaderRightSave: () async -> Bool
+    let onCropComplete: (UIImage, ImageCropSpec) async -> Void
+    let refreshSuggestedColors: () async -> Void
+    let reloadWalletPassBackSettings: () async -> Void
+
+    var body: some View {
+        CardElementCustomizationSheet(
+            zone: zone,
+            pack: pack,
+            actions: actions,
+            cardImageSuggestedColors: cardImageSuggestedColors,
+            dashboardSettingsHydrated: dashboardSettingsHydrated,
+            onSaveRewards: zone == .headerRight ? onHeaderRightSave : nil,
+            canSaveRewards: canSaveRewards,
+            rewardsSaveInFlight: rewardsSaveInFlight,
+            onCropComplete: onCropComplete
+        )
+        .task(id: zone.id) {
+            await refreshSuggestedColors()
+            if zone == .walletPassBack, !hasUnsavedCardChanges {
+                await reloadWalletPassBackSettings()
+            }
+        }
     }
 }
 

@@ -1,30 +1,71 @@
 package fr.myfidpass.ui.screens.main
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Notifications
-import androidx.compose.material.icons.filled.Person
-import androidx.compose.material3.Icon
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.unit.dp
 import fr.myfidpass.di.AppContainer
+import fr.myfidpass.ui.components.BusinessSwitchingOverlay
+import fr.myfidpass.ui.components.PostCardFlyerPromoEligibility
+import fr.myfidpass.ui.components.PostCardFlyerPromoSheet
+import fr.myfidpass.ui.components.CustomSideMenu
+import fr.myfidpass.ui.components.DashboardHomeMinimalTopBar
+import fr.myfidpass.ui.components.DashboardHomeStaffTopBar
+import fr.myfidpass.ui.components.MerchantTabShell
+import fr.myfidpass.ui.components.MerchantFloatingTabBar
+import fr.myfidpass.ui.components.MerchantFloatingTabBarMetrics
+import fr.myfidpass.ui.components.MerchantSubscribeFloatingPill
+import fr.myfidpass.ui.components.SafeArea
+import fr.myfidpass.ui.components.ScanSuccessToastHost
+import fr.myfidpass.ui.components.SyncErrorBanner
+import fr.myfidpass.ui.components.XStyleSettingsSidebar
 import fr.myfidpass.ui.screens.auth.MerchantPaywallScreen
-import fr.myfidpass.ui.screens.home.HomeTabNavHost
-import fr.myfidpass.ui.screens.tabs.CampaignsTabScreen
+import fr.myfidpass.ui.screens.commerce.AddCommerceScreen
 import fr.myfidpass.ui.screens.commerce.CommerceTabNavHost
+import fr.myfidpass.ui.screens.commerce.FlyerToolsScreen
+import fr.myfidpass.ui.screens.commerce.MatchPredictionsScreen
+import fr.myfidpass.ui.screens.settings.SettingsFlowNavHost
+import fr.myfidpass.ui.navigation.MerchantAnimatedFullScreenOverlay
+import fr.myfidpass.ui.navigation.merchantPaywallEnter
+import fr.myfidpass.ui.navigation.merchantPaywallExit
+import fr.myfidpass.ui.navigation.merchantTabTransitionSpec
+import fr.myfidpass.ui.screens.home.HomeTabNavHost
+import fr.myfidpass.ui.theme.MerchantDesignSystem
+import fr.myfidpass.ui.screens.profile.StaffAccountScreen
+import fr.myfidpass.ui.screens.tabs.CampaignsTabScreen
 import fr.myfidpass.ui.viewmodel.DashboardViewModel
+import fr.myfidpass.ui.theme.FintechLightPalette
+import fr.myfidpass.util.HapticHelper
+import fr.myfidpass.util.LegalURLs
+import fr.myfidpass.util.openInCustomTab
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @Composable
 fun MainTabsScreen(
@@ -33,63 +74,449 @@ fun MainTabsScreen(
     snackbarHostState: SnackbarHostState,
     appScope: CoroutineScope,
     onLogout: () -> Unit,
+    pendingScanRequest: Int = 0,
+    onScanRequestConsumed: () -> Unit = {},
 ) {
     var tab by rememberSaveable { mutableIntStateOf(0) }
-    LaunchedEffect(tab) {
-        if (tab == 0) dashboardViewModel.load()
+    val isStaff = container.sessionStore.isMerchantStaffUser()
+    val fullLayout = container.sessionStore.usesFullMerchantTabLayout()
+    val slug = container.sessionStore.currentBusinessSlug?.trim().orEmpty()
+    var showSettings by remember { mutableStateOf(false) }
+    var showAddCommerce by remember { mutableStateOf(false) }
+    var showProPaywall by remember { mutableStateOf(false) }
+    var scanToast by remember { mutableStateOf<String?>(null) }
+    var homeImmersiveMyCard by remember { mutableStateOf(false) }
+    var homeSidebarExpanded by remember { mutableStateOf(false) }
+    var homeAtRoot by remember { mutableStateOf(true) }
+    var commerceStatsAtRoot by remember { mutableStateOf(true) }
+    var showFlyerHub by remember { mutableStateOf(false) }
+    var flyerHubStartCreateAssistant by remember { mutableStateOf(false) }
+    var flyerHubOpenForEdit by remember { mutableStateOf(false) }
+    var showMatchPredictions by remember { mutableStateOf(false) }
+    var flyerAttentionDot by remember { mutableStateOf(false) }
+    var isBusinessSwitching by remember { mutableStateOf(false) }
+    var openScanTrigger by remember { mutableIntStateOf(0) }
+    var showFlyerPromo by remember { mutableStateOf(false) }
+
+    val view = LocalView.current
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    fun selectTab(index: Int) {
+        if (index != tab) HapticHelper.tabSwitch(view)
+        tab = index
     }
-    if (!container.sessionStore.isMerchantAccessGranted()) {
-        MerchantPaywallScreen(
-            userEmail = container.sessionStore.userEmail,
-            onLogout = onLogout,
-        )
-        return
+
+    fun handleBusinessSwitched() {
+        isBusinessSwitching = true
+        dashboardViewModel.load()
+        scope.launch {
+            delay(450)
+            isBusinessSwitching = false
+        }
     }
+
+    LaunchedEffect(slug, tab) {
+        flyerAttentionDot = slug.isNotEmpty() &&
+            PostCardFlyerPromoEligibility.showsCreationAttentionBadge(context, slug)
+    }
+
+    LaunchedEffect(pendingScanRequest) {
+        if (pendingScanRequest > 0) {
+            tab = 0
+            openScanTrigger = pendingScanRequest
+            onScanRequestConsumed()
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        PostCardFlyerPromoEligibility.resetSessionSuppressionForAppOpen()
+        PostCardFlyerPromoEligibility.dequeuePendingSlugIfEligible(context)?.let {
+            delay(800)
+            showFlyerPromo = true
+        }
+    }
+
+    fun runAfterHomeSidebarDismisses(action: () -> Unit) {
+        if (homeSidebarExpanded) {
+            homeSidebarExpanded = false
+            scope.launch {
+                delay(260)
+                action()
+            }
+        } else {
+            action()
+        }
+    }
+
+    val businessName = container.sessionStore.businesses
+        .firstOrNull { it.slug == container.sessionStore.currentBusinessSlug }
+        ?.name
+        ?: container.sessionStore.currentBusinessSlug
+        ?: "Mon commerce"
+
+    val onSubscribe: () -> Unit = {
+        scope.launch {
+            runCatching {
+                val slug = container.sessionStore.currentBusinessSlug?.trim().orEmpty()
+                val url = if (slug.isNotEmpty()) {
+                    container.dashboardRepository.paymentBusinessCheckout(slug, "month").url
+                } else {
+                    container.dashboardRepository.paymentCheckout(null).url
+                }
+                url?.takeIf { it.isNotBlank() }?.let { openInCustomTab(context, it) }
+            }
+        }
+    }
+
+    val onAddCommerce: () -> Unit = { showAddCommerce = true }
+
+    val onUnlockPro: () -> Unit = { showProPaywall = true }
+
+    LaunchedEffect(tab, fullLayout) {
+        if (tab == 0) dashboardViewModel.refresh()
+        if (isStaff && tab > 1) tab = 0
+    }
+
+    DisposableEffect(slug) {
+        if (slug.isBlank()) return@DisposableEffect onDispose {}
+        val lifecycle = ProcessLifecycleOwner.get().lifecycle
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_START) {
+                dashboardViewModel.refresh()
+            }
+        }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer) }
+    }
+
     Scaffold(
-        bottomBar = {
-            NavigationBar {
-                NavigationBarItem(
-                    selected = tab == 0,
-                    onClick = { tab = 0 },
-                    icon = { Icon(Icons.Default.Home, contentDescription = null) },
-                    label = { Text("Accueil") },
+        containerColor = Color.Black,
+    ) {
+        Box(Modifier.fillMaxSize()) {
+            AnimatedContent(
+                targetState = tab,
+                transitionSpec = merchantTabTransitionSpec(),
+                label = "merchantMainTabs",
+                modifier = Modifier.fillMaxSize(),
+            ) { currentTab ->
+            when {
+                currentTab == 0 -> {
+                    if (isStaff) {
+                        MerchantTabShell(
+                            topBar = {
+                                if (!homeImmersiveMyCard) {
+                                    DashboardHomeStaffTopBar(
+                                        title = "Accueil",
+                                        onSettingsClick = { tab = 1 },
+                                    )
+                                }
+                            },
+                            canvasColor = if (homeImmersiveMyCard) {
+                                Color(0xFFF2F2F7)
+                            } else {
+                                FintechLightPalette.canvas
+                            },
+                            immersiveContent = homeImmersiveMyCard,
+                        ) { contentModifier ->
+                            HomeTabNavHost(
+                                modifier = contentModifier,
+                                dashboardViewModel = dashboardViewModel,
+                                sessionStore = container.sessionStore,
+                                repository = container.dashboardRepository,
+                                syncService = container.syncService,
+                                snackbarHostState = snackbarHostState,
+                                appScope = appScope,
+                                onSubscribe = onSubscribe,
+                                isStaff = true,
+                                onOpenMerchantStats = { tab = 2 },
+                                onScanSuccessToast = { scanToast = it },
+                                openScanTrigger = openScanTrigger,
+                                onUnlockPro = onUnlockPro,
+                                onMyCardVisibilityChange = { homeImmersiveMyCard = it },
+                                onHomeAtRootChange = { homeAtRoot = it },
+                            )
+                        }
+                    } else {
+                        CustomSideMenu(
+                            isExpanded = homeSidebarExpanded,
+                            onExpandedChange = { homeSidebarExpanded = it },
+                            panelBackground = FintechLightPalette.canvas,
+                            menuContent = {
+                                XStyleSettingsSidebar(
+                                    sessionStore = container.sessionStore,
+                                    showFlyerAttentionDot = flyerAttentionDot,
+                                    onOpenFlyer = {
+                                        runAfterHomeSidebarDismisses {
+                                            flyerHubStartCreateAssistant = false
+                                            flyerHubOpenForEdit = false
+                                            showFlyerHub = true
+                                        }
+                                    },
+                                    onOpenFootballGame = {
+                                        runAfterHomeSidebarDismisses { showMatchPredictions = true }
+                                    },
+                                    onOpenLiveGame = {
+                                        runAfterHomeSidebarDismisses {
+                                            slug.takeIf { it.isNotEmpty() }?.let {
+                                                openInCustomTab(context, LegalURLs.fidelityCardPage(it))
+                                            }
+                                        }
+                                    },
+                                    onOpenSettings = {
+                                        runAfterHomeSidebarDismisses { showSettings = true }
+                                    },
+                                )
+                            },
+                            content = {
+                            MerchantTabShell(
+                                topBar = {
+                                    if (!homeImmersiveMyCard) {
+                                        DashboardHomeMinimalTopBar(
+                                            title = "Accueil",
+                                            businessLabel = businessName,
+                                            sessionStore = container.sessionStore,
+                                            onSettingsClick = { showSettings = true },
+                                            onBusinessSwitched = { handleBusinessSwitched() },
+                                            onAddCommerce = onAddCommerce,
+                                            showBusinessSwitcher = false,
+                                            onOpenSideMenu = { homeSidebarExpanded = !homeSidebarExpanded },
+                                            dashboardRepository = container.dashboardRepository,
+                                            refreshAttentionDotKey = tab to showSettings,
+                                        )
+                                    }
+                                },
+                                canvasColor = if (homeImmersiveMyCard) {
+                                    Color(0xFFF2F2F7)
+                                } else {
+                                    FintechLightPalette.canvas
+                                },
+                                immersiveContent = homeImmersiveMyCard,
+                            ) { contentModifier ->
+                                HomeTabNavHost(
+                                    modifier = contentModifier,
+                                    dashboardViewModel = dashboardViewModel,
+                                    sessionStore = container.sessionStore,
+                                    repository = container.dashboardRepository,
+                                    syncService = container.syncService,
+                                    snackbarHostState = snackbarHostState,
+                                    appScope = appScope,
+                                    onSubscribe = onSubscribe,
+                                    isStaff = false,
+                                    onOpenMerchantStats = { tab = 2 },
+                                    onScanSuccessToast = { scanToast = it },
+                                    openScanTrigger = openScanTrigger,
+                                    onUnlockPro = onUnlockPro,
+                                    onMyCardVisibilityChange = { homeImmersiveMyCard = it },
+                                    onHomeAtRootChange = { homeAtRoot = it },
+                                )
+                            }
+                            },
+                        )
+                    }
+                }
+                isStaff && currentTab == 1 -> StaffAccountScreen(
+                    container = container,
+                    syncService = container.syncService,
+                    snackbar = snackbarHostState,
+                    onLogout = onLogout,
                 )
-                NavigationBarItem(
-                    selected = tab == 1,
-                    onClick = { tab = 1 },
-                    icon = { Icon(Icons.Default.Notifications, contentDescription = null) },
-                    label = { Text("Notifs") },
-                )
-                NavigationBarItem(
-                    selected = tab == 2,
-                    onClick = { tab = 2 },
-                    icon = { Icon(Icons.Default.Person, contentDescription = null) },
-                    label = { Text("Commerce") },
+                fullLayout && currentTab == 1 -> MerchantTabShell(
+                    topBar = {
+                        DashboardHomeMinimalTopBar(
+                            title = "Notifications",
+                            businessLabel = businessName,
+                            sessionStore = container.sessionStore,
+                            onSettingsClick = { showSettings = true },
+                            onBusinessSwitched = { handleBusinessSwitched() },
+                            onAddCommerce = onAddCommerce,
+                            dashboardRepository = container.dashboardRepository,
+                            refreshAttentionDotKey = tab to showSettings,
+                        )
+                    },
+                    canvasColor = FintechLightPalette.canvas,
+                ) { contentModifier ->
+                    CampaignsTabScreen(
+                        modifier = contentModifier,
+                        repository = container.dashboardRepository,
+                        sessionStore = container.sessionStore,
+                        snackbarHostState = snackbarHostState,
+                        hasProAccess = container.sessionStore.merchantProInsightsUnlocked(),
+                        onUnlockPro = onUnlockPro,
+                        onRequestAccountRefresh = {
+                            scope.launch {
+                                runCatching { container.authRepository.refreshAccount() }
+                                dashboardViewModel.load()
+                            }
+                        },
+                    )
+                }
+                fullLayout && currentTab == 2 -> MerchantTabShell(
+                    topBar = {
+                        DashboardHomeMinimalTopBar(
+                            title = "Statistiques",
+                            businessLabel = businessName,
+                            sessionStore = container.sessionStore,
+                            onSettingsClick = { showSettings = true },
+                            onBusinessSwitched = { handleBusinessSwitched() },
+                            onAddCommerce = onAddCommerce,
+                            dashboardRepository = container.dashboardRepository,
+                            refreshAttentionDotKey = tab to showSettings,
+                        )
+                    },
+                    canvasColor = FintechLightPalette.canvas,
+                ) { contentModifier ->
+                    CommerceTabNavHost(
+                        modifier = contentModifier,
+                        container = container,
+                        snackbarHostState = snackbarHostState,
+                        appScope = appScope,
+                        onLogout = onLogout,
+                        embeddedRoot = true,
+                        onUnlockPro = onUnlockPro,
+                        onCommerceStatsAtRootChange = { commerceStatsAtRoot = it },
+                    )
+                }
+            }
+            }
+
+            ScanSuccessToastHost(
+                message = scanToast,
+                onDismiss = { scanToast = null },
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = SafeArea.statusBarTop()),
+            )
+
+            container.syncService.lastSyncError?.takeIf { it.isNotBlank() }?.let { syncErr ->
+                SyncErrorBanner(
+                    message = syncErr,
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = SafeArea.statusBarTop() + MerchantDesignSystem.topBarScrollInset),
                 )
             }
-        },
-    ) { padding ->
-        when (tab) {
-            0 -> HomeTabNavHost(
-                modifier = Modifier.padding(padding),
-                dashboardViewModel = dashboardViewModel,
-                sessionStore = container.sessionStore,
-                repository = container.dashboardRepository,
-                snackbarHostState = snackbarHostState,
-                appScope = appScope,
+
+            val shouldShowSubscribePill = !isStaff && fullLayout &&
+                !container.sessionStore.hasPaidMerchantSubscription() &&
+                !homeSidebarExpanded &&
+                !homeImmersiveMyCard &&
+                when (tab) {
+                    0 -> homeAtRoot
+                    1 -> true
+                    2 -> commerceStatsAtRoot
+                    else -> false
+                }
+
+            if (shouldShowSubscribePill) {
+                Box(
+                    Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .padding(bottom = MerchantFloatingTabBarMetrics.subscribePillBottomInset),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    MerchantSubscribeFloatingPill(onSubscribe = onUnlockPro)
+                }
+            }
+
+            if (!(tab == 0 && homeSidebarExpanded && !isStaff) && !homeImmersiveMyCard) {
+                MerchantFloatingTabBar(
+                    selectedTab = tab,
+                    onTabSelected = { selectTab(it) },
+                    fullLayout = fullLayout,
+                    modifier = Modifier.align(Alignment.BottomCenter),
+                )
+            }
+
+            AnimatedVisibility(
+                visible = showProPaywall,
+                enter = merchantPaywallEnter(),
+                exit = merchantPaywallExit(),
+            ) {
+                MerchantPaywallScreen(
+                    userEmail = container.sessionStore.userEmail,
+                    sessionStore = container.sessionStore,
+                    dashboardRepository = container.dashboardRepository,
+                    authRepository = container.authRepository,
+                    onLogout = onLogout,
+                    onAccessGranted = {
+                        showProPaywall = false
+                        dashboardViewModel.load()
+                    },
+                    allowsClose = true,
+                    onClose = { showProPaywall = false },
+                )
+            }
+
+            MerchantAnimatedFullScreenOverlay(visible = showSettings && !isStaff) {
+                SettingsFlowNavHost(
+                    container = container,
+                    snackbarHostState = snackbarHostState,
+                    appScope = appScope,
+                    onDismiss = { showSettings = false },
+                    onLogout = onLogout,
+                    onOpenPaywall = { showProPaywall = true },
+                    onOpenFlyerHub = {
+                        showSettings = false
+                        flyerHubStartCreateAssistant = false
+                        flyerHubOpenForEdit = false
+                        showFlyerHub = true
+                    },
+                    showFlyerShortcuts = true,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+
+            MerchantAnimatedFullScreenOverlay(visible = showFlyerHub) {
+                FlyerToolsScreen(
+                    container = container,
+                    snackbar = snackbarHostState,
+                    startCreateAssistant = flyerHubStartCreateAssistant,
+                    openForEdit = flyerHubOpenForEdit,
+                    onFlyerSaveSuccess = { showFlyerHub = false },
+                    onBack = {
+                        showFlyerHub = false
+                        flyerHubStartCreateAssistant = false
+                        flyerHubOpenForEdit = false
+                    },
+                )
+            }
+
+            MerchantAnimatedFullScreenOverlay(visible = showAddCommerce) {
+                AddCommerceScreen(
+                    container = container,
+                    businessCreationRepository = container.businessCreationRepository,
+                    snackbar = snackbarHostState,
+                    onBack = { showAddCommerce = false },
+                    onCreated = {
+                        showAddCommerce = false
+                        dashboardViewModel.load()
+                    },
+                )
+            }
+
+            MerchantAnimatedFullScreenOverlay(visible = showMatchPredictions) {
+                MatchPredictionsScreen(
+                    repository = container.dashboardRepository,
+                    snackbar = snackbarHostState,
+                    onBack = { showMatchPredictions = false },
+                )
+            }
+
+            BusinessSwitchingOverlay(visible = isBusinessSwitching)
+
+            PostCardFlyerPromoSheet(
+                slug = slug,
+                visible = showFlyerPromo && slug.isNotEmpty(),
+                onDismiss = { showFlyerPromo = false },
+                onCreateFlyer = {
+                    flyerHubStartCreateAssistant = true
+                    flyerHubOpenForEdit = false
+                    showFlyerHub = true
+                },
             )
-            1 -> CampaignsTabScreen(
-                modifier = Modifier.padding(padding),
-                repository = container.dashboardRepository,
-                snackbarHostState = snackbarHostState,
-            )
-            2 -> CommerceTabNavHost(
-                modifier = Modifier.padding(padding),
-                container = container,
-                snackbarHostState = snackbarHostState,
-                appScope = appScope,
-                onLogout = onLogout,
-            )
+
         }
     }
 }

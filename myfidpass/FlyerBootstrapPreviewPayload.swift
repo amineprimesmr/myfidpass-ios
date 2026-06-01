@@ -69,23 +69,87 @@ struct FlyerBootstrapPreviewPayload: Encodable {
 }
 
 enum FlyerBootstrapPreviewPayloadBuilder {
+    private static let sparseFlyerStateKeyThreshold = 6
+
+    private static func decodeFlyerStateJSON(_ stateData: Data) -> FlyerStateDTO? {
+        guard let obj = try? JSONSerialization.jsonObject(with: stateData) else { return nil }
+        return FlyerStateDTO.decodeFromJSONObject(obj)
+    }
+
+    /// État flyer depuis le cache disque Commerce (bootstrap base64).
+    static func flyerStateFromCommerceCache(slug: String) -> FlyerStateDTO? {
+        let trimmedSlug = slug.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedSlug.isEmpty else { return nil }
+        let b64 = CommerceFlyerStore.shared.snapshot(for: trimmedSlug)?.bootstrapPreviewB64
+            ?? CommerceFlyerStateCache.load(slug: trimmedSlug)?.bootstrapPreviewB64
+        let raw = b64?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !raw.isEmpty else { return nil }
+        return flyerStateFromBootstrapBase64(raw)
+    }
+
     /// Découpe l’`état` flyer depuis un bootstrap base64 (calques natifs : dégradé + photo, même logique que l’embed).
     static func flyerStateFromBootstrapBase64(_ b64: String) -> FlyerStateDTO? {
         let trimmed = b64.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let data = Data(base64Encoded: trimmed),
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let fp = root["flyer_prefs"] as? [String: Any],
-              let stObj = fp["state"] else { return nil }
+              let stObj = fp["state"]
+        else { return nil }
         do {
             let stateData = try JSONSerialization.data(withJSONObject: stObj)
-            let dec = JSONDecoder()
-            dec.keyDecodingStrategy = .convertFromSnakeCase
-            var st = try dec.decode(FlyerStateDTO.self, from: stateData)
-            st.normalizeClamps()
-            return st
+            return decodeFlyerStateJSON(stateData)
         } catch {
             return nil
         }
+    }
+
+    /// Le bootstrap disque peut être affiché tout de suite seulement s’il contient des teintes réelles (pas `{}` / défauts).
+    static func bootstrapEmbedsTrustworthyFlyerColors(b64: String, decodedState: FlyerStateDTO) -> Bool {
+        let trimmed = b64.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !rawFlyerStateJSONIsSparse(inBootstrapBase64: trimmed) else { return false }
+        var st = decodedState
+        st.normalizeClamps()
+        return st.hasExplicitFlyerColorFields || st.isCustomizedComparedToAppDefault
+    }
+
+    /// `true` si le JSON brut embarque un `state` vide ou trop partiel — l’embed web retombe alors sur le gris `#0f172a`.
+    static func rawFlyerStateJSONIsSparse(inBootstrapBase64 b64: String) -> Bool {
+        let trimmed = b64.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let data = Data(base64Encoded: trimmed),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let fp = root["flyer_prefs"] as? [String: Any]
+        else { return true }
+        let rawState = fp["state"] as? [String: Any] ?? [:]
+        return rawState.count < sparseFlyerStateKeyThreshold
+    }
+
+    /// Réinjecte un `state` complet (toutes les clés couleur / typo) quand le bootstrap disque n’en contenait qu’un `{}`.
+    static func repairBootstrapBase64IfSparseFlyerState(
+        _ b64: String,
+        resolvedState: FlyerStateDTO,
+        businessSlug: String
+    ) -> String {
+        let trimmed = b64.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, rawFlyerStateJSONIsSparse(inBootstrapBase64: trimmed) else { return b64 }
+        guard resolvedState.hasExplicitFlyerColorFields || resolvedState.isCustomizedComparedToAppDefault else { return b64 }
+        guard let data = Data(base64Encoded: trimmed),
+              var root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              var fp = root["flyer_prefs"] as? [String: Any]
+        else { return b64 }
+
+        var st = resolvedState
+        st.normalizeClamps()
+        st = FlyerWheelWebEmbedPreviewMigration.normalizedStateForPreview(st, businessSlug: businessSlug)
+        let enc = JSONEncoder()
+        enc.keyEncodingStrategy = .useDefaultKeys
+        guard let stData = try? enc.encode(st),
+              let stNew = try? JSONSerialization.jsonObject(with: stData)
+        else { return b64 }
+
+        fp["state"] = stNew
+        root["flyer_prefs"] = fp
+        guard let out = try? JSONSerialization.data(withJSONObject: root) else { return b64 }
+        return out.base64EncodedString()
     }
 
     /// Extrait `custom_bg_data_url` depuis un bootstrap base64 quand le champ cache séparé est absent.
@@ -119,15 +183,9 @@ enum FlyerBootstrapPreviewPayloadBuilder {
         guard var root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               var fp = root["flyer_prefs"] as? [String: Any],
               let stObj = fp["state"] else { return b64 }
-        var state: FlyerStateDTO
-        do {
-            let stateData = try JSONSerialization.data(withJSONObject: stObj)
-            let dec = JSONDecoder()
-            dec.keyDecodingStrategy = .convertFromSnakeCase
-            state = try dec.decode(FlyerStateDTO.self, from: stateData)
-        } catch {
-            return b64
-        }
+        guard let stateData = try? JSONSerialization.data(withJSONObject: stObj),
+              var state = decodeFlyerStateJSON(stateData)
+        else { return b64 }
         let before = state.wheelRenderMode
         state = FlyerWheelWebEmbedPreviewMigration.normalizedStateForPreview(state, businessSlug: slug)
         guard before != state.wheelRenderMode else { return b64 }
@@ -141,6 +199,36 @@ enum FlyerBootstrapPreviewPayloadBuilder {
         return out.base64EncodedString()
     }
 
+    /// Choisit l’état le plus riche entre GET serveur et cache local — évite qu’un `state: {}` côté API écrase les teintes enregistrées.
+    static func resolvedStateForBootstrap(
+        serverState: FlyerStateDTO?,
+        fallback: FlyerStateDTO?,
+        businessSlug: String
+    ) -> FlyerStateDTO {
+        let slug = businessSlug.trimmingCharacters(in: .whitespacesAndNewlines)
+        func preview(_ st: FlyerStateDTO) -> FlyerStateDTO {
+            var merged = st
+            merged.normalizeClamps()
+            guard !slug.isEmpty else { return merged }
+            return FlyerWheelWebEmbedPreviewMigration.normalizedStateForPreview(merged, businessSlug: slug)
+        }
+
+        if let server = serverState {
+            /// GET correctement décodé (camelCase) : toujours faire confiance au serveur s’il porte des teintes explicites.
+            if server.isCustomizedComparedToAppDefault || server.hasExplicitFlyerColorFields {
+                return preview(server)
+            }
+            if let fb = fallback, fb.isCustomizedComparedToAppDefault {
+                return preview(fb)
+            }
+            return preview(server)
+        }
+        if let fb = fallback {
+            return preview(fb)
+        }
+        return preview(FlyerStateDTO.default)
+    }
+
     /// Bootstrap base64 pour `FlyerPreviewWebView` (composite : roue, QR, textes — pas seulement le fond IA).
     /// - Parameter fallbackStateIfMissing: quand le GET omet `flyer_prefs.state` (JSON partiel / sync), réutiliser l’état
     ///   du dernier bootstrap disque au lieu de `FlyerStateDTO.default` — sinon un `loadProfileFromServer` écrase le cache
@@ -149,18 +237,11 @@ enum FlyerBootstrapPreviewPayloadBuilder {
         guard let fp = response.flyerPrefs else { return nil }
         let slug = businessSlug.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !slug.isEmpty else { return nil }
-        let state: FlyerStateDTO
-        if let s = fp.state {
-            var merged = s
-            merged.normalizeClamps()
-            state = FlyerWheelWebEmbedPreviewMigration.normalizedStateForPreview(merged, businessSlug: slug)
-        } else if let fb = fallbackStateIfMissing {
-            var merged = fb
-            merged.normalizeClamps()
-            state = FlyerWheelWebEmbedPreviewMigration.normalizedStateForPreview(merged, businessSlug: slug)
-        } else {
-            state = FlyerWheelWebEmbedPreviewMigration.normalizedStateForPreview(FlyerStateDTO.default, businessSlug: slug)
-        }
+        let state = resolvedStateForBootstrap(
+            serverState: fp.state,
+            fallback: fallbackStateIfMissing,
+            businessSlug: slug
+        )
         let share = (response.shareUrl ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         /// `updated_at` exclu : sinon chaque sync change le base64 → la checklist Commerce relance WebView + décodage fond (flash / rechargement).
         let payload = FlyerBootstrapPreviewPayload(

@@ -1,0 +1,6 @@
+Première version Android MyFidpass :
+• Onboarding commerçant (email + code OTP)
+• Tableau de bord, scanner QR, carte personnalisable
+• Google Wallet pour tester la carte fidélité
+• Campagnes et notifications push
+• Abonnement Pro via paiement sécurisé (Stripe)

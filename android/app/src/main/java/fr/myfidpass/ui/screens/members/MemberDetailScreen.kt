@@ -38,6 +38,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import fr.myfidpass.data.dto.CategoryDto
+import fr.myfidpass.data.dto.isApiTrue
+import fr.myfidpass.services.scan.ReceiptTicketScanSession
+import fr.myfidpass.ui.screens.scanner.ReceiptTicketValidationScreen
 import fr.myfidpass.data.dto.MemberGameRewardDto
 import fr.myfidpass.data.local.SessionStore
 import fr.myfidpass.data.repo.DashboardRepository
@@ -72,6 +75,10 @@ fun MemberDetailScreen(
     var selectedCategoryIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var convertPointsInput by remember { mutableStateOf("50") }
     var rewards by remember { mutableStateOf<List<MemberGameRewardDto>>(emptyList()) }
+    var amountEurInput by remember { mutableStateOf("") }
+    var receiptSession by remember { mutableStateOf<ReceiptTicketScanSession?>(null) }
+    var pendingAmountCredit by remember { mutableStateOf<Double?>(null) }
+    var settings by remember { mutableStateOf<fr.myfidpass.data.dto.BusinessSettingsResponse?>(null) }
 
     fun reload() {
         if (slug == null) return
@@ -98,12 +105,72 @@ fun MemberDetailScreen(
             runCatching {
                 rewards = repository.memberRewardsList(slug, memberId).rewards
             }
+            runCatching {
+                settings = repository.businessSettings(slug)
+            }
             loading = false
         }
     }
 
     LaunchedEffect(memberId, slug) {
         reload()
+    }
+
+    fun creditAmountEur(amount: Double, receiptToken: String? = null) {
+        if (slug == null || amount <= 0) return
+        scope.launch {
+            actionLoading = true
+            val ppe = maxOf(1, settings?.pointsPerEuro ?: 1)
+            val pts = (amount * ppe).toInt()
+            runCatching {
+                repository.creditMemberPoints(
+                    slug,
+                    memberId,
+                    amountEur = amount,
+                    points = if (pts > 0) pts else null,
+                    receiptValidationToken = receiptToken,
+                )
+            }.onSuccess {
+                points = it.newBalance ?: points
+                snackbar.showSnackbar("+$pts points")
+                reload()
+            }.onFailure {
+                snackbar.showSnackbar(it.message ?: "Erreur")
+            }
+            actionLoading = false
+        }
+    }
+
+    fun submitAmountCredit() {
+        val amount = amountEurInput.replace(',', '.').toDoubleOrNull() ?: return
+        if (slug == null || amount <= 0) return
+        if (settings?.requireReceiptQrValidation.isApiTrue()) {
+            scope.launch {
+                actionLoading = true
+                runCatching {
+                    val ch = repository.receiptChallenge(slug, amount)
+                    val payload = ch.qrPayload.trim()
+                    if (payload.isEmpty()) error("Challenge ticket indisponible")
+                    pendingAmountCredit = amount
+                    receiptSession = ReceiptTicketScanSession(slug, amount, payload, ch.expiresAt)
+                }.onFailure {
+                    snackbar.showSnackbar(it.message ?: "Erreur ticket")
+                }
+                actionLoading = false
+            }
+        } else {
+            creditAmountEur(amount)
+        }
+    }
+
+    receiptSession?.let { session ->
+        ReceiptTicketValidationScreen(session = session) { token ->
+            receiptSession = null
+            val amt = pendingAmountCredit
+            pendingAmountCredit = null
+            if (token != null && amt != null) creditAmountEur(amt, token)
+        }
+        return
     }
 
     Scaffold(
@@ -282,6 +349,20 @@ fun MemberDetailScreen(
                 enabled = !actionLoading && slug != null,
                 modifier = Modifier.fillMaxWidth(),
             ) { Text("Enregistrer une visite (tampon)") }
+            Spacer(Modifier.height(12.dp))
+            OutlinedTextField(
+                value = amountEurInput,
+                onValueChange = { amountEurInput = it.filter { c -> c.isDigit() || c == '.' || c == ',' } },
+                label = { Text("Montant € (crédit points)") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+            )
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = { submitAmountCredit() },
+                enabled = !actionLoading && slug != null && amountEurInput.isNotBlank(),
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Créditer via montant €") }
             Spacer(Modifier.height(12.dp))
             OutlinedTextField(
                 value = pointsInput,

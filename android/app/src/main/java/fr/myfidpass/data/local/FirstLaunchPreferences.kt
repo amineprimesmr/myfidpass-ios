@@ -54,6 +54,9 @@ class FirstLaunchPreferences(context: Context) {
         if (description.isNullOrBlank()) e.remove(KEY_OB_PLACE_DESC) else e.putString(KEY_OB_PLACE_DESC, description.trim())
         e.putBoolean(KEY_OB_RELAX, relax)
         e.apply()
+        if (!placeId.isNullOrBlank() && !description.isNullOrBlank()) {
+            persistSignupCommerceDraftBackup(placeId, description)
+        }
     }
 
     fun readPendingEstablishment(): PendingEstablishment {
@@ -70,7 +73,90 @@ class FirstLaunchPreferences(context: Context) {
             .remove(KEY_OB_PLACE_ID)
             .remove(KEY_OB_PLACE_DESC)
             .remove(KEY_OB_RELAX)
+            .remove(KEY_SIGNUP_DRAFT)
             .apply()
+    }
+
+    fun markRelaxPlaceRequirementForExistingAccountFlow() {
+        prefs.edit().putBoolean(KEY_OB_RELAX, true).apply()
+    }
+
+    fun rewindToMerchantPremisesSelectionForFreshCommercePick() {
+        prefs.edit().putString(KEY_MERCHANT_PHASE, PHASE_NEEDS).apply()
+        clearPendingEstablishmentFromOnboarding()
+    }
+
+    fun resetAfterAccountDeletion() {
+        prefs.edit()
+            .putString(KEY_MERCHANT_PHASE, PHASE_NEEDS)
+            .remove(KEY_LEGACY_COMPLETED)
+            .remove(KEY_OB_PLACE_ID)
+            .remove(KEY_OB_PLACE_DESC)
+            .remove(KEY_OB_RELAX)
+            .remove(KEY_SIGNUP_DRAFT)
+            .remove(KEY_SIGNUP_EMAIL)
+            .apply()
+        restartEpoch += 1
+    }
+
+    var restartEpoch: Int
+        get() = prefs.getInt(KEY_RESTART_EPOCH, 0)
+        private set(value) {
+            prefs.edit().putInt(KEY_RESTART_EPOCH, value).apply()
+        }
+
+    fun persistSignupCommerceDraftBackup(placeId: String, establishmentName: String) {
+        val pid = placeId.trim()
+        val name = establishmentName.trim()
+        if (pid.isEmpty() || name.isEmpty()) {
+            prefs.edit().remove(KEY_SIGNUP_DRAFT).apply()
+            return
+        }
+        prefs.edit().putString(KEY_SIGNUP_DRAFT, """{"place_id":"$pid","establishment_name":"${name.replace("\"", "\\\"")}"}""").apply()
+    }
+
+    fun pendingCommerceDisplayTitle(): String? {
+        val p = readPendingEstablishment()
+        p.description?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+        val draft = prefs.getString(KEY_SIGNUP_DRAFT, null) ?: return null
+        return runCatching {
+            val regex = """"establishment_name"\s*:\s*"([^"]+)"""".toRegex()
+            regex.find(draft)?.groupValues?.getOrNull(1)
+        }.getOrNull()
+    }
+
+    fun hasCompletePendingEstablishmentForRegistration(): Boolean {
+        val p = readPendingEstablishment()
+        val place = p.placeId?.trim().orEmpty()
+        val name = p.description?.trim().orEmpty()
+        return place.isNotEmpty() && name.isNotEmpty()
+    }
+
+    /** Restaure le commerce depuis le brouillon JSON si les clés principales sont vides. */
+    fun rehydratePendingEstablishmentFromAllSourcesIfNeeded() {
+        if (hasCompletePendingEstablishmentForRegistration()) return
+        val draft = prefs.getString(KEY_SIGNUP_DRAFT, null) ?: return
+        val placeId = """"place_id"\s*:\s*"([^"]+)"""".toRegex().find(draft)?.groupValues?.getOrNull(1)?.trim().orEmpty()
+        val name = """"establishment_name"\s*:\s*"([^"]+)"""".toRegex().find(draft)?.groupValues?.getOrNull(1)?.trim().orEmpty()
+        if (placeId.isNotEmpty() && name.isNotEmpty()) {
+            persistPendingEstablishment(placeId, name, relax = false)
+        }
+    }
+
+    fun persistSignupEmail(email: String) {
+        val norm = email.trim().lowercase()
+        if (norm.isEmpty()) {
+            prefs.edit().remove(KEY_SIGNUP_EMAIL).apply()
+            return
+        }
+        prefs.edit().putString(KEY_SIGNUP_EMAIL, norm).apply()
+    }
+
+    fun readSignupEmail(): String? =
+        prefs.getString(KEY_SIGNUP_EMAIL, null)?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }
+
+    fun clearSignupEmail() {
+        prefs.edit().remove(KEY_SIGNUP_EMAIL).apply()
     }
 
     private fun setPhaseDone() {
@@ -91,6 +177,9 @@ class FirstLaunchPreferences(context: Context) {
         private const val KEY_OB_PLACE_ID = "myfidpass.ob.placeId"
         private const val KEY_OB_PLACE_DESC = "myfidpass.ob.placeDescription"
         private const val KEY_OB_RELAX = "myfidpass.ob.relaxPlaceRequirement"
+        private const val KEY_SIGNUP_DRAFT = "myfidpass.ob.signupCommerceDraftBackup.v1"
+        private const val KEY_RESTART_EPOCH = "myfidpass.firstLaunchOnboardingRestartEpoch"
+        private const val KEY_SIGNUP_EMAIL = "myfidpass.ob.signupEmail"
 
         private const val PHASE_NEEDS = "needs"
         private const val PHASE_DONE = "done"

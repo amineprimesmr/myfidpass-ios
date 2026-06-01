@@ -43,6 +43,7 @@ fun SocialEngagementScreen(
     repository: DashboardRepository,
     snackbarHostState: SnackbarHostState,
     onBack: () -> Unit,
+    onOpenMissions: () -> Unit = {},
 ) {
     val slug = repository.currentSlug()
     val context = LocalContext.current
@@ -110,6 +111,10 @@ fun SocialEngagementScreen(
                 enabled = slug != null,
                 modifier = Modifier.fillMaxWidth(),
             ) { Text("Actualiser côté serveur (refresh)") }
+            Spacer(Modifier.height(8.dp))
+            Button(onClick = onOpenMissions, enabled = slug != null, modifier = Modifier.fillMaxWidth()) {
+                Text("Missions réseaux (points follow)")
+            }
             Spacer(Modifier.height(12.dp))
             fun openOAuth(block: suspend () -> JsonObject) {
                 if (slug == null) return

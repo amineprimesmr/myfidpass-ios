@@ -37,6 +37,12 @@ enum PostCardFlyerPromoEligibility {
         return !flyerLooksRegistered(slug: slug)
     }
 
+    /// Pastille rouge menu / navigation — persiste même si la feuille promo a été fermée sans créer le flyer.
+    static func showsCreationAttentionBadge(for slugRaw: String?) -> Bool {
+        guard let slugRaw else { return false }
+        return stillNeedsFlyerPromo(for: slugRaw)
+    }
+
     static func shouldOffer(for slugRaw: String) -> Bool {
         guard !suppressedUntilNextAppOpen else { return false }
         return stillNeedsFlyerPromo(for: slugRaw)
@@ -80,154 +86,100 @@ enum PostCardFlyerPromoEligibility {
 }
 
 /// Contenu présenté par **`UISheetPresentationController`** via SwiftUI `.sheet`.
-/// Point clé : **pas de `GeometryReader` en racine** (ça cassait la largeur utile ⇒ titres coupés au milieu d’un mot).
 struct PostCardFlyerPromoSheet: View {
     let slug: String
     @Binding var isPresented: Bool
     var onCreateFlyerTapped: () -> Void
 
+    private static let contentHorizontalInset: CGFloat = 22
+    private static let imageCornerRadius: CGFloat = 40
+    /// Aperçu flyer — large et coins bien arrondis.
+    private static let previewMaxHeight: CGFloat = 368
+    private static let sectionSpacing: CGFloat = 20
+
     var body: some View {
-        VStack(spacing: 0) {
-            VStack(alignment: .center, spacing: 14) {
-                Text("Créez et affichez votre flyer de jeu")
-                    .font(.title3.weight(.bold))
-                    .foregroundStyle(Color.white.opacity(0.96))
-                    .multilineTextAlignment(.center)
-                    .lineSpacing(3)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    /// Force le retour à la ligne sur toute la largeur « texte », pas une seule ligne tronquée.
-                    .layoutPriority(1)
-                    .fixedSize(horizontal: false, vertical: true)
+        VStack(alignment: .leading, spacing: 0) {
+            titleSection
+                .padding(.bottom, Self.sectionSpacing)
 
-                Text("Mettez en avant vos récompenses et votre QR sur une affiche pensée pour le terrain.")
-                    .font(.subheadline)
-                    .foregroundStyle(Color.white.opacity(0.62))
-                    .multilineTextAlignment(.center)
-                    .lineSpacing(2)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .fixedSize(horizontal: false, vertical: true)
+            flyersheetPreview
+                .frame(maxWidth: .infinity)
 
-                createFlyerButton
-                    .padding(.top, 8)
-            }
-            .padding(.horizontal, 24)
-            /// Marge top sans poignée système : remplace l’espace que prenait `.presentationDragIndicator(.visible)`.
-            .padding(.top, 26)
-            .padding(.bottom, 14)
-            .frame(maxWidth: .infinity)
+            Spacer(minLength: 28)
 
-            flyersheetHero
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            createFlyerSlider
         }
+        .padding(.horizontal, Self.contentHorizontalInset)
+        .padding(.top, 28)
+        .padding(.bottom, 12)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        /// L’image de fond du flyer doit toucher le bord bas du sheet (sous le home indicator).
-        .ignoresSafeArea(.container, edges: .bottom)
+        .safeAreaPadding(.bottom, 18)
         .accessibilityIdentifier("post_card_flyer_promo_\(slug)")
         .preferredColorScheme(.dark)
-        /// Un seul detent : pas de « grand » format, la feuille ne se développe pas au drag.
-        .presentationDetents([.medium])
-        /// Le tiret/poignée système est masqué : la promo ne doit pas paraître « brouillonne » en haut.
-        .presentationDragIndicator(.hidden)
-        .presentationBackgroundInteraction(.enabled(upThrough: .medium))
-        .presentationCornerRadius(28)
+        .presentationDetents([.fraction(0.82)])
+        .presentationDragIndicator(.visible)
+        .presentationBackgroundInteraction(.enabled(upThrough: .fraction(0.82)))
+        .modifier(LiquidGlassSheetModifier())
         .presentationBackground {
             FlyerEditorCanvasBackdrop()
                 .ignoresSafeArea()
         }
     }
 
-    private var createFlyerButton: some View {
-        Button {
+    private var titleSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Image(systemName: "doc.richtext.fill")
+                .font(.system(size: 28, weight: .semibold))
+                .foregroundStyle(Color.white.opacity(0.96))
+                .symbolRenderingMode(.hierarchical)
+
+            Text("Créez et affichez votre flyer de jeu")
+                .font(.system(size: 26, weight: .bold, design: .default))
+                .foregroundStyle(Color.white.opacity(0.96))
+                .multilineTextAlignment(.leading)
+                .lineSpacing(4)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Aperçu centré, grand format, coins arrondis.
+    private var flyersheetPreview: some View {
+        Image("flyersheet")
+            .resizable()
+            .interpolation(.high)
+            .scaledToFit()
+            .frame(maxWidth: .infinity, maxHeight: Self.previewMaxHeight)
+            .clipShape(RoundedRectangle(cornerRadius: Self.imageCornerRadius, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: Self.imageCornerRadius, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.14), lineWidth: 1)
+            }
+            .shadow(color: Color.black.opacity(0.32), radius: 22, y: 12)
+            .frame(maxWidth: .infinity, alignment: .center)
+            .accessibilityLabel("Aperçu d’un flyer de jeu en caisse")
+    }
+
+    private var createFlyerSlider: some View {
+        SlideToConfirm(config: slideConfig) {
             UIImpactFeedbackGenerator(style: .medium).impactOccurred()
             UIAccessibility.post(notification: .announcement, argument: "Ouverture de la création de flyer.")
             isPresented = false
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
                 onCreateFlyerTapped()
             }
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: "sparkles.rectangle.stack.fill")
-                    .font(.system(size: 15, weight: .semibold))
-                Text("Créer mon flyer")
-                    .font(.subheadline.weight(.semibold))
-            }
-            .foregroundStyle(Color.black)
-            .padding(.horizontal, 26)
-            .padding(.vertical, 13)
-            .background(Color.white, in: Capsule())
-            .contentShape(Capsule())
         }
-        .buttonStyle(.plain)
     }
 
-    /// Bande basse : l’image remplit toute la place restante sous le bouton et descend jusqu’au bord du sheet.
-    private var flyersheetHero: some View {
-        GeometryReader { geo in
-            let bleed: CGFloat = 6
-            let w = geo.size.width + bleed * 2
-            ZStack(alignment: .top) {
-                Image("flyersheet")
-                    .resizable()
-                    .interpolation(.high)
-                    .aspectRatio(contentMode: .fill)
-                    .frame(width: w, height: geo.size.height, alignment: .top)
-                    .clipped()
-
-                FlyersheetCupolaFadeOverlay(canvasColor: FlyerEditorSurfaceColors.canvas, referenceWidth: geo.size.width)
-            }
-            .frame(width: w, height: geo.size.height, alignment: .top)
-            .offset(x: -bleed)
-        }
-        .clipped()
-    }
-}
-
-private struct FlyersheetCupolaFadeOverlay: View {
-    let canvasColor: Color
-    let referenceWidth: CGFloat
-
-    var body: some View {
-        ZStack {
-            RadialGradient(
-                stops: [
-                    .init(color: canvasColor.opacity(1), location: 0),
-                    .init(color: canvasColor.opacity(0.78), location: 0.2),
-                    .init(color: canvasColor.opacity(0.42), location: 0.4),
-                    .init(color: canvasColor.opacity(0.06), location: 0.58),
-                    .init(color: Color.clear, location: 1),
-                ],
-                center: UnitPoint(x: 0.5, y: 0),
-                startRadius: 4,
-                endRadius: referenceWidth * 0.74
-            )
-            .scaleEffect(x: 1.02, y: 0.34, anchor: .top)
-
-            LinearGradient(
-                stops: [
-                    .init(color: canvasColor.opacity(0.93), location: 0),
-                    .init(color: Color.clear, location: 1),
-                ],
-                startPoint: UnitPoint(x: 0.02, y: 0.02),
-                endPoint: UnitPoint(x: 0.55, y: 0.94)
-            )
-            LinearGradient(
-                stops: [
-                    .init(color: canvasColor.opacity(0.93), location: 0),
-                    .init(color: Color.clear, location: 1),
-                ],
-                startPoint: UnitPoint(x: 0.98, y: 0.02),
-                endPoint: UnitPoint(x: 0.45, y: 0.94)
-            )
-
-            LinearGradient(
-                colors: [canvasColor.opacity(0.9), canvasColor.opacity(0)],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .blendMode(.softLight)
-            .opacity(0.38)
-            .blur(radius: 5)
-        }
-        .allowsHitTesting(false)
+    private var slideConfig: SlideToConfirm.Config {
+        SlideToConfirm.Config(
+            idleText: "Glisser pour créer le flyer",
+            onSwipeText: "Créer mon flyer",
+            confirmationText: "C’est parti",
+            tint: AppTheme.Colors.primary,
+            foregroundColor: .white,
+            height: 68,
+            knobPadding: 6
+        )
     }
 }

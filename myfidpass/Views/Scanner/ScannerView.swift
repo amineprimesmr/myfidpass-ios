@@ -32,6 +32,7 @@ struct ScannerView: View {
     @State private var programType = "points"
     @State private var pointsPerEuro = 1
     @State private var pointsPerVisit = 0
+    @State private var scanRewardRedeemSheet: ScanRewardRedeemSheetData?
     @FocusState private var amountFocused: Bool
 
     init(context: NSManagedObjectContext) {
@@ -117,6 +118,13 @@ struct ScannerView: View {
                 ReceiptTicketValidationView(session: session) { token in
                     receiptCoordinator.complete(with: token)
                 }
+            }
+            .fullScreenCover(item: $scanRewardRedeemSheet) { data in
+                RewardRedeemScanSheet(
+                    data: data,
+                    onDismiss: { scanRewardRedeemSheet = nil },
+                    onRedeem: { await performRewardRedeemScan(data: data) }
+                )
             }
         }
     }
@@ -314,6 +322,20 @@ struct ScannerView: View {
             defer { Task { @MainActor in isLookupInProgress = false } }
             do {
                 let response: ScanLookupResponse = try await APIClient.shared.request(.scanLookup(slug: slug, barcode: code))
+                if let sheetData = ScanRewardRedeemSheetDataBuilder.make(
+                    slug: slug,
+                    barcode: code,
+                    memberName: response.member.name ?? "Client",
+                    memberId: response.member.id?.trimmingCharacters(in: .whitespacesAndNewlines) ?? code,
+                    lookup: response
+                ) {
+                    await MainActor.run {
+                        pendingBarcode = nil
+                        lookedUpMemberName = nil
+                        scanRewardRedeemSheet = sheetData
+                    }
+                    return
+                }
                 let settings: BusinessSettingsResponse? = try? await APIClient.shared.request(.businessSettings(slug: slug)) as BusinessSettingsResponse
                 await MainActor.run {
                     pendingBarcode = code
@@ -458,6 +480,30 @@ struct ScannerView: View {
                 let msg = (error as? APIError)?.errorDescription ?? "Impossible d'utiliser les points."
                 await MainActor.run { showError = msg; appState.showError(msg) }
             }
+        }
+    }
+
+    private func performRewardRedeemScan(data: ScanRewardRedeemSheetData) async -> String? {
+        do {
+            let response: IntegrationRewardRedeemResponse = try await APIClient.shared.request(
+                .integrationRewardRedeem(slug: data.slug, barcode: data.barcode)
+            )
+            await MainActor.run {
+                scannedClientName = data.memberName
+                scannedPointsAdded = response.newPoints ?? data.pointsBalance
+                lastActionWasRedeem = true
+                scanRewardRedeemSheet = nil
+                withAnimation(.spring(response: 0.3)) { showSuccess = true }
+            }
+            await syncService.syncAfterServerMutation()
+            return nil
+        } catch {
+            let msg = (error as? APIError)?.errorDescription ?? "Validation impossible."
+            await MainActor.run {
+                showError = msg
+                appState.showError(msg)
+            }
+            return msg
         }
     }
 }

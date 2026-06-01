@@ -61,7 +61,17 @@ enum APIEndpoint {
         establishmentName: String?,
         establishments: [AuthEstablishmentPayload]?
     )
+    case authEmailSendCode(email: String)
+    case authEmailVerify(
+        email: String,
+        code: String,
+        name: String?,
+        googlePlaceId: String?,
+        establishmentName: String?,
+        establishments: [AuthEstablishmentPayload]?
+    )
     case authMe
+    case authMePatch(name: String)
     case authConfig
     case authDeleteAccount
     case authRefresh(refreshToken: String)
@@ -77,6 +87,12 @@ enum APIEndpoint {
     case paymentPortalSession
     /// Paiement Stripe dédié au commerce actif (mode carte séparée par commerce).
     case paymentBusinessCheckoutSession(businessSlug: String, interval: String?)
+    /// Validation StoreKit 2 → base MyFidpass (App Store Server API côté serveur).
+    case paymentAppleSyncTransaction(payload: PaymentAppleSyncTransactionPayload)
+    /// Restauration / réalignement abonnement App Store.
+    case paymentAppleReconcileSubscription
+    /// Active un abonnement fictif (test) — même route que le bouton « Dev » du SaaS.
+    case dashboardDevSimulatePayment(slug: String)
 
     // MARK: - Sync (dashboard / slug)
     case businessSettings(slug: String)
@@ -116,6 +132,9 @@ enum APIEndpoint {
     case dashboardPatchGame(slug: String, gameCode: String, body: PatchGameBody)
     case dashboardGameRewardsGet(slug: String, gameCode: String)
     case dashboardGameRewardsPut(slug: String, gameCode: String, body: PutGameRewardsBody)
+    case dashboardMatchPredictions(slug: String)
+    case dashboardMatchPredictionsConfig(slug: String, body: MatchPredictionsConfigPatchBody)
+    case dashboardMatchPredictionsSetResult(slug: String, matchId: String, body: MatchPredictionsResultBody)
 
     // MARK: - Notifications dashboard
     case dashboardNotificationSend(slug: String, body: NotificationSendPayload)
@@ -127,6 +146,7 @@ enum APIEndpoint {
     // MARK: - Scan
     case scanLookup(slug: String, barcode: String)
     case scan(slug: String, barcode: String, visit: Bool, points: Int?, amountEur: Double?, receiptValidationToken: String?)
+    case integrationRewardRedeem(slug: String, barcode: String)
 
     case deviceRegister(token: String)
 
@@ -198,8 +218,10 @@ enum APIEndpoint {
     // MARK: - Équipe (accès employés, owner/manager)
     case businessTeamList(slug: String)
     case businessTeamInvite(slug: String, body: WorkspaceTeamInviteBody)
-    /// Compte employé identifiant + mot de passe (sans e-mail).
     case businessTeamStaffAccount(slug: String, body: WorkspaceTeamStaffAccountBody)
+    case businessTeamMemberDetail(slug: String, memberId: String)
+    case businessTeamMemberPatch(slug: String, memberId: String, body: WorkspaceTeamMemberPatchBody)
+    case businessTeamMemberResendAccess(slug: String, memberId: String)
     case businessTeamRevoke(slug: String, membershipId: String)
 
     var path: String {
@@ -217,7 +239,9 @@ enum APIEndpoint {
         case .authApple: return "/api/auth/apple"
         case .authPhoneSendCode: return "/api/auth/phone/send-code"
         case .authPhoneVerify: return "/api/auth/phone/verify"
-        case .authMe: return "/api/auth/me"
+        case .authEmailSendCode: return "/api/auth/email/send-code"
+        case .authEmailVerify: return "/api/auth/email/verify"
+        case .authMe, .authMePatch: return "/api/auth/me"
         case .authConfig: return "/api/auth/config"
         case .authDeleteAccount: return "/api/auth/account"
         case .authRefresh: return "/api/auth/refresh"
@@ -228,6 +252,10 @@ enum APIEndpoint {
         case .paymentReconcileSubscription: return "/api/payment/reconcile-subscription"
         case .paymentPortalSession: return "/api/payment/create-portal-session"
         case .paymentBusinessCheckoutSession: return "/api/payment/create-business-checkout-session"
+        case .paymentAppleSyncTransaction: return "/api/payment/apple/sync-transaction"
+        case .paymentAppleReconcileSubscription: return "/api/payment/apple/reconcile-subscription"
+        case .dashboardDevSimulatePayment(let slug):
+            return "/api/businesses/\(pathSegment(slug))/dashboard/dev-simulate-payment"
         case .businessSettings(let slug): return "/api/businesses/\(pathSegment(slug))/dashboard/settings"
         case .businessStats(let slug, _): return "/api/businesses/\(pathSegment(slug))/dashboard/stats"
         case .businessStatsTraffic(let slug, _): return "/api/businesses/\(pathSegment(slug))/dashboard/stats/traffic"
@@ -250,6 +278,9 @@ enum APIEndpoint {
         case .dashboardPatchGame(let slug, let gameCode, _): return "/api/businesses/\(pathSegment(slug))/dashboard/games/\(pathSegment(gameCode))"
         case .dashboardGameRewardsGet(let slug, let gameCode): return "/api/businesses/\(pathSegment(slug))/dashboard/games/\(pathSegment(gameCode))/rewards"
         case .dashboardGameRewardsPut(let slug, let gameCode, _): return "/api/businesses/\(pathSegment(slug))/dashboard/games/\(pathSegment(gameCode))/rewards"
+        case .dashboardMatchPredictions(let slug): return "/api/businesses/\(pathSegment(slug))/dashboard/match-predictions"
+        case .dashboardMatchPredictionsConfig(let slug, _): return "/api/businesses/\(pathSegment(slug))/dashboard/match-predictions/config"
+        case .dashboardMatchPredictionsSetResult(let slug, let matchId, _): return "/api/businesses/\(pathSegment(slug))/dashboard/match-predictions/matches/\(pathSegment(matchId))/result"
         case .dashboardNotificationSend(let slug, _): return "/api/businesses/\(pathSegment(slug))/notifications/send"
         case .dashboardNotificationSegments(let slug): return "/api/businesses/\(pathSegment(slug))/notifications/campaign-segments"
         case .dashboardNotificationStats(let slug): return "/api/businesses/\(pathSegment(slug))/notifications/stats"
@@ -257,6 +288,7 @@ enum APIEndpoint {
         case .dashboardRemoveTestDevice(let slug): return "/api/businesses/\(pathSegment(slug))/notifications/remove-test-device"
         case .scanLookup(let slug, _): return "/api/businesses/\(pathSegment(slug))/integration/lookup"
         case .scan(let slug, _, _, _, _, _): return "/api/businesses/\(pathSegment(slug))/integration/scan"
+        case .integrationRewardRedeem(let slug, _): return "/api/businesses/\(pathSegment(slug))/integration/reward-redeem"
         case .deviceRegister: return "/api/device/register"
         case .walletPass(let slug, let memberId, _): return "/api/businesses/\(pathSegment(slug))/members/\(pathSegment(memberId))/pass"
         case .notifyClients(let slug, _, _): return "/api/businesses/\(pathSegment(slug))/notify"
@@ -304,6 +336,12 @@ enum APIEndpoint {
             return "/api/businesses/\(pathSegment(slug))/dashboard/team/invites"
         case .businessTeamStaffAccount(let slug, _):
             return "/api/businesses/\(pathSegment(slug))/dashboard/team/staff-accounts"
+        case .businessTeamMemberDetail(let slug, let memberId):
+            return "/api/businesses/\(pathSegment(slug))/dashboard/team/members/\(pathSegment(memberId))"
+        case .businessTeamMemberPatch(let slug, let memberId, _):
+            return "/api/businesses/\(pathSegment(slug))/dashboard/team/members/\(pathSegment(memberId))"
+        case .businessTeamMemberResendAccess(let slug, let memberId):
+            return "/api/businesses/\(pathSegment(slug))/dashboard/team/members/\(pathSegment(memberId))/resend-access"
         case .businessTeamRevoke(let slug, let membershipId):
             return "/api/businesses/\(pathSegment(slug))/dashboard/team/members/\(pathSegment(membershipId))"
         }
@@ -320,7 +358,7 @@ enum APIEndpoint {
     var skipsClientSessionBootstrap: Bool {
         switch self {
         case .authConfig, .authLogin, .authCheckEmail, .authCheckGooglePlace, .authCheckIdentifier, .authRegister, .authForgotPassword, .authResetPassword,
-             .authGoogle, .authApple, .authPhoneSendCode, .authPhoneVerify,
+             .authGoogle, .authApple, .authPhoneSendCode, .authPhoneVerify, .authEmailSendCode, .authEmailVerify,
              .authRefresh, .authLogout, .placesPlaceDetails:
             return true
         default:
@@ -342,17 +380,19 @@ enum APIEndpoint {
     var method: String {
         switch self {
         case .authLogin, .authCheckEmail, .authCheckGooglePlace, .authCheckIdentifier, .authRegister, .authForgotPassword, .authResetPassword, .authGoogle, .authApple,
-             .authPhoneSendCode, .authPhoneVerify,
+             .authPhoneSendCode, .authPhoneVerify, .authEmailSendCode, .authEmailVerify,
              .authRefresh, .authLogout,
-             .scan, .deviceRegister, .notifyClients, .createCategory, .updateMemberCategories, .creditMember,
+             .scan, .integrationRewardRedeem, .deviceRegister, .notifyClients, .createCategory, .updateMemberCategories, .creditMember,
              .dashboardReceiptChallenge,
              .removeMemberPoints, .redeemReward, .createBusiness, .createBusinessFromPlace, .paymentCheckout, .paymentReconcileSubscription, .paymentPortalSession, .dashboardNotificationSend, .dashboardRemoveTestDevice,
-             .paymentBusinessCheckoutSession,
+             .paymentBusinessCheckoutSession, .paymentAppleSyncTransaction, .paymentAppleReconcileSubscription,
+             .dashboardDevSimulatePayment,
              .membersImport, .createMember, .memberTicketsConvert, .claimMemberReward, .deleteAllDashboardMembers,
              .dashboardFlyerAIGenerate, .dashboardFlyerRemoveLogoBackground, .dashboardCampaignAutomationParse,
-             .dashboardSocialMetricsRefresh, .dashboardSocialMetricsManual, .businessTeamInvite, .businessTeamStaffAccount:
+             .dashboardSocialMetricsRefresh, .dashboardSocialMetricsManual, .dashboardMatchPredictionsSetResult,
+             .businessTeamInvite, .businessTeamStaffAccount, .businessTeamMemberResendAccess:
             return "POST"
-        case .patchDashboardSettings, .updateCategory, .updateLocationSettings, .dashboardPatchGame, .dashboardSocialMissionsPatch:
+        case .patchDashboardSettings, .updateCategory, .updateLocationSettings, .dashboardPatchGame, .dashboardSocialMissionsPatch, .dashboardMatchPredictionsConfig, .businessTeamMemberPatch, .authMePatch:
             return "PATCH"
         case .deleteCategory, .authDeleteAccount, .deleteDashboardMember, .businessTeamRevoke:
             return "DELETE"
@@ -469,7 +509,7 @@ enum APIEndpoint {
             if let l = limit { items.append(URLQueryItem(name: "limit", value: "\(l)")) }
             if let f = filter, !f.isEmpty { items.append(URLQueryItem(name: "filter", value: f)) }
             components.queryItems = items.isEmpty ? nil : items
-        case .businessTeamList, .businessTeamInvite, .businessTeamStaffAccount, .businessTeamRevoke:
+        case .businessTeamList, .businessTeamInvite, .businessTeamStaffAccount, .businessTeamMemberDetail, .businessTeamMemberPatch, .businessTeamMemberResendAccess, .businessTeamRevoke:
             break
         default:
             break
@@ -534,6 +574,19 @@ enum APIEndpoint {
                     establishments: establishments
                 )
             )
+        case .authEmailSendCode(let email):
+            bodyData = try encoder.encode(EmailSendBody(email: email))
+        case .authEmailVerify(let email, let code, let name, let googlePlaceId, let establishmentName, let establishments):
+            bodyData = try encoder.encode(
+                EmailVerifyBody(
+                    email: email,
+                    code: code,
+                    name: name,
+                    googlePlaceId: googlePlaceId,
+                    establishmentName: establishmentName,
+                    establishments: establishments
+                )
+            )
         case .createBusiness(let payload):
             bodyData = try encoder.encode(payload)
         case .createBusinessFromPlace(let name, let placeId):
@@ -546,8 +599,14 @@ enum APIEndpoint {
             bodyData = try encoder.encode(PaymentReconcileEmptyBody())
         case .paymentBusinessCheckoutSession(let businessSlug, let interval):
             bodyData = try encoder.encode(BusinessCheckoutSessionPayload(businessSlug: businessSlug, interval: interval))
+        case .paymentAppleSyncTransaction(let payload):
+            bodyData = try encoder.encode(payload)
+        case .paymentAppleReconcileSubscription:
+            bodyData = try encoder.encode(PaymentReconcileEmptyBody())
         case .scan(_, let barcode, let visit, let points, let amountEur, let receiptValidationToken):
             bodyData = try encoder.encode(ScanPayload(barcode: barcode, visit: visit, points: points, amount_eur: amountEur, receiptValidationToken: receiptValidationToken))
+        case .integrationRewardRedeem(_, let barcode):
+            bodyData = try encoder.encode(BarcodeOnlyPayload(barcode: barcode))
         case .dashboardReceiptChallenge(_, let amountEur):
             bodyData = try encoder.encode(ReceiptChallengeRequestBody(amountEur: amountEur))
         case .deviceRegister(let token):
@@ -575,6 +634,8 @@ enum APIEndpoint {
                 locationAddress: locationAddress,
                 walletPassIncludeLocations: walletPassIncludeLocations
             ))
+        case .authMePatch(let name):
+            bodyData = try encoder.encode(AuthMePatchBody(name: name))
         case .patchDashboardSettings(_, let patch):
             bodyData = try encoder.encode(patch)
         case .dashboardFlyerPut(_, let payload):
@@ -595,6 +656,10 @@ enum APIEndpoint {
             bodyData = try encoder.encode(body)
         case .dashboardGameRewardsPut(_, _, let body):
             bodyData = try encoder.encode(body)
+        case .dashboardMatchPredictionsConfig(_, let body):
+            bodyData = try encoder.encode(body)
+        case .dashboardMatchPredictionsSetResult(_, _, let body):
+            bodyData = try encoder.encode(body)
         case .dashboardNotificationSend(_, let body):
             bodyData = try encoder.encode(body)
         case .membersImport(_, let payload):
@@ -613,6 +678,10 @@ enum APIEndpoint {
             bodyData = try encoder.encode(body)
         case .businessTeamStaffAccount(_, let body):
             bodyData = try encoder.encode(body)
+        case .businessTeamMemberPatch(_, _, let body):
+            bodyData = try encoder.encode(body)
+        case .businessTeamMemberResendAccess, .dashboardDevSimulatePayment:
+            bodyData = try encoder.encode(EmptyJSONBody())
         default:
             break
         }
@@ -642,6 +711,11 @@ private struct DeleteAllMembersConfirmBody: Encodable {
 
 private struct RefreshTokenPayload: Encodable {
     let refreshToken: String
+
+    enum CodingKeys: String, CodingKey {
+        // Contrat API : camelCase (convertToSnakeCase enverrait refresh_token → 400 sur POST /auth/refresh).
+        case refreshToken = "refreshToken"
+    }
 }
 
 private struct EmptyJSONBody: Encodable {}
@@ -696,6 +770,30 @@ private struct PhoneVerifyBody: Encodable {
 
     enum CodingKeys: String, CodingKey {
         case phone, code
+        case googlePlaceId = "google_place_id"
+        case establishmentName = "establishment_name"
+        case establishments
+    }
+}
+
+private struct EmailSendBody: Encodable {
+    let email: String
+}
+
+private struct AuthMePatchBody: Encodable {
+    let name: String
+}
+
+private struct EmailVerifyBody: Encodable {
+    let email: String
+    let code: String
+    let name: String?
+    let googlePlaceId: String?
+    let establishmentName: String?
+    let establishments: [AuthEstablishmentPayload]?
+
+    enum CodingKeys: String, CodingKey {
+        case email, code, name
         case googlePlaceId = "google_place_id"
         case establishmentName = "establishment_name"
         case establishments
@@ -869,6 +967,10 @@ struct WalletPassDesign {
 private struct ReceiptChallengeRequestBody: Encodable {
     let amount_eur: Double
     init(amountEur: Double) { amount_eur = amountEur }
+}
+
+private struct BarcodeOnlyPayload: Encodable {
+    let barcode: String
 }
 
 private struct ScanPayload: Encodable {

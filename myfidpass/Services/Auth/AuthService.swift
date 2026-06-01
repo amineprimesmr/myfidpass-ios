@@ -25,37 +25,39 @@ private enum AuthLoadingBootstrapTimeout: Error {
     case exceeded
 }
 
-/// Cache local de la fin d’essai (ISO) : au cold start, `merchantTrialEndsAt` peut rester nil tant que `GET /me` n’a pas réussi — la pastille ne s’affichait pas.
-private let merchantTrialEndIsoUserDefaultsKey = "myfidpass.merchantTrialEndsAtIso"
-
 @MainActor
 final class AuthService: NSObject, ObservableObject {
     @Published private(set) var currentScreen: AuthScreen = .welcome
+    /// Inscription : étapes création carte avant d’afficher l’app principale.
+    @Published private(set) var isCompletingSignupCardSetup = false
+    /// Inscription : paywall plein écran après la carte, avant l’accueil commerçant.
+    @Published private(set) var isCompletingSignupPaywallPhase = false
+    /// Merci plein écran à afficher une fois l’app montée (paywall post-inscription).
+    @Published var pendingSubscriptionThankYouAfterSignup = false
+    /// `true` uniquement après Continuer / Restaurer réussi sur le paywall post-inscription (pas la croix).
+    private(set) var signupPaywallPaymentConfirmedThisSession = false
     @Published private(set) var currentUserEmail: String?
 
     /// Identifiant employé (sans e-mail), si connexion par compte créé par le commerçant.
     var currentUserStaffLogin: String? { AuthStorage.userStaffLogin }
     @Published private(set) var currentUserPhone: String?
     @Published private(set) var businesses: [BusinessDTO] = []
+    /// Tous les commerces plateforme (`GET /api/admin/businesses`) — alimente le sélecteur en haut à droite pour l’admin.
+    @Published private(set) var platformAdminBusinesses: [BusinessDTO] = []
     /// Incrémenté après suppression de compte pour que `myfidpassApp` réaffiche l’onboarding premier lancement.
     @Published private(set) var firstLaunchOnboardingRestartEpoch: Int = 0
     /// `true` après au moins un `GET /api/auth/me` (ou login avec champs abonnement) post-restauration session.
     @Published private(set) var merchantSubscriptionEligibilityResolved = false
-    /// Abonnement Stripe : actif, essai ou `past_due` (aligné sur `hasActiveSubscription` API).
+    /// Abonnement payant actif (aligné `has_active_subscription` / `has_paid_merchant_subscription` API).
     @Published private(set) var hasActiveMerchantSubscription = false
-    /// Verrou local post-inscription pour forcer l’ouverture du paywall.
-    @Published private(set) var pendingMandatoryPaywallAfterSignup = false
-    /// Doit relancer le tutoriel commerçant une fois le paywall post-inscription quitté.
-    @Published private(set) var pendingHomeTutorialAfterSignup = false
-    /// Dernière ligne d’abonnement renvoyée par `/me` (pour distinguer paiement Stripe de l’essai gratuit 24 h).
+    /// Source de vérité serveur (`has_paid_merchant_subscription` sur login / `GET /me`).
+    @Published private(set) var serverReportsPaidMerchantSubscription = false
     @Published private(set) var merchantSubscription: SubscriptionDTO?
     /// Quota multi-commerce calculé côté API (source de vérité entitlements).
     @Published private(set) var allowedBusinesses: Int = 1
     @Published private(set) var usedBusinesses: Int = 0
     @Published private(set) var canCreateBusiness: Bool = true
     @Published private(set) var entitlementBillingProvider: String?
-    /// Fin de la fenêtre d’essai gratuit commerçant (sans abonnement Stripe payant), si applicable.
-    @Published private(set) var merchantTrialEndsAt: Date?
     /// Compte `is_admin` : pilotage de tous les commerces via l’API (même slug hors liste « mes » commerces).
     @Published private(set) var isPlatformAdmin = false
     /// `false` = interface **Administration** (liste plateforme) ; `true` = interface commerçant classique (pilotage d’un commerce).
@@ -68,7 +70,15 @@ final class AuthService: NSObject, ObservableObject {
 
     private var cancellables = Set<AnyCancellable>()
     private var refreshBusinessesTask: Task<Void, Never>?
+    private var bootstrapSessionTask: Task<Void, Never>?
+    private var reconcileAdminTask: Task<Void, Never>?
     private var lastAuthMeRefreshAt: Date?
+
+    /// Admin plateforme en mode pilotage : onglets commerçant complets (pas l’UI employé).
+    var usesFullMerchantTabLayout: Bool {
+        if isPlatformAdmin, adminShowsMerchantWorkspace { return true }
+        return !isMerchantStaffUser
+    }
 
     /// Employé (caisse) : interface réduite (pas d’onglet Commerce / Notifs marketing).
     /// S’appuie sur le rôle **et** sur `userStaffLogin` persistant (l’API omet parfois `workspace_role` / `staff_login`).
@@ -78,68 +88,58 @@ final class AuthService: NSObject, ObservableObject {
         return false
     }
 
+    /// Liste pour le bouton commerce (coin haut droit) : tous les commerces si admin, sinon « mes » commerces.
+    var businessesForMerchantSwitcher: [BusinessDTO] {
+        if isPlatformAdmin { return platformAdminBusinesses }
+        return businesses
+    }
+
     /// Pour l’UI freemium : abonnement Stripe actif **ou** compte admin plateforme (accès pilotage).
     var effectiveMerchantSubscriptionActive: Bool {
         if isPlatformAdmin { return true }
-        return hasActiveMerchantSubscription
+        return hasPaidMerchantSubscription
     }
 
     var canManageMerchantTeam: Bool { merchantWorkspaceRole.canManageTeam }
 
-    /// Abonnement encaissé côté Stripe (hors seule période d’essai **application**).
-    var hasPaidStripeSubscription: Bool {
-        let s = merchantSubscription?.status?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-        return s == "active" || s == "trialing" || s == "past_due"
+    var hasPaidMerchantSubscription: Bool {
+        hasEncashedMerchantSubscription
     }
 
-    /// Déblocage des onglets commerçant : admin, essai applicatif actif, ou abonnement Stripe qualifiant (`GET /me`).
+    /// Paiement réel (Stripe / App Store).
+    var hasEncashedMerchantSubscription: Bool {
+        if isPlatformAdmin { return false }
+        if serverReportsPaidMerchantSubscription { return true }
+        let s = merchantSubscription?.status?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        guard s == "active" || s == "trialing" || s == "past_due" else { return false }
+        let provider = entitlementBillingProvider?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        return provider == "apple" || provider == "stripe"
+    }
+
+    /// Alias historique (Stripe + IAP reflétés via `GET /me`).
+    var hasPaidStripeSubscription: Bool { hasPaidMerchantSubscription }
+
+    var merchantOperationalFeaturesUnlocked: Bool { subscriptionAccessUnlocked() }
+
+    /// Campagnes manuelles, stats détaillées : abonnement payant uniquement.
+    var merchantProInsightsUnlocked: Bool {
+        if isPlatformAdmin { return true }
+        if bypassesMerchantSubscriptionGate { return true }
+        return hasPaidMerchantSubscription
+    }
+
+    /// Navigation principale : onglets toujours accessibles (fonctions PRO selon `merchantProInsightsUnlocked`).
     func subscriptionAccessUnlocked() -> Bool {
         if isPlatformAdmin { return true }
-        if mustOpenMandatoryPaywallAfterSignup { return false }
-        if isMerchantTrialPeriodActive { return true }
-        return hasPaidStripeSubscription
+        if bypassesMerchantSubscriptionGate { return true }
+        return true
     }
 
-    /// Plein écran « reprenez vos activités » : essai terminé (ou jamais résolu côté client) sans abonnement — **après** un `/me` réussi.
-    /// Tant que `merchantSubscriptionEligibilityResolved` est faux, on n’affiche pas l’écran (évite flash au cold start).
-    var shouldShowMerchantAccessRenewalFullscreen: Bool {
-        if isPlatformAdmin { return false }
-        guard AuthStorage.isLoggedIn else { return false }
-        guard currentScreen == .authenticated else { return false }
-        guard merchantSubscriptionEligibilityResolved else { return false }
-        return !subscriptionAccessUnlocked()
-    }
-
-    /// Verrou post-inscription : tant que ce flag n’est pas consommé par le paywall,
-    /// l’accès doit rester bloqué pour forcer l’étape paiement.
-    var mustOpenMandatoryPaywallAfterSignup: Bool {
-        pendingMandatoryPaywallAfterSignup
-    }
-
-    /// Essai gratuit 3 j **en cours** : la source de vérité est `merchant_trial_ends_at` (non nul côté API tant que pas d’abo Stripe payant).
-    /// On ne combine pas avec `hasPaidStripeSubscription` : une ligne locale parasite pourrait masquer la pastille à tort.
-    var isMerchantTrialPeriodActive: Bool {
-        guard !isPlatformAdmin else { return false }
-        guard let end = merchantTrialEndsAt else { return false }
-        return Date() < end
-    }
-
-    private static func parseMerchantTrialEnd(_ iso: String?) -> Date? {
-        guard var iso, !iso.isEmpty else { return nil }
-        iso = iso.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !iso.contains("T") { iso = iso.replacingOccurrences(of: " ", with: "T") }
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let d = f.date(from: iso) { return d }
-        f.formatOptions = [.withInternetDateTime]
-        if let d = f.date(from: iso) { return d }
-        let df = DateFormatter()
-        df.locale = Locale(identifier: "en_US_POSIX")
-        df.timeZone = TimeZone(secondsFromGMT: 0)
-        df.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"
-        if let d = df.date(from: iso) { return d }
-        df.dateFormat = "yyyy-MM-dd'T'HH:mm:ss'Z'"
-        return df.date(from: iso)
+    /// Employés et managers « équipe seule » : pas de contraintes abonnement côté UI.
+    var bypassesMerchantSubscriptionGate: Bool {
+        if isMerchantStaffUser { return true }
+        if merchantWorkspaceRole == .manager, usedBusinesses == 0 { return true }
+        return false
     }
 
     override init() {
@@ -178,8 +178,6 @@ final class AuthService: NSObject, ObservableObject {
 
     private func loadFromStorage() {
         FirstLaunchOnboarding.bootstrapInstallAndMigrateMerchantPhaseIfNeeded()
-        pendingMandatoryPaywallAfterSignup = AuthStorage.pendingOpenMerchantSubscriptionSheetAfterSignup
-        pendingHomeTutorialAfterSignup = AuthStorage.pendingShowMerchantHomeTutorialAfterSignup
         if AuthStorage.isLoggedIn {
             currentUserPhone = AuthStorage.userPhone
             currentScreen = .authenticated
@@ -194,12 +192,8 @@ final class AuthService: NSObject, ObservableObject {
                 merchantWorkspaceRole = .owner
             }
             syncAccountDisplayLineForSession()
-            if merchantTrialEndsAt == nil,
-               let iso = UserDefaults.standard.string(forKey: merchantTrialEndIsoUserDefaultsKey),
-               !iso.isEmpty,
-               let cached = Self.parseMerchantTrialEnd(iso) {
-                merchantTrialEndsAt = cached
-            }
+            isPlatformAdmin = AuthStorage.isPlatformAdminFlag
+            Task { await bootstrapAuthenticatedSessionIfNeeded(force: true) }
         } else {
             currentScreen = .welcome
             merchantSubscriptionEligibilityResolved = false
@@ -207,15 +201,13 @@ final class AuthService: NSObject, ObservableObject {
             isPlatformAdmin = false
             adminShowsMerchantWorkspace = false
             merchantWorkspaceRole = .owner
-            pendingMandatoryPaywallAfterSignup = false
-            pendingHomeTutorialAfterSignup = false
             isBusinessSwitching = false
             businessSwitchTargetSlug = nil
             allowedBusinesses = 1
             usedBusinesses = 0
             canCreateBusiness = true
             entitlementBillingProvider = nil
-            UserDefaults.standard.removeObject(forKey: merchantTrialEndIsoUserDefaultsKey)
+            serverReportsPaidMerchantSubscription = false
             refreshWelcomeSignupEstablishmentContext()
         }
     }
@@ -235,43 +227,8 @@ final class AuthService: NSObject, ObservableObject {
         firstLaunchOnboardingRestartEpoch += 1
     }
 
-    func markMandatoryPaywallAfterSignupPending() {
-        // Flux simplifié: après création de compte, accès direct à l'app (plus de paywall bloquant).
-        AuthStorage.pendingOpenMerchantSubscriptionSheetAfterSignup = false
-        AuthStorage.pendingShowMerchantHomeTutorialAfterSignup = true
-        pendingMandatoryPaywallAfterSignup = false
-        pendingHomeTutorialAfterSignup = true
-    }
-
     func clearMandatoryPaywallAfterSignupPending() {
         AuthStorage.pendingOpenMerchantSubscriptionSheetAfterSignup = false
-        pendingMandatoryPaywallAfterSignup = false
-        // Certains providers OAuth (Google, email) ne renvoient pas merchant_trial_ends_at, ou la date est expirée.
-        // Sans essai actif, subscriptionAccessUnlocked reste false après clearing → paywall obligatoire se réaffiche en boucle.
-        if !isPlatformAdmin,
-           !hasPaidStripeSubscription,
-           merchantTrialEndsAt.map({ $0 < Date() }) ?? true,
-           let end = Calendar.current.date(byAdding: .day, value: 3, to: Date()) {
-            merchantTrialEndsAt = end
-            let f = ISO8601DateFormatter()
-            f.formatOptions = [.withInternetDateTime]
-            Self.persistMerchantTrialEndIsoFromServer(f.string(from: end))
-        }
-    }
-
-    func consumePendingHomeTutorialAfterSignup() -> Bool {
-        guard pendingHomeTutorialAfterSignup else { return false }
-        pendingHomeTutorialAfterSignup = false
-        AuthStorage.pendingShowMerchantHomeTutorialAfterSignup = false
-        return true
-    }
-
-    private static func persistMerchantTrialEndIsoFromServer(_ iso: String?) {
-        if let iso, !iso.isEmpty {
-            UserDefaults.standard.set(iso, forKey: merchantTrialEndIsoUserDefaultsKey)
-        } else {
-            UserDefaults.standard.removeObject(forKey: merchantTrialEndIsoUserDefaultsKey)
-        }
     }
 
     func showLogin() {
@@ -326,12 +283,31 @@ final class AuthService: NSObject, ObservableObject {
             }
             applyAuthMeResponse(me)
             lastAuthMeRefreshAt = Date()
+        } catch APIError.unauthorized {
+            let refresh = await APIClient.shared.tryRefreshToken()
+            if case .success = refresh {
+                do {
+                    let me: AuthMeResponse = try await APIClient.shared.request(.authMe)
+                    applyAuthMeResponse(me)
+                    lastAuthMeRefreshAt = Date()
+                    finishBusinessSwitch()
+                    return
+                } catch {
+                    // refresh OK mais /me encore refusé
+                }
+            }
+            merchantSubscriptionEligibilityResolved = true
+            lastAuthMeRefreshAt = Date()
+            finishBusinessSwitch()
         } catch {
             // Ne pas remettre l’abonnement à « inactif » sur erreur réseau, timeout ou échec de décodage :
             // cela affichait la bannière « mode découverte » alors que l’utilisateur avait déjà payé.
             merchantSubscriptionEligibilityResolved = true
             lastAuthMeRefreshAt = Date()
             finishBusinessSwitch()
+            if !isPlatformAdmin {
+                Task { await bootstrapAuthenticatedSessionIfNeeded(force: false) }
+            }
         }
     }
 
@@ -341,30 +317,92 @@ final class AuthService: NSObject, ObservableObject {
     /// Le serveur interroge Stripe (client avec l’email du compte) et met à jour `subscriptions` si un abo actif existe.
     /// Utile quand le webhook n’a pas lié le paiement au bon `user_id`.
     func reconcileStripeSubscriptionFromServer(force: Bool = false) async {
+        await reconcileMerchantSubscriptionFromServer(force: force)
+    }
+
+    /// Réaligne l’abonnement **Stripe (web)** uniquement. La restauration App Store est réservée au bouton « Restaurer les achats ».
+    func reconcileMerchantSubscriptionFromServer(force: Bool = false) async {
         guard AuthStorage.isLoggedIn else { return }
         guard APIClient.shared.authToken != nil, !(APIClient.shared.authToken ?? "").isEmpty else { return }
-        // Ne pas court-circuiter sur l’accès « essai » : `has_active_subscription` peut être vrai sans ligne Stripe
-        // encore propagée — après paiement dans la WebView, il faut quand même appeler `/payment/reconcile-subscription`.
-        if hasPaidStripeSubscription { return }
+        if hasPaidMerchantSubscription, !force { return }
         if !force {
             if let last = UserDefaults.standard.object(forKey: Self.stripeReconcileThrottleKey) as? Date,
                Date().timeIntervalSince(last) < Self.stripeReconcileMinInterval {
                 return
             }
         }
-        do {
-            let r: PaymentReconcileSubscriptionResponse = try await APIClient.shared.request(.paymentReconcileSubscription)
-            if r.hasActiveSubscription == true {
-                applySubscriptionGateState(active: true, markResolved: true)
+        var reconciledOk = false
+        if !hasEncashedMerchantSubscription {
+            do {
+                let r: PaymentReconcileSubscriptionResponse = try await APIClient.shared.request(.paymentReconcileSubscription)
+                if r.ok == true { reconciledOk = true }
+            } catch {
+                // Stripe indisponible ou aucun abo web
             }
-            if r.ok == true {
-                UserDefaults.standard.set(Date(), forKey: Self.stripeReconcileThrottleKey)
-            }
-            // Toujours relire `/me` après reconcile : même si `ok` est false, la base peut avoir été mise à jour ailleurs.
-            await refreshBusinessesIfNeeded()
-        } catch {
-            // réseau / Stripe : on ne bloque pas l’UI
         }
+        if reconciledOk {
+            UserDefaults.standard.set(Date(), forKey: Self.stripeReconcileThrottleKey)
+        }
+        await refreshBusinessesIfNeeded(force: force)
+    }
+
+    /// Applique le résultat de `POST /api/payment/apple/sync-transaction` (cache UI court — la vérité reste `GET /me`).
+    func applyAppleSubscriptionSync(_ response: PaymentAppleSyncResponse) {
+        guard Self.appleSyncResponseGrantsPaidAccess(response) else { return }
+        let status = response.subscriptionStatus?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        let effectiveStatus = (status == "active" || status == "trialing" || status == "past_due") ? status : "active"
+        merchantSubscription = SubscriptionDTO(
+            status: effectiveStatus,
+            planId: merchantSubscription?.planId ?? "pro"
+        )
+        entitlementBillingProvider = "apple"
+        hasActiveMerchantSubscription = true
+        serverReportsPaidMerchantSubscription = true
+        applySubscriptionGateState(active: true, markResolved: true)
+    }
+
+    private func applyMerchantBillingFromAPI(
+        hasActive: Bool?,
+        hasPaid: Bool?,
+        subscription: SubscriptionDTO?,
+        entitlements: MerchantEntitlementsDTO?
+    ) {
+        merchantSubscription = subscription
+        applyMerchantEntitlements(entitlements)
+        if let hasPaid {
+            serverReportsPaidMerchantSubscription = hasPaid
+            hasActiveMerchantSubscription = hasPaid || (hasActive == true)
+        } else {
+            hasActiveMerchantSubscription = Self.isMerchantSubscriptionActive(
+                hasExplicit: hasActive,
+                subscription: subscription
+            )
+            if hasPaid == true {
+                serverReportsPaidMerchantSubscription = true
+            } else if hasActiveMerchantSubscription {
+                let provider = entitlements?.billingProvider?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .lowercased() ?? ""
+                if provider == "apple" || provider == "stripe" {
+                    serverReportsPaidMerchantSubscription = true
+                }
+            }
+        }
+    }
+
+    /// Aligné backend : `has_paid_merchant_subscription`.
+    static func appleSyncResponseGrantsPaidAccess(_ response: PaymentAppleSyncResponse) -> Bool {
+        if response.hasPaidMerchantSubscription == true { return true }
+        guard response.hasActiveSubscription == true else { return false }
+        let status = response.subscriptionStatus?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        return status == "active" || status == "trialing" || status == "past_due"
+    }
+
+    /// Recharge `GET /api/auth/me` — seule source de vérité pour afficher « abonné payant ».
+    @discardableResult
+    func refreshMerchantBillingStateFromServer(force: Bool = false) async -> Bool {
+        await refreshBusinessesIfNeeded(force: force)
+        return hasEncashedMerchantSubscription
     }
 
     /// Évite un spinner infini si `GET /api/auth/me` reste suspendu (réseau / proxy).
@@ -388,17 +426,17 @@ final class AuthService: NSObject, ObservableObject {
     func applyAuthMeResponse(_ me: AuthMeResponse) {
         AuthStorage.mergeDashboardTokens(from: me.businesses)
         businesses = me.businesses
-        if let saved = AuthStorage.currentBusinessSlug,
-           businesses.contains(where: { $0.slug == saved }) {
-            // conserve le slug actif
-        } else {
-            AuthStorage.currentBusinessSlug = businesses.first?.slug
-        }
+        applyActiveBusinessSlugFromMe(me)
         if let uid = me.user.id?.trimmingCharacters(in: .whitespacesAndNewlines), !uid.isEmpty {
             AuthStorage.userId = uid
         }
         if let sl = me.user.staffLogin?.trimmingCharacters(in: .whitespacesAndNewlines), !sl.isEmpty {
             AuthStorage.userStaffLogin = sl
+        } else {
+            let apiRole = MerchantWorkspaceRole.resolve(fromAPIValue: me.user.workspaceRole)
+            if apiRole != .staff {
+                AuthStorage.userStaffLogin = nil
+            }
         }
         let hasStaffId = !(AuthStorage.userStaffLogin?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "").isEmpty
         if !hasStaffId, let em = me.user.email?.trimmingCharacters(in: .whitespacesAndNewlines), !em.isEmpty {
@@ -413,16 +451,14 @@ final class AuthService: NSObject, ObservableObject {
             AuthStorage.userPhone = nil
             currentUserPhone = nil
         }
-        hasActiveMerchantSubscription = Self.isMerchantSubscriptionActive(me)
-        merchantSubscription = me.subscription
-        applyMerchantEntitlements(me.entitlements)
-        merchantTrialEndsAt = Self.parseMerchantTrialEnd(me.merchantTrialEndsAt)
-        Self.persistMerchantTrialEndIsoFromServer(me.merchantTrialEndsAt)
+        applyMerchantBillingFromAPI(
+            hasActive: me.hasActiveSubscription,
+            hasPaid: me.hasPaidMerchantSubscription,
+            subscription: me.subscription,
+            entitlements: me.entitlements
+        )
         merchantSubscriptionEligibilityResolved = true
-        isPlatformAdmin = me.user.isAdmin == true
-        if !isPlatformAdmin {
-            adminShowsMerchantWorkspace = false
-        }
+        applyPlatformAdminFromAuthUser(me.user)
         applyWorkspaceRole(from: me.user)
         alignMerchantRoleWithPersistedStaffSession()
         syncAccountDisplayLineForSession()
@@ -449,6 +485,14 @@ final class AuthService: NSObject, ObservableObject {
     }
 
     private func applyMerchantEntitlements(_ ent: MerchantEntitlementsDTO?) {
+        if bypassesMerchantSubscriptionGate {
+            allowedBusinesses = max(1, ent?.allowedBusinesses ?? 1)
+            usedBusinesses = max(0, ent?.usedBusinesses ?? 0)
+            canCreateBusiness = false
+            let provider = ent?.billingProvider?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            entitlementBillingProvider = provider.isEmpty ? nil : provider
+            return
+        }
         let allowed = max(1, ent?.allowedBusinesses ?? 1)
         let used = max(0, ent?.usedBusinesses ?? businesses.count)
         allowedBusinesses = allowed
@@ -499,6 +543,7 @@ final class AuthService: NSObject, ObservableObject {
         passwordLoginFieldNormalized: String? = nil
     ) {
         AuthStorage.isLoggedIn = true
+        FirstLaunchOnboarding.clearSignupEmail()
         if let uid = response.user.id?.trimmingCharacters(in: .whitespacesAndNewlines), !uid.isEmpty {
             AuthStorage.userId = uid
         }
@@ -536,33 +581,15 @@ final class AuthService: NSObject, ObservableObject {
         }
         DataService.seedBusinessesFromAuth(response.businesses, context: PersistenceController.shared.container.viewContext)
         currentUserPhone = AuthStorage.userPhone
-        hasActiveMerchantSubscription = Self.isMerchantSubscriptionActive(
-            hasExplicit: response.hasActiveSubscription,
-            subscription: response.subscription
+        applyMerchantBillingFromAPI(
+            hasActive: response.hasActiveSubscription,
+            hasPaid: response.hasPaidMerchantSubscription,
+            subscription: response.subscription,
+            entitlements: response.entitlements
         )
-        merchantSubscription = response.subscription
-        applyMerchantEntitlements(response.entitlements)
-        merchantTrialEndsAt = Self.parseMerchantTrialEnd(response.merchantTrialEndsAt)
-        Self.persistMerchantTrialEndIsoFromServer(response.merchantTrialEndsAt)
-        /// Si l’API n’envoie pas `merchant_trial_ends_at` au tout premier login (register / Google navigateur),
-        /// `isMerchantTrialPeriodActive` restait faux → paywall obligatoire sans croix + bandeau « Se déconnecter » incohérent.
-        /// Aligné sur l’essai 3 j. côté produit : date locale de repli uniquement tant que le verrou post-inscription est actif.
-        let staffLike = !(response.user.staffLogin?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "").isEmpty
-            || loginByIdentifierNotEmail
-        if pendingMandatoryPaywallAfterSignup,
-           !hasActiveMerchantSubscription,
-           merchantTrialEndsAt == nil,
-           response.user.isAdmin != true,
-           !staffLike,
-           let end = Calendar.current.date(byAdding: .day, value: 3, to: Date()) {
-            merchantTrialEndsAt = end
-            let f = ISO8601DateFormatter()
-            f.formatOptions = [.withInternetDateTime]
-            Self.persistMerchantTrialEndIsoFromServer(f.string(from: end))
-        }
         merchantSubscriptionEligibilityResolved = true
-        isPlatformAdmin = response.user.isAdmin == true
-        if !isPlatformAdmin {
+        applyPlatformAdminFromAuthUser(response.user)
+        if isPlatformAdmin {
             adminShowsMerchantWorkspace = false
         }
         applyWorkspaceRole(from: response.user)
@@ -570,6 +597,7 @@ final class AuthService: NSObject, ObservableObject {
         syncAccountDisplayLineForSession()
         currentScreen = .authenticated
         NotificationsService.shared.syncPushTokenAfterLogin()
+        Task { await bootstrapAuthenticatedSessionIfNeeded(force: true) }
     }
 
     /// Change le commerce actif (multi-cartes). En admin plateforme, tout slug valide côté API est accepté.
@@ -680,7 +708,7 @@ final class AuthService: NSObject, ObservableObject {
             )
             MerchantLinkedPlaceCache.snapshotFromPendingOnboarding()
             FirstLaunchOnboarding.clearPendingEstablishmentFromOnboarding()
-            markMandatoryPaywallAfterSignupPending()
+            clearMandatoryPaywallAfterSignupPending()
             applyAuthSuccess(response)
         } catch APIError.businessPlaceAlreadyLinked(let message) {
             throw AuthError.apiMessage(message)
@@ -722,6 +750,182 @@ final class AuthService: NSObject, ObservableObject {
         }
     }
 
+    /// Demande un code e-mail (connexion / inscription). POST /api/auth/email/send-code.
+    func sendEmailOtp(email: String) async throws {
+        struct SendOk: Decodable { let ok: Bool? }
+        let norm = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        do {
+            _ = try await APIClient.shared.request(.authEmailSendCode(email: norm), responseType: SendOk.self)
+        } catch let e as APIError {
+            switch e {
+            case .server(_, let message):
+                if let m = message?.trimmingCharacters(in: .whitespacesAndNewlines), !m.isEmpty {
+                    throw AuthError.apiMessage(m)
+                }
+                throw AuthError.networkError
+            case .network:
+                throw AuthError.networkError
+            default:
+                throw AuthError.networkError
+            }
+        }
+    }
+
+    /// Vérifie le code reçu par e-mail (sans ouvrir la session).
+    func performEmailOtpVerification(
+        email: String,
+        code: String,
+        isSignup: Bool = true,
+        name: String? = nil
+    ) async throws -> AuthLoginResponse {
+        FirstLaunchOnboarding.rehydratePendingEstablishmentFromAllSourcesIfNeeded()
+        let pending = FirstLaunchOnboarding.readPendingEstablishment()
+        let allPendingEstablishments = FirstLaunchOnboarding.readPendingEstablishments()
+        let placeId = isSignup ? pending.placeId : nil
+        let estName: String? = {
+            guard isSignup else { return nil }
+            let n = pending.description?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return (n?.isEmpty == false) ? n : nil
+        }()
+        let trimmedName = name?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let nameForAPI = (trimmedName?.isEmpty == false) ? trimmedName : nil
+        let norm = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        do {
+            return try await APIClient.shared.request(
+                .authEmailVerify(
+                    email: norm,
+                    code: code,
+                    name: nameForAPI,
+                    googlePlaceId: placeId,
+                    establishmentName: estName,
+                    establishments: isSignup && !allPendingEstablishments.isEmpty
+                        ? allPendingEstablishments.map {
+                            AuthEstablishmentPayload(googlePlaceId: $0.placeId, establishmentName: $0.description)
+                        }
+                        : nil
+                )
+            )
+        } catch let e as APIError {
+            switch e {
+            case .noAccountInLogiciel:
+                throw AuthError.noAccountInLogiciel
+            case .missingEstablishment(let message):
+                throw AuthError.missingEstablishment(message)
+            case .unauthorized:
+                throw AuthError.invalidCredentials
+            case .server(_, let message):
+                if let m = message?.trimmingCharacters(in: .whitespacesAndNewlines), !m.isEmpty {
+                    throw AuthError.apiMessage(m)
+                }
+                throw AuthError.networkError
+            case .network:
+                throw AuthError.networkError
+            default:
+                throw AuthError.networkError
+            }
+        } catch {
+            throw AuthError.networkError
+        }
+    }
+
+    /// Garde le parcours onboarding visible après connexion pour les étapes « Ma carte ».
+    func beginSignupCardSetupPhase() {
+        isCompletingSignupCardSetup = true
+    }
+
+    func finishSignupCardSetupPhase() {
+        isCompletingSignupCardSetup = false
+    }
+
+    /// Affiche le paywall plein écran à la fin de l’onboarding (sauf staff / déjà abonné payant).
+    func beginSignupPaywallPhaseIfNeeded() {
+        signupPaywallPaymentConfirmedThisSession = false
+        if bypassesMerchantSubscriptionGate || hasEncashedMerchantSubscription {
+            isCompletingSignupPaywallPhase = false
+            return
+        }
+        isCompletingSignupPaywallPhase = true
+    }
+
+    /// Appelé après achat ou restauration App Store réussi sur le paywall post-inscription.
+    func confirmSignupPaywallPaymentInThisSession() {
+        signupPaywallPaymentConfirmedThisSession = true
+    }
+
+    func finishSignupPaywallPhase(honorPaidThankYou: Bool = false) {
+        isCompletingSignupPaywallPhase = false
+        clearMandatoryPaywallAfterSignupPending()
+        if honorPaidThankYou,
+           signupPaywallPaymentConfirmedThisSession,
+           hasEncashedMerchantSubscription {
+            pendingSubscriptionThankYouAfterSignup = true
+        }
+        signupPaywallPaymentConfirmedThisSession = false
+    }
+
+    func consumePendingSubscriptionThankYouAfterSignup() {
+        pendingSubscriptionThankYouAfterSignup = false
+    }
+
+    /// Applique la session après vérification OTP e-mail.
+    func finalizeEmailOtpSignIn(response: AuthLoginResponse, isSignup: Bool = true) {
+        if let email = response.user.email?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+           !email.isEmpty {
+            FirstLaunchOnboarding.persistSignupEmail(email)
+        }
+        AuthStorage.authProvider = .email
+        if isSignup {
+            let pending = FirstLaunchOnboarding.readPendingEstablishment()
+            let placeId = pending.placeId
+            let estName = pending.description?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if placeId != nil || (estName?.isEmpty == false) {
+                MerchantLinkedPlaceCache.snapshotFromPendingOnboarding()
+                FirstLaunchOnboarding.clearPendingEstablishmentFromOnboarding()
+                clearMandatoryPaywallAfterSignupPending()
+            }
+        }
+        applyAuthSuccess(response)
+    }
+
+    /// Vérifie le code reçu par e-mail et ouvre la session.
+    /// - Parameter isSignup: si `true`, envoie la sélection d'établissement pour créer le compte commerçant.
+    func verifyEmailAndSignIn(
+        email: String,
+        code: String,
+        isSignup: Bool = true,
+        name: String? = nil
+    ) async throws {
+        let response = try await performEmailOtpVerification(
+            email: email,
+            code: code,
+            isSignup: isSignup,
+            name: name
+        )
+        finalizeEmailOtpSignIn(response: response, isSignup: isSignup)
+    }
+
+    /// Met à jour le prénom affiché (`PATCH /api/auth/me`). Nécessite un JWT valide en session.
+    func updateProfileName(_ name: String) async throws {
+        struct PatchOk: Decodable { let ok: Bool? }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 2 else { throw AuthError.apiMessage("Prénom trop court.") }
+        do {
+            _ = try await APIClient.shared.request(.authMePatch(name: trimmed), responseType: PatchOk.self)
+        } catch let e as APIError {
+            switch e {
+            case .server(_, let message):
+                if let m = message?.trimmingCharacters(in: .whitespacesAndNewlines), !m.isEmpty {
+                    throw AuthError.apiMessage(m)
+                }
+                throw AuthError.networkError
+            case .network:
+                throw AuthError.networkError
+            default:
+                throw AuthError.networkError
+            }
+        }
+    }
+
     /// Demande un code SMS (connexion / inscription). POST /api/auth/phone/send-code.
     func sendPhoneOtp(phone: String) async throws {
         struct SendOk: Decodable { let ok: Bool? }
@@ -753,7 +957,7 @@ final class AuthService: NSObject, ObservableObject {
         if isNewPhoneSignup {
             MerchantLinkedPlaceCache.snapshotFromPendingOnboarding()
             FirstLaunchOnboarding.clearPendingEstablishmentFromOnboarding()
-            markMandatoryPaywallAfterSignupPending()
+            clearMandatoryPaywallAfterSignupPending()
         }
         applyAuthSuccess(response)
     }
@@ -795,7 +999,7 @@ final class AuthService: NSObject, ObservableObject {
             if isNewAppleSignup {
                 MerchantLinkedPlaceCache.snapshotFromPendingOnboarding()
                 FirstLaunchOnboarding.clearPendingEstablishmentFromOnboarding()
-                markMandatoryPaywallAfterSignupPending()
+                clearMandatoryPaywallAfterSignupPending()
             }
             applyAuthSuccess(response)
             currentUserEmail = response.user.email ?? email ?? "Compte Apple"
@@ -844,7 +1048,7 @@ final class AuthService: NSObject, ObservableObject {
         if isNewGoogleSignup {
             MerchantLinkedPlaceCache.snapshotFromPendingOnboarding()
             FirstLaunchOnboarding.clearPendingEstablishmentFromOnboarding()
-            markMandatoryPaywallAfterSignupPending()
+            clearMandatoryPaywallAfterSignupPending()
         }
         applyAuthSuccess(response)
     }
@@ -872,10 +1076,11 @@ final class AuthService: NSObject, ObservableObject {
             businesses: me.businesses,
             subscription: me.subscription,
             hasActiveSubscription: me.hasActiveSubscription,
-            merchantTrialEndsAt: me.merchantTrialEndsAt
+            hasPaidMerchantSubscription: me.hasPaidMerchantSubscription,
+            entitlements: me.entitlements
         )
         if hadEstablishmentContext {
-            markMandatoryPaywallAfterSignupPending()
+            clearMandatoryPaywallAfterSignupPending()
         }
         applyAuthSuccess(response)
     }
@@ -1016,26 +1221,142 @@ final class AuthService: NSObject, ObservableObject {
         return (token, refreshToken)
     }
 
-    /// Interface commerçant pour l’admin : si aucun slug actif, prend le **premier** commerce listé par l’API admin.
-    func openMerchantWorkspaceFromAdmin() async {
-        guard isPlatformAdmin else {
-            adminShowsMerchantWorkspace = true
+    /// Ouvre l’interface commerçant pour piloter un commerce (admin plateforme).
+    func openMerchantWorkspaceFromAdmin(preferredSlug: String? = nil) async {
+        guard isPlatformAdmin else { return }
+        if let raw = preferredSlug?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty {
+            selectBusiness(slug: raw, showSwitchingOverlay: false)
+        }
+        await refreshPlatformAdminBusinesses(force: true)
+        AuthStorage.mergeDashboardTokens(from: platformAdminBusinesses)
+        let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if slug.isEmpty, let first = platformAdminBusinesses.first {
+            selectBusiness(slug: first.slug, showSwitchingOverlay: false)
+        }
+        guard !(AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "").isEmpty else { return }
+        adminShowsMerchantWorkspace = true
+        NotificationCenter.default.post(name: .myfidpassAdminPilotDidStart, object: nil)
+    }
+
+    /// Bootstrap unique après connexion / cold start : `/me` puis confirmation admin (évite les courses entre tâches).
+    func bootstrapAuthenticatedSessionIfNeeded(force: Bool = false) async {
+        if !force, let inFlight = bootstrapSessionTask {
+            await inFlight.value
             return
         }
-        let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if slug.isEmpty {
-            do {
-                let r: AdminBusinessesListResponse = try await APIClient.shared.request(
-                    .adminBusinesses(q: nil, limit: 1, offset: 0)
-                )
-                if let first = r.businesses.first {
-                    selectBusiness(slug: first.slug, showSwitchingOverlay: false)
-                }
-            } catch {
-                // ignore — l’utilisateur pourra choisir un commerce dans l’onglet Commerces.
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.performBootstrapAuthenticatedSession(force: force)
+        }
+        bootstrapSessionTask = task
+        await task.value
+        bootstrapSessionTask = nil
+    }
+
+    private func performBootstrapAuthenticatedSession(force: Bool) async {
+        guard AuthStorage.isLoggedIn, currentScreen == .authenticated else { return }
+        await refreshBusinessesIfNeeded(force: force)
+        await reconcilePlatformAdminAccess(force: force)
+        if isPlatformAdmin, !adminShowsMerchantWorkspace {
+            await refreshPlatformAdminBusinesses(force: force)
+        }
+    }
+
+    /// Sonde `GET /api/admin/overview` : restaure le statut admin si `/me` ou la persistance locale sont en retard.
+    func reconcilePlatformAdminAccess(force: Bool = false) async {
+        if !force, isPlatformAdmin, !platformAdminBusinesses.isEmpty { return }
+        if let inFlight = reconcileAdminTask {
+            await inFlight.value
+            if !force, isPlatformAdmin, !platformAdminBusinesses.isEmpty { return }
+        }
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.performReconcilePlatformAdminAccess(force: force)
+        }
+        reconcileAdminTask = task
+        await task.value
+        reconcileAdminTask = nil
+    }
+
+    private func performReconcilePlatformAdminAccess(force: Bool) async {
+        guard AuthStorage.isLoggedIn else { return }
+        if APIClient.shared.authToken?.isEmpty != false {
+            _ = await APIClient.shared.tryRefreshToken()
+        }
+        guard APIClient.shared.authToken != nil, !(APIClient.shared.authToken ?? "").isEmpty else { return }
+
+        do {
+            let _: AdminOverviewResponse = try await APIClient.shared.request(.adminOverview)
+            applyPlatformAdminFlagFromAPI(true)
+        } catch {
+            // Ne jamais rétrograder un admin confirmé sur une erreur réseau / 403 transitoire.
+        }
+    }
+
+    /// `GET /api/admin/businesses` — cache pour le sélecteur « Tous les commerces ».
+    func refreshPlatformAdminBusinesses(force: Bool = false) async {
+        guard isPlatformAdmin else {
+            platformAdminBusinesses = []
+            return
+        }
+        if !force, !platformAdminBusinesses.isEmpty { return }
+        do {
+            let response: AdminBusinessesListResponse = try await APIClient.shared.request(
+                .adminBusinesses(q: nil, limit: 500, offset: 0)
+            )
+            platformAdminBusinesses = response.businesses.map { $0.asBusinessDTO() }
+            AuthStorage.mergeDashboardTokens(from: platformAdminBusinesses)
+            guard adminShowsMerchantWorkspace else { return }
+            let active = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if active.isEmpty, let first = platformAdminBusinesses.first {
+                selectBusiness(slug: first.slug, showSwitchingOverlay: false)
+            }
+        } catch {
+            // Conserve la liste précédente si le GET échoue (réseau).
+        }
+    }
+
+    /// Ne rétrograde l’admin que si l’API renvoie explicitement `is_admin: false` (pas si la clé est absente / decode raté).
+    private func applyPlatformAdminFromAuthUser(_ user: AuthUser) {
+        switch user.isAdmin {
+        case true:
+            applyPlatformAdminFlagFromAPI(true)
+        case false:
+            applyPlatformAdminFlagFromAPI(false)
+        case nil:
+            if isPlatformAdmin || AuthStorage.isPlatformAdminFlag {
+                Task { await reconcilePlatformAdminAccess(force: false) }
             }
         }
-        adminShowsMerchantWorkspace = true
+    }
+
+    /// Slug actif après `/me` : admin conserve le slug piloté ; commerçant = liste « mes » commerces.
+    private func applyActiveBusinessSlugFromMe(_ me: AuthMeResponse) {
+        let saved = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if me.user.isAdmin == true {
+            if adminShowsMerchantWorkspace, !saved.isEmpty { return }
+            if !saved.isEmpty { return }
+            if let first = platformAdminBusinesses.first?.slug ?? businesses.first?.slug {
+                AuthStorage.currentBusinessSlug = first
+            }
+            return
+        }
+        if !saved.isEmpty, businesses.contains(where: { $0.slug == saved }) { return }
+        AuthStorage.currentBusinessSlug = businesses.first?.slug
+    }
+
+    private func applyPlatformAdminFlagFromAPI(_ admin: Bool) {
+        isPlatformAdmin = admin
+        AuthStorage.isPlatformAdminFlag = admin
+        if !admin {
+            adminShowsMerchantWorkspace = false
+            platformAdminBusinesses = []
+        }
+    }
+
+    func returnToPlatformAdministrationHub() {
+        guard isPlatformAdmin else { return }
+        adminShowsMerchantWorkspace = false
     }
 
     func logout() {
@@ -1054,7 +1375,7 @@ final class AuthService: NSObject, ObservableObject {
         CommerceFlyerStore.shared.clearAll()
         MerchantSetupProgressCalculator.clearAllFlyerDisplayedAcknowledgementsFromUserDefaults()
         // L’historique local d’envois de campagnes (`NotificationSendLocalHistoryStore`) est conservé au logout simple ; `deleteAccount()` le vide avant cette étape.
-        // Vider le cache CoreData pour éviter qu'un ancien commerce réapparaisse sur un nouveau compte
+        // Vider le cache CoreData (+ caches UI activité accueil via `.myfidpassLocalSessionDidEnd`).
         DataService.clearAllLocalData(context: PersistenceController.shared.container.viewContext)
         // Effacer l'établissement pour forcer la re-sélection au prochain lancement (WelcomeFlow)
         FirstLaunchOnboarding.clearPendingEstablishmentFromOnboarding()
@@ -1065,18 +1386,22 @@ final class AuthService: NSObject, ObservableObject {
         businesses = []
         merchantSubscriptionEligibilityResolved = false
         hasActiveMerchantSubscription = false
+        serverReportsPaidMerchantSubscription = false
         merchantSubscription = nil
         allowedBusinesses = 1
         usedBusinesses = 0
         canCreateBusiness = true
         entitlementBillingProvider = nil
-        merchantTrialEndsAt = nil
-        UserDefaults.standard.removeObject(forKey: merchantTrialEndIsoUserDefaultsKey)
+        serverReportsPaidMerchantSubscription = false
         isPlatformAdmin = false
         adminShowsMerchantWorkspace = false
+        platformAdminBusinesses = []
+        AuthStorage.isPlatformAdminFlag = false
         merchantWorkspaceRole = .owner
-        pendingMandatoryPaywallAfterSignup = false
-        pendingHomeTutorialAfterSignup = false
+        isCompletingSignupCardSetup = false
+        isCompletingSignupPaywallPhase = false
+        pendingSubscriptionThankYouAfterSignup = false
+        signupPaywallPaymentConfirmedThisSession = false
         isBusinessSwitching = false
         businessSwitchTargetSlug = nil
         currentScreen = .welcome

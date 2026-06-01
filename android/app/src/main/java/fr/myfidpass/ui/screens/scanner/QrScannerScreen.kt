@@ -42,6 +42,10 @@ import java.util.concurrent.Executors
 fun QrScannerScreen(
     onBarcode: (String) -> Unit,
     onClose: () -> Unit,
+    modifier: Modifier = Modifier,
+    validateBarcode: ((String) -> Boolean)? = null,
+    hideTopBar: Boolean = false,
+    embeddedMode: Boolean = false,
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -61,31 +65,13 @@ fun QrScannerScreen(
         }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Scanner") },
-                navigationIcon = {
-                    IconButton(onClick = onClose) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Retour")
-                    }
-                },
+    val cameraContent: @Composable () -> Unit = {
+        if (!hasCamPermission) {
+            Text(
+                "Autorisez la caméra pour scanner les codes.",
+                modifier = Modifier.padding(24.dp),
             )
-        },
-    ) { padding ->
-        Box(
-            Modifier
-                .fillMaxSize()
-                .padding(padding),
-        ) {
-            if (!hasCamPermission) {
-                Text(
-                    "Autorisez la caméra pour scanner les codes.",
-                    modifier = Modifier.padding(24.dp),
-                )
-                return@Scaffold
-            }
-
+        } else {
             val executor = remember { Executors.newSingleThreadExecutor() }
             var handled by remember { mutableStateOf(false) }
             val scanner = remember { BarcodeScanning.getClient() }
@@ -108,10 +94,10 @@ fun QrScannerScreen(
                                     imageProxy,
                                     scanner,
                                 ) { value ->
-                                    if (!handled) {
-                                        handled = true
-                                        onBarcode(value)
-                                    }
+                                    if (handled) return@processProxy
+                                    if (validateBarcode != null && !validateBarcode(value)) return@processProxy
+                                    handled = true
+                                    onBarcode(value)
                                 }
                             }
                             try {
@@ -132,6 +118,35 @@ fun QrScannerScreen(
                 },
                 modifier = Modifier.fillMaxSize(),
             )
+        }
+    }
+
+    if (embeddedMode) {
+        Box(modifier.fillMaxSize()) { cameraContent() }
+        return
+    }
+
+    Scaffold(
+        topBar = {
+            if (!hideTopBar) {
+                TopAppBar(
+                    title = { Text("Scanner") },
+                    navigationIcon = {
+                        IconButton(onClick = onClose) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Retour")
+                        }
+                    },
+                )
+            }
+        },
+    ) { padding ->
+        Box(
+            Modifier
+                .fillMaxSize()
+                .then(modifier)
+                .then(if (hideTopBar) Modifier else Modifier.padding(padding)),
+        ) {
+            cameraContent()
         }
     }
 }

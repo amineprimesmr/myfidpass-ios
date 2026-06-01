@@ -5,6 +5,9 @@
 
 .DS_Store
 
+# AAB Play Store (généré par scripts/prepare-play-upload.sh)
+PlayStoreMetadata/releases/
+
 # Xcode utilisateur (évite conflits Git / bruit).
 **/xcuserdata/
 *.xcuserstate

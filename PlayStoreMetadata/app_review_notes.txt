@@ -1,0 +1,26 @@
+SUBSCRIPTION / PAYMENTS (important for review)
+- MyFidpass Pro is a merchant SaaS subscription billed via Stripe (secure web checkout), NOT Google Play Billing.
+- The app is free to download; paid features require an active Pro subscription managed on myfidpass.fr.
+- Paywall shows plan name, price, billing period, and links to Terms and Privacy Policy before payment.
+
+LEGAL LINKS (functional)
+- Terms of use: https://www.myfidpass.fr/cgu
+- Privacy policy: https://www.myfidpass.fr/politique-confidentialite
+
+SIGN IN
+- Email + one-time code (OTP) on sign-up and sign-in.
+- Google Sign-In available on the auth screen.
+
+TEST ACCOUNT (replace before submit)
+- Email: [YOUR_DEMO_EMAIL]
+- Use OTP sent to this inbox, or provide a fixed test code if configured on backend.
+
+HOW TO TEST
+1) Open app → create account or sign in with test email.
+2) Complete onboarding (business name) → paywall appears for Pro subscription.
+3) Dashboard → Scanner tab → scan a loyalty QR.
+4) My Card tab → customize card → "Tester ma carte" opens Google Wallet preview.
+5) Campaigns tab → view / sync notifications.
+
+CONTACT
+- support@myfidpass.fr

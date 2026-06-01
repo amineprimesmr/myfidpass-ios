@@ -36,7 +36,6 @@ struct PerimeterMapView: View {
     /// Dernière caméra connue (gestes + programme) pour boussole / 2D–3D / recadrage.
     @State private var lastMapCamera: MapCamera?
     @State private var isGeocoding = false
-    @State private var contentAppeared = false
     /// Message envoyé aux clients qui entrent dans le périmètre (pass Wallet / notification).
     @State private var perimeterMessage: String = ""
     /// Feuille d’édition (même gabarit que la personnalisation carte Wallet).
@@ -52,9 +51,9 @@ struct PerimeterMapView: View {
         return CLLocationCoordinate2D(latitude: lat, longitude: lng)
     }
 
-    /// Style carte : 3D réaliste, thème sombre via l’environnement (sans .muted pour garder la carte lisible).
+    /// Style carte : plan 2D stable (`.realistic` + animations SwiftUI provoquaient un bobbing infini).
     private var standardMapStyle: MapStyle {
-        .standard(elevation: .realistic)
+        .standard(elevation: .flat)
     }
 
     private var dashboardPalette: DashboardRevolutPalette {
@@ -63,7 +62,7 @@ struct PerimeterMapView: View {
 
     /// Libellé 2D / 3D aligné sur le comportement du `MapPitchToggle` système.
     private var isMapPitch3D: Bool {
-        let pitch = lastMapCamera?.pitch ?? (hasLocation ? 55 : 0)
+        let pitch = lastMapCamera?.pitch ?? 0
         return pitch >= 30
     }
 
@@ -107,8 +106,6 @@ struct PerimeterMapView: View {
             } message: {
                 if let msg = errorMessage { Text(msg) }
             }
-            .opacity(contentAppeared ? 1 : 0)
-            .animation(.easeOut(duration: 0.4), value: contentAppeared)
         }
         .sheet(isPresented: $showPerimeterSheet) {
             PerimeterEditorSheet(
@@ -128,9 +125,6 @@ struct PerimeterMapView: View {
                 onSave: { await saveLocation() },
                 onDismiss: { showPerimeterSheet = false }
             )
-        }
-        .onAppear {
-            withAnimation(.easeOut(duration: 0.5)) { contentAppeared = true }
         }
     }
 
@@ -157,6 +151,7 @@ struct PerimeterMapView: View {
                 .onMapCameraChange(frequency: .onEnd) { context in
                     lastMapCamera = context.camera
                 }
+                .transaction { $0.animation = nil }
             } else {
                 Map(position: $cameraPosition, interactionModes: .all)
                     .mapStyle(standardMapStyle)
@@ -172,6 +167,7 @@ struct PerimeterMapView: View {
                     .onMapCameraChange(frequency: .onEnd) { context in
                         lastMapCamera = context.camera
                     }
+                    .transaction { $0.animation = nil }
             }
         }
         .overlay(alignment: .topTrailing) {
@@ -179,7 +175,7 @@ struct PerimeterMapView: View {
                 .padding(.top, 56)
                 .padding(.trailing, 12)
         }
-        .animation(.easeInOut(duration: 0.35), value: hasLocation)
+        .transaction { $0.animation = nil }
     }
 
     /// Contrôles carte en Liquid Glass (même principe que profil / accueil : `DashboardHomeGlassIconButton`).
@@ -293,7 +289,6 @@ struct PerimeterMapView: View {
         .padding(.horizontal, AppTheme.Spacing.md)
         .padding(.bottom, AppTheme.Spacing.lg)
         .padding(.top, AppTheme.Spacing.xs)
-        .animation(.spring(response: 0.38, dampingFraction: 0.84), value: hasLocation)
     }
 
     // MARK: - Actions
@@ -345,8 +340,12 @@ struct PerimeterMapView: View {
         guard let lat = locationLat, let lng = locationLng else { return }
         let center = CLLocationCoordinate2D(latitude: lat, longitude: lng)
         let cameraDistance = max(400, CLLocationDistance(radiusMeters) * 4.5)
-        let camera = MapCamera(centerCoordinate: center, distance: cameraDistance, heading: 0, pitch: 55)
-        cameraPosition = .camera(camera)
+        let camera = MapCamera(centerCoordinate: center, distance: cameraDistance, heading: 0, pitch: 0)
+        var transaction = Transaction()
+        transaction.animation = nil
+        withTransaction(transaction) {
+            cameraPosition = .camera(camera)
+        }
     }
 
     /// Caméra de secours quand l’utilisateur n’a pas encore déclenché `onMapCameraChange`.
@@ -354,7 +353,7 @@ struct PerimeterMapView: View {
         guard let lat = locationLat, let lng = locationLng else { return nil }
         let center = CLLocationCoordinate2D(latitude: lat, longitude: lng)
         let cameraDistance = max(400, CLLocationDistance(radiusMeters) * 4.5)
-        return MapCamera(centerCoordinate: center, distance: cameraDistance, heading: 0, pitch: 55)
+        return MapCamera(centerCoordinate: center, distance: cameraDistance, heading: 0, pitch: 0)
     }
 
     private func resetMapNorthUp() {
@@ -389,7 +388,7 @@ struct PerimeterMapView: View {
     /// Recentre la vue carte sur la position GPS (sans modifier l’adresse enregistrée du commerce).
     private func centerMapOnUserLocation() {
         let dist = lastMapCamera?.distance ?? max(400, CLLocationDistance(radiusMeters) * 4.5)
-        let pitch = lastMapCamera?.pitch ?? 55
+        let pitch = lastMapCamera?.pitch ?? 0
         let heading = lastMapCamera?.heading ?? 0
         locationManager.requestLocation { coordinate in
             let cam = MapCamera(
@@ -418,25 +417,21 @@ struct PerimeterMapView: View {
                     return
                 }
                 let coord = item.mf_searchCoordinate
-                withAnimation(.easeInOut(duration: 0.3)) {
-                    locationLat = coord.latitude
-                    locationLng = coord.longitude
-                    hasUnsavedChanges = true
-                    updateCameraAndRegion()
-                }
+                locationLat = coord.latitude
+                locationLng = coord.longitude
+                hasUnsavedChanges = true
+                updateCameraAndRegion()
             }
         }
     }
 
     private func useMyLocation() {
         locationManager.requestLocation { [self] coordinate in
-            withAnimation(.easeInOut(duration: 0.3)) {
-                locationLat = coordinate.latitude
-                locationLng = coordinate.longitude
-                locationAddress = "Position actuelle"
-                hasUnsavedChanges = true
-                updateCameraAndRegion()
-            }
+            locationLat = coordinate.latitude
+            locationLng = coordinate.longitude
+            locationAddress = "Position actuelle"
+            hasUnsavedChanges = true
+            updateCameraAndRegion()
             locationManager.reverseGeocode(coordinate: coordinate) { address in
                 DispatchQueue.main.async {
                     if let a = address, !a.isEmpty { locationAddress = a }

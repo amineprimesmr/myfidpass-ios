@@ -1,0 +1,190 @@
+{
+  "identifier" : "MyFidpassSubscriptions",
+  "nonRenewingSubscriptions" : [
+
+  ],
+  "products" : [
+
+  ],
+  "settings" : {
+    "_applicationInternalID" : "0",
+    "developerTeamID" : "REPLACE_WITH_TEAM_ID"
+  },
+  "subscriptionGroups" : [
+    {
+      "id" : "myfidpass_pro",
+      "localizations" : [
+
+      ],
+      "name" : "MyFidpass Pro",
+      "subscriptions" : [
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "49.99",
+          "familyShareable" : false,
+          "groupNumber" : 1,
+          "internalID" : "monthly",
+          "introductoryOffer" : {
+            "displayPrice" : "1.00",
+            "internalID" : "intro_month",
+            "numberOfPeriods" : 1,
+            "paymentMode" : "payAsYouGo",
+            "subscriptionPeriod" : "P1M"
+          },
+          "localizations" : [
+            {
+              "description" : "Abonnement mensuel MyFidpass Pro — 1 commerce",
+              "displayName" : "MyFidpass Pro Mensuel",
+              "locale" : "fr_FR"
+            }
+          ],
+          "productID" : "MFPmensuel",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "mensuel",
+          "subscriptionGroupID" : "myfidpass_pro",
+          "type" : "RecurringSubscription"
+        },
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "399.99",
+          "familyShareable" : false,
+          "groupNumber" : 2,
+          "internalID" : "annual",
+          "introductoryOffer" : {
+            "displayPrice" : "1.00",
+            "internalID" : "intro_year",
+            "numberOfPeriods" : 1,
+            "paymentMode" : "payAsYouGo",
+            "subscriptionPeriod" : "P1M"
+          },
+          "localizations" : [
+            {
+              "description" : "Abonnement annuel MyFidpass Pro — 1 commerce",
+              "displayName" : "MyFidpass Pro Annuel",
+              "locale" : "fr_FR"
+            }
+          ],
+          "productID" : "MFPannuel",
+          "recurringSubscriptionPeriod" : "P1Y",
+          "referenceName" : "annuel",
+          "subscriptionGroupID" : "myfidpass_pro",
+          "type" : "RecurringSubscription"
+        },
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "89.99",
+          "familyShareable" : false,
+          "groupNumber" : 3,
+          "internalID" : "slots2",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "Abonnement mensuel — 2 commerces",
+              "displayName" : "2 commerces mensuel",
+              "locale" : "fr_FR"
+            }
+          ],
+          "productID" : "com.myfidpass.merchant.slots2.monthly",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "2 commerces mensuel",
+          "subscriptionGroupID" : "myfidpass_pro",
+          "type" : "RecurringSubscription"
+        },
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "124.98",
+          "familyShareable" : false,
+          "groupNumber" : 4,
+          "internalID" : "slots3",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "Abonnement mensuel — 3 commerces",
+              "displayName" : "3 commerces mensuel",
+              "locale" : "fr_FR"
+            }
+          ],
+          "productID" : "com.myfidpass.merchant.slots3.monthly",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "3 commerces mensuel",
+          "subscriptionGroupID" : "myfidpass_pro",
+          "type" : "RecurringSubscription"
+        },
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "159.97",
+          "familyShareable" : false,
+          "groupNumber" : 5,
+          "internalID" : "slots4",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "Abonnement mensuel — 4 commerces",
+              "displayName" : "4 commerces mensuel",
+              "locale" : "fr_FR"
+            }
+          ],
+          "productID" : "com.myfidpass.merchant.slots4.monthly",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "4 commerces mensuel",
+          "subscriptionGroupID" : "myfidpass_pro",
+          "type" : "RecurringSubscription"
+        },
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "194.96",
+          "familyShareable" : false,
+          "groupNumber" : 6,
+          "internalID" : "slots5",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "Abonnement mensuel — 5 commerces",
+              "displayName" : "5 commerces mensuel",
+              "locale" : "fr_FR"
+            }
+          ],
+          "productID" : "com.myfidpass.merchant.slots5.monthly",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "5 commerces mensuel",
+          "subscriptionGroupID" : "myfidpass_pro",
+          "type" : "RecurringSubscription"
+        }
+      ]
+    }
+  ],
+  "version" : {
+    "major" : 4,
+    "minor" : 0
+  }
+}

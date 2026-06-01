@@ -46,6 +46,32 @@ final class CommerceFlyerStore {
         let key = slug.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { return }
         snapshotsBySlug[key] = snapshot
+        NotificationCenter.default.post(name: .myfidpassMerchantSetupProgressUpdated, object: nil)
+    }
+
+    /// Flyer personnalisé (cache, mémoire ou brouillon éditeur) — même critère que l’accueil / checklist.
+    func isFlyerReady(for slug: String?) -> Bool {
+        let key = slug?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !key.isEmpty else { return false }
+        Self.shared.hydrateFromDiskIfNeeded(slug: key)
+        if let snap = Self.shared.snapshot(for: key) {
+            if snapLooksReady(snap) { return true }
+        }
+        if let draft = CommerceFlyerEditorDraftStore.load(slug: key) {
+            if !draft.bootstrapB64.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return true }
+            let draftBg = draft.meta.customBgDataURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !draftBg.isEmpty { return true }
+        }
+        guard let cached = CommerceFlyerStateCache.load(slug: key) else { return false }
+        let hasBootstrap = !(cached.bootstrapPreviewB64 ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasCustomBg = !(cached.customBgDataURL ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return cached.flyerRegistered || hasBootstrap || hasCustomBg
+    }
+
+    private func snapLooksReady(_ snap: Snapshot) -> Bool {
+        let hasBootstrap = !(snap.bootstrapPreviewB64 ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasCustomBg = !(snap.customBgDataURL ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return snap.flyerRegistered || hasBootstrap || hasCustomBg
     }
 
     func clear(slug: String) {

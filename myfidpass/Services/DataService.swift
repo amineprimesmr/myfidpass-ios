@@ -88,6 +88,9 @@ final class DataService: ObservableObject {
     private let viewContext: NSManagedObjectContext
     /// Déclenche les mises à jour des vues qui utilisent ce service.
     @Published private(set) var updateTrigger: Int = 0
+    /// Cache du fil d’activité accueil (évite 180+ tampons Core Data à chaque `body`).
+    private var cachedActivityPreview: [DashboardActivityEntry]?
+    private var activityPreviewCacheTrigger: Int = -1
     /// Réagit aux fusions synchro → Core Data (`SyncService`) qui ne passent pas par `save()` ici.
     private var coreDataMergeCancellable: AnyCancellable?
 
@@ -97,9 +100,38 @@ final class DataService: ObservableObject {
             .publisher(for: .myfidpassMerchantCoreDataDidMergeFromSync)
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
-                guard let self else { return }
-                self.updateTrigger += 1
+                self?.invalidateActivityPreviewCache()
             }
+
+        NotificationCenter.default
+            .publisher(for: .myfidpassLocalSessionDidEnd)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.invalidateActivityPreviewCache()
+            }
+            .store(in: &sessionEndCancellables)
+    }
+
+    private var sessionEndCancellables = Set<AnyCancellable>()
+
+    /// Vide le cache « Dernières transactions » et force le rafraîchissement SwiftUI.
+    func invalidateActivityPreviewCache() {
+        cachedActivityPreview = nil
+        activityPreviewCacheTrigger = -1
+        updateTrigger += 1
+    }
+
+    /// Aperçu « Dernières transactions » (scans uniquement), mis en cache jusqu’au prochain merge / save.
+    func dashboardActivityPreview(limit: Int = 8, includeNewCardEvents: Bool = false) -> [DashboardActivityEntry] {
+        if activityPreviewCacheTrigger == updateTrigger, let cached = cachedActivityPreview {
+            return cached
+        }
+        let preview = Array(
+            dashboardActivityFeed(limit: max(limit, 40), includeNewCardEvents: includeNewCardEvents).prefix(limit)
+        )
+        cachedActivityPreview = preview
+        activityPreviewCacheTrigger = updateTrigger
+        return preview
     }
 
     // MARK: - Business
@@ -150,6 +182,8 @@ final class DataService: ObservableObject {
                 NSManagedObjectContext.mergeChanges(fromRemoteContextSave: changes, into: [context])
             }
         }
+        context.reset()
+        NotificationCenter.default.post(name: .myfidpassLocalSessionDidEnd, object: nil)
     }
 
     /// Juste après login / register : la 1ʳᵉ sync réseau est différée ; sans cette étape, Commerce affichait un commerce local par défaut au lieu du vrai nom API.

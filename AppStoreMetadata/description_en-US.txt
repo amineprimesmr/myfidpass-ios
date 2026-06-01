@@ -1,0 +1,8 @@
+MyFidpass helps merchants run a digital loyalty program with Apple Wallet passes: card design, QR scanning, members, push notifications, and analytics.
+
+Features: dashboard, scanner, campaigns, multi-location plans (1–5 businesses), customizable card, Google Business integration.
+
+Auto-renewable subscription MyFidpass Pro (in-app purchase via the App Store). Promotional first month at €1, then the price shown on the paywall before purchase.
+
+Terms of Use (EULA): https://www.myfidpass.fr/cgu
+Privacy Policy: https://www.myfidpass.fr/politique-confidentialite

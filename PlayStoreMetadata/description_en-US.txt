@@ -1,0 +1,8 @@
+MyFidpass helps merchants build customer loyalty with digital wallet loyalty cards: card design, QR scanning, members, push notifications, and analytics.
+
+Features: dashboard, scanner, campaigns, multi-location plans (1–5 stores), customizable card, Google Business integration.
+
+MyFidpass Pro subscription via secure payment (Stripe). Promotional €1 first month, then pricing shown on the paywall before purchase.
+
+Terms of use: https://www.myfidpass.fr/cgu
+Privacy policy: https://www.myfidpass.fr/politique-confidentialite

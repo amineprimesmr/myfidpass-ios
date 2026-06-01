@@ -173,7 +173,8 @@ struct AddCommerceSheet: View {
                 hapticManager.notification(.success)
                 dismiss()
             } catch let apiError as APIError {
-                errorMessage = apiError.errorDescription ?? "Impossible de créer le commerce."
+                Self.openPaywallIfCommerceQuotaBlocked(apiError, authService: authService)
+                errorMessage = Self.userFacingCreateCommerceError(apiError)
             } catch {
                 errorMessage = "Impossible de créer le commerce. Vérifiez votre connexion."
             }
@@ -211,7 +212,7 @@ struct AddCommerceSheet: View {
         }
     }
 
-    /// Débloque l’UI sans redémarrage : `/me` peut arriver avant que le nouveau commerce soit listé — stub + boucle courte.
+    /// Met à jour la session locale puis synchronise en arrière-plan (évite rafales `/me` + sync qui provoquaient des 401 / refresh concurrents).
     private func finalizeAfterCommerceCreated(
         responseSlug: String?,
         responseName: String?,
@@ -234,28 +235,49 @@ struct AddCommerceSheet: View {
         }()
 
         if let slug = responseSlug?.trimmingCharacters(in: .whitespacesAndNewlines), !slug.isEmpty {
-            for _ in 0 ..< 10 {
-                await authService.refreshBusinessesIfNeeded(force: true)
-                if !authService.businesses.contains(where: { $0.slug == slug }) {
-                    authService.ensurePendingCreatedBusinessVisibleLocally(
-                        slug: slug,
-                        displayName: displayResolved,
-                        dashboardToken: tokenTrimmed
-                    )
-                }
-                authService.selectBusiness(slug: slug, showSwitchingOverlay: false)
-                let serverCaughtUp = authService.businesses.contains {
-                    $0.slug == slug && !$0.id.hasPrefix("pending-")
-                }
-                if serverCaughtUp { break }
-                try? await Task.sleep(nanoseconds: 400_000_000)
-            }
-        } else {
-            await authService.refreshBusinessesIfNeeded(force: true)
+            authService.ensurePendingCreatedBusinessVisibleLocally(
+                slug: slug,
+                displayName: displayResolved,
+                dashboardToken: tokenTrimmed
+            )
+            authService.selectBusiness(slug: slug, showSwitchingOverlay: false)
         }
+        await authService.refreshBusinessesIfNeeded(force: true)
 
-        await syncService.syncAfterServerMutation()
         authService.finishBusinessSwitch()
+
+        // Sync hors du chemin critique : une erreur réseau/auth ici ne doit pas annuler la création réussie.
+        Task { @MainActor in
+            await syncService.syncAfterServerMutation()
+        }
+    }
+
+    private static func openPaywallIfCommerceQuotaBlocked(_ error: APIError, authService: AuthService) {
+        switch error {
+        case .subscriptionRequired, .businessQuotaReached:
+            NotificationCenter.default.postOpenMerchantSubscription(
+                usedBusinesses: authService.usedBusinesses,
+                allowedBusinesses: authService.allowedBusinesses,
+                addingAnotherCommerce: true
+            )
+        default:
+            break
+        }
+    }
+
+    private static func userFacingCreateCommerceError(_ error: APIError) -> String {
+        switch error {
+        case .unauthorized:
+            return "Connexion expirée. Fermez cet écran, reconnectez-vous (Apple ou e-mail), puis réessayez."
+        case .subscriptionRequired:
+            return "Abonnement requis. L’écran de paiement s’ouvre pour choisir le forfait adapté."
+        case .businessQuotaReached:
+            return "Limite de commerces atteinte. L’écran de paiement s’ouvre pour passer au forfait supérieur."
+        case .businessPlaceAlreadyLinked(let message):
+            return message
+        default:
+            return error.errorDescription ?? "Impossible de créer le commerce."
+        }
     }
 
     private func createCommerceViaClassicEndpoint(name: String) async throws -> CreateBusinessResponse {

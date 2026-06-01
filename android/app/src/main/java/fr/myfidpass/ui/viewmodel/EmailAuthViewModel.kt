@@ -10,57 +10,53 @@ import fr.myfidpass.data.repo.AuthRepository
 import fr.myfidpass.data.repo.EmailLoginResult
 import kotlinx.coroutines.launch
 
-enum class EmailAuthPhase {
-    Email,
-    Credentials,
-}
-
 class EmailAuthViewModel(
     private val authRepository: AuthRepository,
     private val firstLaunch: FirstLaunchPreferences,
 ) : ViewModel() {
 
-    var phase by mutableStateOf(EmailAuthPhase.Email)
+    var signUpMode by mutableStateOf(true)
         private set
 
     var email by mutableStateOf("")
     var password by mutableStateOf("")
-    var displayName by mutableStateOf("")
-    var isNewUser by mutableStateOf(false)
     var loading by mutableStateOf(false)
     var errorMessage by mutableStateOf<String?>(null)
 
-    val emailValid: Boolean
+    val identifierValid: Boolean
         get() {
             val e = email.trim()
-            return e.contains("@") && e.split("@").size == 2 && e.length > 4
+            if (e.isEmpty()) return false
+            if (e.contains("@")) {
+                if (e.length < 5) return false
+                val parts = e.split("@")
+                if (parts.size != 2) return false
+                return parts[1].contains(".")
+            }
+            return e.length >= 3
         }
 
-    fun goToCredentials() {
-        if (!emailValid) return
-        email = email.trim().lowercase()
-        phase = EmailAuthPhase.Credentials
-        errorMessage = null
-    }
+    val canSubmit: Boolean
+        get() = if (signUpMode) {
+            identifierValid && password.length >= 12 && !loading
+        } else {
+            identifierValid && password.isNotEmpty() && !loading
+        }
 
-    fun backToEmail() {
-        phase = EmailAuthPhase.Email
-        errorMessage = null
-    }
+    fun hasPendingEstablishment(): Boolean =
+        firstLaunch.hasCompletePendingEstablishmentForRegistration()
 
-    fun hasPendingEstablishment(): Boolean {
-        val p = firstLaunch.readPendingEstablishment()
-        return p.placeId != null || p.relax
-    }
-
-    fun submitCredentials(onSuccess: () -> Unit) {
+    fun submit(onSuccess: () -> Unit) {
         viewModelScope.launch {
             loading = true
             errorMessage = null
-            if (isNewUser) {
+            val normalized = email.trim().let { if (it.contains("@")) it.lowercase() else it }
+            email = normalized
+
+            if (signUpMode) {
                 if (!hasPendingEstablishment()) {
                     errorMessage =
-                        "Sélectionnez d'abord votre établissement depuis l'accueil pour créer un compte."
+                        "Sélectionnez d'abord votre établissement (COMMENCER) pour créer un compte."
                     loading = false
                     return@launch
                 }
@@ -69,7 +65,7 @@ class EmailAuthViewModel(
                     loading = false
                     return@launch
                 }
-                val r = authRepository.register(email, password, displayName.takeIf { it.isNotBlank() })
+                val r = authRepository.register(normalized, password, name = null)
                 loading = false
                 r.fold(
                     onSuccess = { onSuccess() },
@@ -77,19 +73,16 @@ class EmailAuthViewModel(
                 )
                 return@launch
             }
-            when (val res = authRepository.loginEmailReturningOutcome(email, password)) {
+
+            when (val res = authRepository.loginEmailReturningOutcome(normalized, password)) {
                 is EmailLoginResult.Success -> {
                     loading = false
                     onSuccess()
                 }
                 is EmailLoginResult.NoAccount -> {
                     loading = false
-                    if (hasPendingEstablishment()) {
-                        isNewUser = true
-                    } else {
-                        errorMessage =
-                            "Aucun compte trouvé avec cet e-mail. Retournez à l'accueil, sélectionnez votre établissement, puis créez votre compte."
-                    }
+                    errorMessage =
+                        "Aucun compte trouvé avec cet identifiant. Créez un compte via COMMENCER."
                 }
                 is EmailLoginResult.Error -> {
                     loading = false
@@ -99,12 +92,11 @@ class EmailAuthViewModel(
         }
     }
 
-    fun resetForSheet() {
-        phase = EmailAuthPhase.Email
+    fun resetForSheet(signUpMode: Boolean = true) {
+        this.signUpMode = signUpMode
         email = ""
         password = ""
-        displayName = ""
-        isNewUser = false
         errorMessage = null
+        loading = false
     }
 }

@@ -1,0 +1,23 @@
+SUBSCRIPTION (Guideline 3.1.2)
+- Auto-renewable subscription: MyFidpass Pro (in-app purchase, StoreKit 2).
+- Paywall shows: subscription title, length (monthly/annual or multi-business monthly), price from App Store, and functional links to Privacy Policy and Terms of Use (EULA).
+- Restore Purchases is available on the paywall.
+
+LEGAL LINKS (functional, tested in Safari)
+- Terms of Use (EULA): https://www.myfidpass.fr/cgu
+- Privacy Policy: https://www.myfidpass.fr/politique-confidentialite
+
+SIGN IN WITH APPLE
+- Available on Login and Sign Up screens (native button above Google).
+
+IN-APP PURCHASES (submit with this build)
+- MFPmensuel, MFPannuel, com.myfidpass.merchant.slots2.monthly … slots5.monthly (subscription group MyFidpass Pro).
+
+TEST ACCOUNT (replace before submit)
+- Email: [YOUR_DEMO_EMAIL]
+- Password: [YOUR_DEMO_PASSWORD]
+
+HOW TO TEST
+1) Sign in → Dashboard → open subscription paywall from trial pill or add business when quota reached.
+2) Verify legal disclosure and EULA/Privacy links open in Safari.
+3) Sign in with Apple on auth screen.

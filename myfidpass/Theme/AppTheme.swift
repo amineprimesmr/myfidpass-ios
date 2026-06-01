@@ -25,7 +25,7 @@ enum AppTheme {
                 case .dark:
                     return UIColor(red: 0.07, green: 0.09, blue: 0.14, alpha: 1)
                 default:
-                    return UIColor(red: 0.973, green: 0.980, blue: 0.988, alpha: 1)
+                    return UIColor(red: 245 / 255, green: 246 / 255, blue: 250 / 255, alpha: 1)
                 }
             })
         }
@@ -202,11 +202,21 @@ private struct IsSoftwareKeyboardVisibleKey: EnvironmentKey {
     static let defaultValue: Bool = false
 }
 
+private struct MerchantSubscribePillSuppressedKey: EnvironmentKey {
+    static let defaultValue: Bool = false
+}
+
 extension EnvironmentValues {
     /// `true` quand le clavier logiciel iOS est affiché (texte, pas le clavier matériel seul).
     var isSoftwareKeyboardVisible: Bool {
         get { self[IsSoftwareKeyboardVisibleKey.self] }
         set { self[IsSoftwareKeyboardVisibleKey.self] = newValue }
+    }
+
+    /// Masque la pastille d’abonnement (paywall, réglages globaux, etc.).
+    var merchantSubscribePillSuppressed: Bool {
+        get { self[MerchantSubscribePillSuppressedKey.self] }
+        set { self[MerchantSubscribePillSuppressedKey.self] = newValue }
     }
 }
 

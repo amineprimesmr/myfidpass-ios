@@ -40,7 +40,7 @@ enum CardMissingRequirement: Identifiable, Equatable {
     var title: String {
         switch self {
         case .logoOrBandeauTexte:
-            return "Logo ou texte du bandeau"
+            return "Logo du commerce"
         case .couleursCarte:
             return "Couleurs de la carte"
         case .recompenses:
@@ -55,11 +55,11 @@ enum CardMissingRequirement: Identifiable, Equatable {
     var detail: String {
         switch self {
         case .logoOrBandeauTexte:
-            return "Ajoutez un logo, ou passez en texte sur le bandeau."
+            return "Ajoutez un logo (sinon le placeholder « Votre logo » s’affiche)."
         case .couleursCarte:
             return "Définissez le fond, les titres (POINTS, MEMBRE…) et les textes secondaires."
         case .recompenses:
-            return "Renseignez tous les paliers (points) ou toutes les récompenses prévues (tampons)."
+            return "Renseignez toutes les récompenses, y compris « Début du jeu »."
         case .imageDeFondPoints:
             return "Choisissez une image pour la zone sous l’en-tête."
         case .iconeTampons:
@@ -94,21 +94,18 @@ enum MyCardCompletionRequirements {
         return t.allSatisfy(\.isHexDigit)
     }
 
-    /// True si le bandeau haut est correctement renseigné (logo image ou mode texte avec texte).
+    /// True si le bandeau haut est correctement renseigné (logo image ou placeholder par défaut).
     static func hasBandeauComplet(
         stripDisplayMode: String,
         stripText: String,
         displayName: String,
         logoURL: String
     ) -> Bool {
-        let mode = stripDisplayMode.lowercased()
-        if mode == "text" {
-            let t = stripText.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !t.isEmpty { return true }
-            let d = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-            return !d.isEmpty
-        }
-        return !logoURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        _ = stripDisplayMode
+        _ = stripText
+        _ = displayName
+        _ = logoURL
+        return true
     }
 
     static func hasCardBackgroundPoints(
@@ -145,15 +142,23 @@ enum MyCardCompletionRequirements {
 
     private static let pointsRewardTierCount = 5
 
-    /// Tous les paliers points (5 + ligne « Début du jeu » à part), ou toutes les récompenses tampons requises (mi-parcours si > 5 tampons + finale).
+    static func hasStartGameRewardLabel(_ startGameRewardLabel: String) -> Bool {
+        var label = startGameRewardLabel
+        MyCardProgramDefaults.ensureStartGameRewardLabel(&label)
+        return !label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// Tous les paliers points (5 + « Début du jeu »), ou toutes les récompenses tampons requises.
     static func hasRecompensesCompletes(
         programType: String,
         tierPoints: [String],
         tierLabels: [String],
         requiredStamps: Int,
         stampRewardLabel: String,
-        stampMidRewardLabel: String
+        stampMidRewardLabel: String,
+        startGameRewardLabel: String
     ) -> Bool {
+        guard hasStartGameRewardLabel(startGameRewardLabel) else { return false }
         if programType == "points" {
             let ptsArr = tierPoints + Array(repeating: "", count: max(0, pointsRewardTierCount - tierPoints.count))
             let labArr = tierLabels + Array(repeating: "", count: max(0, pointsRewardTierCount - tierLabels.count))
@@ -197,7 +202,8 @@ enum MyCardCompletionRequirements {
         tierLabels: [String],
         requiredStamps: Int,
         stampRewardLabel: String,
-        stampMidRewardLabel: String
+        stampMidRewardLabel: String,
+        startGameRewardLabel: String
     ) -> [CardMissingRequirement] {
         var missing: [CardMissingRequirement] = []
 
@@ -220,7 +226,8 @@ enum MyCardCompletionRequirements {
             tierLabels: tierLabels,
             requiredStamps: requiredStamps,
             stampRewardLabel: stampRewardLabel,
-            stampMidRewardLabel: stampMidRewardLabel
+            stampMidRewardLabel: stampMidRewardLabel,
+            startGameRewardLabel: startGameRewardLabel
         ) {
             missing.append(.recompenses)
         }

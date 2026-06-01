@@ -10,7 +10,6 @@ import fr.myfidpass.data.dto.AuthRefreshResponse
 import fr.myfidpass.data.dto.BusinessDto
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
-import java.time.Instant
 
 private val prefsJson = Json { ignoreUnknownKeys = true }
 
@@ -77,33 +76,159 @@ class SessionStore(context: Context) {
             }
         }
 
-    @Suppress("unused")
-    var merchantTrialEndsAt: String?
-        get() = prefs.getString(KEY_TRIAL_ENDS, null)
+    /** Source de vérité serveur (`has_paid_merchant_subscription` sur login / GET /me). */
+    var serverReportsPaidMerchantSubscription: Boolean?
+        get() = when (prefs.contains(KEY_SUB_PAID)) {
+            true -> prefs.getBoolean(KEY_SUB_PAID, false)
+            false -> null
+        }
         set(value) {
-            if (value.isNullOrEmpty()) prefs.edit().remove(KEY_TRIAL_ENDS).apply()
-            else prefs.edit().putString(KEY_TRIAL_ENDS, value).apply()
+            if (value == null) {
+                prefs.edit().remove(KEY_SUB_PAID).apply()
+            } else {
+                prefs.edit().putBoolean(KEY_SUB_PAID, value).apply()
+            }
         }
-
-    /**
-     * Accès à l’app commerçant (comme `MerchantSubscriptionPaywallBlockingView` iOS) :
-     * abonnement actif, ou essai non expiré ; si l’API n’envoie rien, on n’empêche pas l’usage.
-     */
-    fun isMerchantAccessGranted(): Boolean {
-        if (hasActiveSubscription == true) return true
-        if (hasActiveSubscription == null && merchantTrialEndsAt.isNullOrBlank()) return true
-        val end = merchantTrialEndsAt?.trim()?.takeIf { it.isNotEmpty() } ?: return false
-        return try {
-            Instant.parse(end).isAfter(Instant.now())
-        } catch (_: Exception) {
-            false
-        }
-    }
 
     /** Compte admin plateforme (`is_admin` API). */
     var isAdminUser: Boolean
         get() = prefs.getBoolean(KEY_IS_ADMIN, false)
         set(value) = prefs.edit().putBoolean(KEY_IS_ADMIN, value).apply()
+
+    /** Admin plateforme en mode pilotage commerçant (comme iOS `adminShowsMerchantWorkspace`). */
+    var adminMerchantPilotMode: Boolean
+        get() = prefs.getBoolean(KEY_ADMIN_PILOT, false)
+        set(value) = prefs.edit().putBoolean(KEY_ADMIN_PILOT, value).apply()
+
+    /** `owner` | `manager` | `staff` depuis GET /me ou login. */
+    var workspaceRole: String?
+        get() = prefs.getString(KEY_WORKSPACE_ROLE, null)
+        set(value) {
+            if (value.isNullOrEmpty()) prefs.edit().remove(KEY_WORKSPACE_ROLE).apply()
+            else prefs.edit().putString(KEY_WORKSPACE_ROLE, value).apply()
+        }
+
+    /** Identifiant caisse employé (persistant même si l’API omet `workspace_role`). */
+    var userStaffLogin: String?
+        get() = prefs.getString(KEY_STAFF_LOGIN, null)
+        set(value) {
+            if (value.isNullOrEmpty()) prefs.edit().remove(KEY_STAFF_LOGIN).apply()
+            else prefs.edit().putString(KEY_STAFF_LOGIN, value).apply()
+        }
+
+    fun isMerchantStaffUser(): Boolean {
+        if (workspaceRole == "staff") return true
+        return !userStaffLogin.isNullOrBlank()
+    }
+
+    /** Abonnement Stripe / App Store encaissé — aligné iOS `hasEncashedMerchantSubscription`. */
+    fun hasPaidMerchantSubscription(): Boolean = serverReportsPaidMerchantSubscription == true
+
+    /** Paywall obligatoire post-inscription (mémoire — aligné iOS `isCompletingSignupPaywallPhase`). */
+    var isCompletingSignupPaywallPhase: Boolean = false
+
+    /** Overlay « Merci » après paiement sur le paywall post-inscription. */
+    var pendingSubscriptionThankYouAfterSignup: Boolean = false
+
+    var signupPaywallPaymentConfirmedThisSession: Boolean = false
+
+    fun bypassesMerchantSubscriptionGate(): Boolean {
+        if (isMerchantStaffUser()) return true
+        if (workspaceRole?.trim()?.lowercase() == "manager" && businesses.isEmpty()) return true
+        return false
+    }
+
+    fun beginSignupPaywallPhaseIfNeeded() {
+        signupPaywallPaymentConfirmedThisSession = false
+        if (bypassesMerchantSubscriptionGate() || hasPaidMerchantSubscription()) {
+            isCompletingSignupPaywallPhase = false
+            return
+        }
+        isCompletingSignupPaywallPhase = true
+    }
+
+    fun confirmSignupPaywallPaymentInThisSession() {
+        signupPaywallPaymentConfirmedThisSession = true
+    }
+
+    fun finishSignupPaywallPhase(honorPaidThankYou: Boolean = false) {
+        isCompletingSignupPaywallPhase = false
+        if (honorPaidThankYou &&
+            signupPaywallPaymentConfirmedThisSession &&
+            hasPaidMerchantSubscription()
+        ) {
+            pendingSubscriptionThankYouAfterSignup = true
+        }
+        signupPaywallPaymentConfirmedThisSession = false
+    }
+
+    fun consumePendingSubscriptionThankYouAfterSignup() {
+        pendingSubscriptionThankYouAfterSignup = false
+    }
+
+    /**
+     * Campagnes manuelles + stats détaillées (hors tuile Membres) : abo payant, admin ou équipe.
+     * Abonnement payant uniquement — aligné iOS `merchantProInsightsUnlocked`.
+     */
+    fun merchantProInsightsUnlocked(): Boolean {
+        if (isAdminUser) return true
+        if (isMerchantStaffUser()) return true
+        return hasPaidMerchantSubscription()
+    }
+
+    /** Onglets complets (Accueil + Notifs + Commerce) vs employé (Accueil + Compte). */
+    fun usesFullMerchantTabLayout(): Boolean = !isMerchantStaffUser()
+
+    /** `email` | `google` | `apple` — aligné iOS `AuthStorage.authProvider`. */
+    var authProvider: String?
+        get() = prefs.getString(KEY_AUTH_PROVIDER, null)
+        set(value) {
+            if (value.isNullOrEmpty()) prefs.edit().remove(KEY_AUTH_PROVIDER).apply()
+            else prefs.edit().putString(KEY_AUTH_PROVIDER, value).apply()
+        }
+
+    fun canManageMerchantTeam(): Boolean {
+        if (isMerchantStaffUser()) return false
+        val role = workspaceRole?.trim()?.lowercase().orEmpty()
+        if (role.isEmpty() || role == "owner") return true
+        if (role == "manager") return true
+        return false
+    }
+
+    fun authProviderLabel(): String = when (authProvider?.lowercase()) {
+        "google" -> "Google"
+        "apple" -> "Apple"
+        "phone" -> "Téléphone (SMS)"
+        else -> "E-mail"
+    }
+
+    fun passwordExternalProviderLabel(): String? = when (authProvider?.lowercase()) {
+        "google" -> "Géré par Google"
+        "apple" -> "Géré par Apple"
+        "phone" -> "Connexion par SMS (sans mot de passe)"
+        else -> null
+    }
+
+    var businesses: List<BusinessDto>
+        get() {
+            val raw = prefs.getString(KEY_BUSINESSES, null) ?: return emptyList()
+            return try {
+                prefsJson.decodeFromString<List<BusinessDto>>(raw)
+            } catch (_: Exception) {
+                emptyList()
+            }
+        }
+        set(value) {
+            prefs.edit().putString(KEY_BUSINESSES, prefsJson.encodeToString(value)).apply()
+        }
+
+    fun switchBusiness(slug: String) {
+        val k = slug.trim()
+        if (k.isEmpty()) return
+        if (businesses.any { it.slug == k }) {
+            currentBusinessSlug = k
+        }
+    }
 
     fun mergeDashboardTokens(businesses: List<BusinessDto>) {
         val map = dashboardTokensMap.toMutableMap()
@@ -133,23 +258,45 @@ class SessionStore(context: Context) {
     }
 
     fun clearSession() {
+        isCompletingSignupPaywallPhase = false
+        pendingSubscriptionThankYouAfterSignup = false
+        signupPaywallPaymentConfirmedThisSession = false
         prefs.edit().clear().apply()
     }
 
-    fun applyLoginResponse(r: AuthLoginResponse) {
+    fun applyLoginResponse(r: AuthLoginResponse, passwordLoginField: String? = null) {
         accessToken = r.token
         refreshToken = r.refreshToken
+        businesses = r.businesses
         mergeDashboardTokens(r.businesses)
-        userEmail = r.user.email?.trim().orEmpty().ifEmpty { null }
+        applyUserSession(r.user, passwordLoginField)
         hasActiveSubscription = r.hasActiveSubscription
-        merchantTrialEndsAt = r.merchantTrialEndsAt?.trim()?.takeIf { it.isNotEmpty() }
-        isAdminUser = r.user.isAdmin == true
+        serverReportsPaidMerchantSubscription = r.hasPaidMerchantSubscription
         if (r.businesses.isNotEmpty()) {
             if (currentBusinessSlug == null || r.businesses.none { it.slug == currentBusinessSlug }) {
                 currentBusinessSlug = r.businesses.first().slug
             }
         }
         isLoggedIn = true
+        if (authProvider.isNullOrBlank()) {
+            authProvider = "email"
+        }
+    }
+
+    private fun applyUserSession(user: fr.myfidpass.data.dto.AuthUser, passwordLoginField: String? = null) {
+        userEmail = user.email?.trim().orEmpty().ifEmpty { null }
+        isAdminUser = user.isAdmin == true
+        workspaceRole = user.workspaceRole?.trim()?.takeIf { it.isNotEmpty() }
+        val apiStaff = user.staffLogin?.trim()?.takeIf { it.isNotEmpty() }
+        val field = passwordLoginField?.trim()?.takeIf { it.isNotEmpty() }
+        when {
+            apiStaff != null -> userStaffLogin = apiStaff
+            field != null && !field.contains("@") -> userStaffLogin = field.lowercase()
+            workspaceRole != "staff" -> userStaffLogin = null
+        }
+        if (isMerchantStaffUser() && userStaffLogin != null) {
+            userEmail = userStaffLogin
+        }
     }
 
     fun applyRefreshResponse(r: AuthRefreshResponse) {
@@ -161,18 +308,17 @@ class SessionStore(context: Context) {
         if (r.hasActiveSubscription != null) {
             hasActiveSubscription = r.hasActiveSubscription
         }
-        val trial = r.merchantTrialEndsAt?.trim()?.takeIf { it.isNotEmpty() }
-        if (trial != null) {
-            merchantTrialEndsAt = trial
+        if (r.hasPaidMerchantSubscription != null) {
+            serverReportsPaidMerchantSubscription = r.hasPaidMerchantSubscription
         }
     }
 
     fun applyMeResponse(me: AuthMeResponse) {
+        businesses = me.businesses
         mergeDashboardTokens(me.businesses)
-        me.user.email?.trim()?.takeIf { it.isNotEmpty() }?.let { userEmail = it }
+        applyUserSession(me.user)
         hasActiveSubscription = me.hasActiveSubscription
-        merchantTrialEndsAt = me.merchantTrialEndsAt?.trim()?.takeIf { it.isNotEmpty() }
-        isAdminUser = me.user.isAdmin == true
+        serverReportsPaidMerchantSubscription = me.hasPaidMerchantSubscription
         if (me.businesses.isNotEmpty()) {
             if (currentBusinessSlug == null || me.businesses.none { it.slug == currentBusinessSlug }) {
                 currentBusinessSlug = me.businesses.first().slug
@@ -188,7 +334,12 @@ class SessionStore(context: Context) {
         private const val KEY_SLUG = "current_slug"
         private const val KEY_DASH_MAP = "dashboard_tokens_json"
         private const val KEY_SUB_ACTIVE = "has_active_subscription"
-        private const val KEY_TRIAL_ENDS = "merchant_trial_ends_at"
+        private const val KEY_SUB_PAID = "has_paid_merchant_subscription"
         private const val KEY_IS_ADMIN = "is_admin_user"
+        private const val KEY_ADMIN_PILOT = "admin_merchant_pilot"
+        private const val KEY_BUSINESSES = "businesses_json"
+        private const val KEY_WORKSPACE_ROLE = "workspace_role"
+        private const val KEY_STAFF_LOGIN = "user_staff_login"
+        private const val KEY_AUTH_PROVIDER = "auth_provider"
     }
 }

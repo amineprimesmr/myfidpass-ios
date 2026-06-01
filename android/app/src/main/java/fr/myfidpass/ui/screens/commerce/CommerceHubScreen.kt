@@ -21,6 +21,8 @@ import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Group
+import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.ShowChart
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -47,6 +49,11 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import fr.myfidpass.data.local.SessionStore
 import fr.myfidpass.data.repo.DashboardRepository
+import fr.myfidpass.data.dto.BusinessStatsResponse
+import fr.myfidpass.data.dto.DashboardTrafficPatternsResponse
+import fr.myfidpass.ui.components.BusinessSwitcher
+import fr.myfidpass.ui.components.CommerceFlyerSavedBlock
+import fr.myfidpass.ui.components.CommerceStatsSummary
 import fr.myfidpass.ui.theme.BackgroundLight
 import fr.myfidpass.ui.theme.TextSecondaryLight
 import fr.myfidpass.util.openInCustomTab
@@ -68,6 +75,9 @@ fun CommerceHubScreen(
     onOpenStats: () -> Unit,
     onOpenCategories: () -> Unit,
     onOpenProgram: () -> Unit,
+    onOpenFlyer: () -> Unit = onOpenProgram,
+    onOpenTeam: () -> Unit = {},
+    onOpenScanSecurity: () -> Unit = {},
     onOpenAdmin: () -> Unit,
     onLogout: () -> Unit,
 ) {
@@ -75,11 +85,16 @@ fun CommerceHubScreen(
     val slug = sessionStore.currentBusinessSlug?.trim()?.lowercase().orEmpty()
     var organizationName by remember { mutableStateOf<String?>(null) }
     var showQrDialog by remember { mutableStateOf(false) }
+    var stats by remember { mutableStateOf<BusinessStatsResponse?>(null) }
+    var traffic by remember { mutableStateOf<DashboardTrafficPatternsResponse?>(null) }
 
     LaunchedEffect(slug) {
         if (slug.isEmpty()) return@LaunchedEffect
         runCatching {
-            organizationName = dashboardRepository.businessSettings(slug).organizationName
+            val settings = dashboardRepository.businessSettings(slug)
+            organizationName = settings.organizationName
+            stats = dashboardRepository.businessStats(slug)
+            traffic = dashboardRepository.businessStatsTraffic(slug)
         }
     }
 
@@ -162,6 +177,18 @@ fun CommerceHubScreen(
                     .padding(horizontal = 14.dp)
                     .padding(top = 10.dp, bottom = 24.dp),
             ) {
+                BusinessSwitcher(sessionStore = sessionStore)
+                Spacer(Modifier.height(12.dp))
+                CommerceStatsSummary(stats = stats, traffic = traffic)
+                Spacer(Modifier.height(16.dp))
+                if (slug.isNotEmpty()) {
+                    CommerceFlyerSavedBlock(
+                        slug = slug,
+                        repository = dashboardRepository,
+                        onEditFlyer = onOpenFlyer,
+                    )
+                    Spacer(Modifier.height(12.dp))
+                }
                 Text(
                     "Votre commerce",
                     style = MaterialTheme.typography.titleLarge,
@@ -207,6 +234,10 @@ fun CommerceHubScreen(
                 HubRow(Icons.Default.ShowChart, "Statistiques & activité", onOpenStats)
                 Spacer(Modifier.height(10.dp))
                 HubRow(Icons.Default.Category, "Catégories membres", onOpenCategories)
+                Spacer(Modifier.height(10.dp))
+                HubRow(Icons.Default.Group, "Équipe & accès staff", onOpenTeam)
+                Spacer(Modifier.height(10.dp))
+                HubRow(Icons.Default.Security, "Sécurité scan & anti-fraude", onOpenScanSecurity)
                 Spacer(Modifier.height(10.dp))
                 HubRow(Icons.Default.Extension, "Programme & outils (détail)", onOpenProgram)
                 if (isAdmin) {

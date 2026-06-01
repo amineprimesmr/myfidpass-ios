@@ -2,14 +2,14 @@
 //  CardPreviewConfiguratorPill.swift
 //  myfidpass
 //
-//  Pastilles « Configurer » sur l’aperçu carte (Ma carte) — boutons par zone.
+//  Pastilles statiques "Touchez" sur l'aperçu carte (Ma carte).
 //
 
 import SwiftUI
 
-/// Pastille sur l’aperçu : indique où taper pour compléter un élément obligatoire.
 struct CardPreviewConfiguratorPill: View {
-    @State private var isBlinking = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isPulsing = false
 
     var body: some View {
         HStack(spacing: 5) {
@@ -30,31 +30,35 @@ struct CardPreviewConfiguratorPill: View {
                 .strokeBorder(Color.white.opacity(0.34), lineWidth: 1)
         )
         .shadow(color: Color.black.opacity(0.35), radius: 8, y: 4)
-        .compositingGroup()
-        .opacity(isBlinking ? 1 : 0.5)
-        .scaleEffect(isBlinking ? 1 : 0.97)
-        .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: isBlinking)
-        .onAppear { isBlinking = true }
-        .onDisappear { isBlinking = false }
+        .fixedSize()
+        .scaleEffect(reduceMotion ? 1 : (isPulsing ? 1.08 : 0.96), anchor: .center)
+        .task {
+            guard !reduceMotion else { return }
+            try? await Task.sleep(nanoseconds: 80_000_000)
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeInOut(duration: 0.82).repeatForever(autoreverses: true)) {
+                isPulsing = true
+            }
+        }
+        .onDisappear {
+            isPulsing = false
+        }
     }
 }
 
-/// Placement des pastilles selon le type d’aperçu (points vs tampons).
 enum CardPreviewPillsLayoutStyle {
-    /// Mode points : métriques sous le bandeau image.
+    /// Mode points (ou tampons avec image de fond : colonne TAMPONS dans le corps).
     case walletPoints
-    /// Mode tampons : grille + icône dans le bandeau 750×246.
-    case stampsBannerMetrics
+    /// Tampons sans image : grille dans le bandeau 750×246 (zone `.mainMetrics`).
+    case stampGridInBanner
 }
 
-/// Pastilles au-dessus de la carte : chaque pastille est un bouton qui ouvre la zone correspondante.
-/// Le fond du calque laisse passer les touches ; seules les pastilles interceptent le tap.
 struct CardPreviewCompletionPillsOverlay: View {
     let cardWidth: CGFloat
     let totalHeight: CGFloat
     var compact: Bool
     let zones: Set<CardPreviewEditZone>
-    let layoutStyle: CardPreviewPillsLayoutStyle
+    var layoutStyle: CardPreviewPillsLayoutStyle = .walletPoints
     let onTapZone: (CardPreviewEditZone) -> Void
 
     private var headH: CGFloat { compact ? 70 : 100 }
@@ -70,6 +74,7 @@ struct CardPreviewCompletionPillsOverlay: View {
             CardPreviewConfiguratorPill()
         }
         .buttonStyle(.plain)
+        .fixedSize()
         .position(x: x, y: y)
     }
 
@@ -80,7 +85,6 @@ struct CardPreviewCompletionPillsOverlay: View {
         let bodyH = max(0, h - headH - banH)
 
         ZStack(alignment: .topLeading) {
-            // Laisse passer les touches vers la carte sauf sur les pastilles (sœurs au-dessus).
             Color.clear
                 .frame(width: w, height: h)
                 .allowsHitTesting(false)
@@ -89,7 +93,6 @@ struct CardPreviewCompletionPillsOverlay: View {
                 pillButton(zone: .logoBand, x: w * 0.24, y: headH * 0.42)
             }
             if zones.contains(.headerRight) {
-                // Aligné sur le lien « Récompenses » (trailing du bandeau).
                 pillButton(zone: .headerRight, x: w * 0.84, y: headH * 0.44)
             }
             if zones.contains(.backgroundImage) {
@@ -99,7 +102,7 @@ struct CardPreviewCompletionPillsOverlay: View {
                 switch layoutStyle {
                 case .walletPoints:
                     pillButton(zone: .mainMetrics, x: w * 0.24, y: headH + banH + bodyH * 0.2)
-                case .stampsBannerMetrics:
+                case .stampGridInBanner:
                     pillButton(zone: .mainMetrics, x: w * 0.5, y: headH + banH * 0.5)
                 }
             }
@@ -107,6 +110,6 @@ struct CardPreviewCompletionPillsOverlay: View {
                 pillButton(zone: .cardAppearance, x: w * 0.72, y: headH + banH + bodyH * 0.55)
             }
         }
-        .frame(width: w, height: h)
+        .frame(width: w, height: h, alignment: .topLeading)
     }
 }

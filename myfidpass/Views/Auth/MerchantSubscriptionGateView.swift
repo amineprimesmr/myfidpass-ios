@@ -2,7 +2,7 @@
 //  MerchantSubscriptionGateView.swift
 //  myfidpass
 //
-//  Paywall souscription : Stripe Checkout (API SaaS), avec réconciliation après retour dans l’app.
+//  Paywall souscription : achats in-app App Store (StoreKit 2).
 //
 
 import SwiftUI
@@ -12,12 +12,13 @@ struct MerchantSubscriptionGateView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var authService: AuthService
 
-    /// Plusieurs `onChange` peuvent appeler la fermeture dans le même cycle ; une seule notif « paiement OK ».
-    @State private var didEmitPaidNotificationThisPresentation = false
-
-    /// `true` : écran racine après connexion sans abonnement.
-    /// `false` : feuille modale (sheet) — fermeture par glissement uniquement.
+    /// `true` : paywall plein écran bloquant (fin d’inscription).
+    /// `false` : feuille modale (sheet) — fermeture par glissement.
     var isMandatory: Bool = false
+    /// Forfait IAP cible (1–5 commerces). `nil` = déduit du quota / nombre de commerces.
+    var requiredCommerceSlots: Int? = nil
+    /// Nom du commerce affiché sous le titre (post-inscription).
+    var signupCommerceDisplayName: String? = nil
 
     /// Croix affichée sur le paywall **obligatoire** (post-inscription) — jamais sur la sheet.
     private var showsPaywallCloseButton: Bool {
@@ -25,53 +26,32 @@ struct MerchantSubscriptionGateView: View {
     }
 
     var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-
-            MerchantSaasPaymentWebView(
+        CustomMerchantProPaywallView(
                 allowsCloseButton: showsPaywallCloseButton,
                 onCloseRequested: showsPaywallCloseButton ? { finishMerchantSubscriptionGate() } : nil,
-                headerExtraTopPadding: isMandatory ? 4 : 28,
+                headerExtraTopPadding: isMandatory ? 10 : 28,
                 closeButtonRevealDelay: (isMandatory && showsPaywallCloseButton) ? 0 : 5,
-                webContentExtraTopInset: isMandatory ? 10 : 22
+                requiredCommerceSlots: requiredCommerceSlots,
+                signupCommerceDisplayName: signupCommerceDisplayName
             )
-        }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onAppear {
-            didEmitPaidNotificationThisPresentation = false
-        }
         .task {
-            // Rafraîchir la session native AVANT la WebView paiement (évite 401 « Authentification requise » + refresh concurrent).
             await APIClient.shared.ensureValidAccessToken()
-            await authService.reconcileStripeSubscriptionFromServer(force: true)
-        }
-        .onChange(of: authService.merchantSubscription?.status) { _, _ in
-            if shouldDismissGateAsSubscribed { finishMerchantSubscriptionGate() }
-        }
-        .onChange(of: authService.isPlatformAdmin) { _, _ in
-            if shouldDismissGateAsSubscribed { finishMerchantSubscriptionGate() }
-        }
-        .onChange(of: authService.hasActiveMerchantSubscription) { _, _ in
-            if shouldDismissGateAsSubscribed { finishMerchantSubscriptionGate() }
+            // Jamais de restore / reconcile Apple à l’ouverture : faux positif « déjà payé » + fermeture auto.
+            await authService.refreshBusinessesIfNeeded(force: false)
         }
     }
 
-    private var shouldDismissGateAsSubscribed: Bool {
-        authService.isPlatformAdmin
-            || authService.hasPaidStripeSubscription
-    }
-
-    /// Ferme la feuille modale ; le flag post-inscription est nettoyé pour compatibilité.
+    /// Ferme la feuille modale ou le paywall plein écran post-inscription.
     @MainActor
     private func finishMerchantSubscriptionGate() {
-        if shouldDismissGateAsSubscribed && !didEmitPaidNotificationThisPresentation {
-            didEmitPaidNotificationThisPresentation = true
-            NotificationCenter.default.post(name: .myfidpassSubscriptionPaymentCompleted, object: nil)
+        if isMandatory {
+            // Croix = quitter sans payer : jamais l’écran « Merci » (même si un abo Apple existe sur l’appareil).
+            authService.finishSignupPaywallPhase(honorPaidThankYou: false)
+            return
         }
         authService.clearMandatoryPaywallAfterSignupPending()
-        if !isMandatory {
-            dismiss()
-        }
+        dismiss()
     }
 }
 

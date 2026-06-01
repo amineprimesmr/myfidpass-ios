@@ -14,6 +14,13 @@ import fr.myfidpass.data.dto.BusinessSettingsResponse
 import fr.myfidpass.data.dto.BusinessStatsResponse
 import fr.myfidpass.data.dto.BusinessTransactionsResponse
 import fr.myfidpass.data.dto.ClaimRewardResponseDto
+import fr.myfidpass.data.dto.EmailSendCodeRequest
+import fr.myfidpass.data.dto.EmailSendCodeResponse
+import fr.myfidpass.data.dto.EmailVerifyRequest
+import fr.myfidpass.data.dto.CheckIdentifierRequest
+import fr.myfidpass.data.dto.CheckIdentifierResponse
+import fr.myfidpass.data.dto.CreateBusinessFromPlaceRequest
+import fr.myfidpass.data.dto.CreateBusinessFromPlaceResponse
 import fr.myfidpass.data.dto.CreateBusinessRequest
 import fr.myfidpass.data.dto.CreateBusinessResponse
 import fr.myfidpass.data.dto.CheckoutUrlResponse
@@ -25,9 +32,15 @@ import fr.myfidpass.data.dto.CreditMemberRequest
 import fr.myfidpass.data.dto.CreditPointsResponse
 import fr.myfidpass.data.dto.DashboardEvolutionResponse
 import fr.myfidpass.data.dto.DashboardTrafficPatternsResponse
-import fr.myfidpass.data.dto.ForgotPasswordRequest
+import fr.myfidpass.data.dto.MerchantAccountingPackResponse
+import fr.myfidpass.data.dto.TransactionExportJsonResponse
 import fr.myfidpass.data.dto.GoogleAuthRequest
 import fr.myfidpass.data.dto.DeviceRegisterRequest
+import fr.myfidpass.data.dto.ForgotPasswordRequest
+import fr.myfidpass.data.dto.GoogleBusinessPostsResponse
+import fr.myfidpass.data.dto.GoogleBusinessReviewReplyRequest
+import fr.myfidpass.data.dto.GoogleBusinessReviewsResponse
+import fr.myfidpass.data.dto.GoogleBusinessStatusResponse
 import fr.myfidpass.data.dto.GoogleWalletUrlResponse
 import fr.myfidpass.data.dto.LoginRequest
 import fr.myfidpass.data.dto.LogoutRequest
@@ -36,14 +49,22 @@ import fr.myfidpass.data.dto.MemberRewardsListResponse
 import fr.myfidpass.data.dto.MemberTicketsResponse
 import fr.myfidpass.data.dto.NotifyClientsRequest
 import fr.myfidpass.data.dto.NotificationSendRequest
+import fr.myfidpass.data.dto.BusinessCheckoutSessionRequest
 import fr.myfidpass.data.dto.PaymentCheckoutRequest
 import fr.myfidpass.data.dto.PatchGameRequest
+import fr.myfidpass.data.dto.DevSimulatePaymentResponse
 import fr.myfidpass.data.dto.PaymentReconcileResponse
 import fr.myfidpass.data.dto.PlacesAutocompleteResponse
 import fr.myfidpass.data.dto.PlacesPlaceDetailsResponse
 import fr.myfidpass.data.dto.WorkspaceTeamInviteRequest
 import fr.myfidpass.data.dto.WorkspaceTeamInviteResponse
 import fr.myfidpass.data.dto.WorkspaceTeamListResponse
+import fr.myfidpass.data.dto.WorkspaceTeamMemberDetailResponse
+import fr.myfidpass.data.dto.WorkspaceTeamMemberPatchRequest
+import fr.myfidpass.data.dto.WorkspaceTeamMemberPatchResponse
+import fr.myfidpass.data.dto.WorkspaceTeamResendAccessResponse
+import fr.myfidpass.data.dto.WorkspaceTeamStaffAccountRequest
+import fr.myfidpass.data.dto.WorkspaceTeamStaffAccountResponse
 import fr.myfidpass.data.dto.PortalUrlResponse
 import fr.myfidpass.data.dto.RegisterRequest
 import fr.myfidpass.data.dto.ReceiptChallengeRequest
@@ -54,12 +75,16 @@ import fr.myfidpass.data.dto.RemovePointsRequest
 import fr.myfidpass.data.dto.TicketsConvertRequest
 import fr.myfidpass.data.dto.ResetPasswordRequest
 import fr.myfidpass.data.dto.ScanLookupEnvelope
+import fr.myfidpass.data.dto.RewardRedeemScanRequest
+import fr.myfidpass.data.dto.RewardRedeemScanResponse
 import fr.myfidpass.data.dto.ScanRequest
 import fr.myfidpass.data.dto.ScanResponse
 import fr.myfidpass.data.dto.UpdateCategoryRequest
 import fr.myfidpass.data.dto.UpdateMemberCategoriesRequest
 import kotlinx.serialization.json.JsonObject
+import okhttp3.ResponseBody
 import retrofit2.http.Body
+import retrofit2.http.Streaming
 import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.Header
@@ -73,6 +98,15 @@ interface MyfidpassApi {
 
     @POST("/api/auth/login")
     suspend fun login(@Body body: LoginRequest): AuthLoginResponse
+
+    @POST("/api/auth/check-identifier")
+    suspend fun checkIdentifier(@Body body: CheckIdentifierRequest): CheckIdentifierResponse
+
+    @POST("/api/auth/email/send-code")
+    suspend fun emailSendCode(@Body body: EmailSendCodeRequest): EmailSendCodeResponse
+
+    @POST("/api/auth/email/verify")
+    suspend fun emailVerify(@Body body: EmailVerifyRequest): AuthLoginResponse
 
     @POST("/api/auth/register")
     suspend fun register(@Body body: RegisterRequest): AuthLoginResponse
@@ -110,11 +144,16 @@ interface MyfidpassApi {
     @POST("/api/businesses")
     suspend fun createBusiness(@Body body: CreateBusinessRequest): CreateBusinessResponse
 
+    @POST("/api/businesses/create-from-place")
+    suspend fun createBusinessFromPlace(
+        @Body body: CreateBusinessFromPlaceRequest,
+    ): CreateBusinessFromPlaceResponse
+
     @PATCH("/api/businesses/{slug}/dashboard/settings")
     suspend fun patchDashboardSettings(
         @Path("slug") slug: String,
         @Body body: JsonObject,
-    ): JsonObject
+    )
 
     @GET("/api/businesses/{slug}/dashboard/stats")
     suspend fun businessStats(
@@ -155,6 +194,40 @@ interface MyfidpassApi {
         @Query("type") type: String? = null,
         @Query("sort") sort: String? = null,
     ): BusinessTransactionsResponse
+
+    @GET("/api/businesses/{slug}/dashboard/transactions/export")
+    @Streaming
+    suspend fun businessTransactionsExportCsv(
+        @Path("slug") slug: String,
+        @Query("format") format: String = "csv",
+        @Query("days") days: Int? = null,
+        @Query("from") from: String? = null,
+        @Query("to") to: String? = null,
+        @Query("types") types: String? = null,
+        @Query("member_id") memberId: String? = null,
+        @Query("limit") limit: Int? = null,
+    ): ResponseBody
+
+    @GET("/api/businesses/{slug}/dashboard/transactions/export")
+    suspend fun businessTransactionsExportJson(
+        @Path("slug") slug: String,
+        @Query("format") format: String = "json",
+        @Query("days") days: Int? = null,
+        @Query("from") from: String? = null,
+        @Query("to") to: String? = null,
+        @Query("types") types: String? = null,
+        @Query("member_id") memberId: String? = null,
+        @Query("limit") limit: Int? = null,
+    ): TransactionExportJsonResponse
+
+    @GET("/api/businesses/{slug}/dashboard/accounting-pack")
+    suspend fun businessAccountingPack(
+        @Path("slug") slug: String,
+        @Query("days") days: Int? = null,
+        @Query("from") from: String? = null,
+        @Query("to") to: String? = null,
+        @Query("limit") limit: Int? = null,
+    ): MerchantAccountingPackResponse
 
     @GET("/api/businesses/{slug}/dashboard/settings")
     suspend fun businessSettings(@Path("slug") slug: String): BusinessSettingsResponse
@@ -217,6 +290,52 @@ interface MyfidpassApi {
         @Body body: JsonObject,
     ): JsonObject
 
+    @GET("/api/businesses/{slug}/dashboard/social-missions")
+    suspend fun dashboardSocialMissions(@Path("slug") slug: String): JsonObject
+
+    @PATCH("/api/businesses/{slug}/dashboard/social-missions")
+    suspend fun dashboardSocialMissionsPatch(
+        @Path("slug") slug: String,
+        @Body body: JsonObject,
+    ): JsonObject
+
+    @GET("/api/businesses/{slug}/dashboard/social-missions/stats")
+    suspend fun dashboardSocialMissionsStats(@Path("slug") slug: String): JsonObject
+
+    @GET("/api/businesses/{slug}/dashboard/match-predictions")
+    suspend fun dashboardMatchPredictions(@Path("slug") slug: String): JsonObject
+
+    @PATCH("/api/businesses/{slug}/dashboard/match-predictions/config")
+    suspend fun dashboardMatchPredictionsConfig(
+        @Path("slug") slug: String,
+        @Body body: JsonObject,
+    ): JsonObject
+
+    @PATCH("/api/businesses/{slug}/dashboard/match-predictions/matches/{matchId}/result")
+    suspend fun dashboardMatchPredictionsSetResult(
+        @Path("slug") slug: String,
+        @Path("matchId") matchId: String,
+        @Body body: JsonObject,
+    ): JsonObject
+
+    @GET("/api/businesses/{slug}/dashboard/members/export")
+    @Streaming
+    suspend fun businessMembersExportCsv(
+        @Path("slug") slug: String,
+        @Query("search") search: String? = null,
+        @Query("filter") filter: String? = null,
+        @Query("sort") sort: String? = null,
+    ): ResponseBody
+
+    @POST("/api/businesses/{slug}/dashboard/flyer/remove-logo-background")
+    suspend fun dashboardFlyerRemoveLogoBackground(
+        @Path("slug") slug: String,
+        @Body body: JsonObject,
+    ): JsonObject
+
+    @GET("/api/businesses/{slug}/logo-nobg")
+    suspend fun dashboardLogoNobg(@Path("slug") slug: String): JsonObject
+
     @GET("/api/businesses/{slug}/dashboard/flyer")
     suspend fun dashboardFlyerGet(@Path("slug") slug: String): JsonObject
 
@@ -268,6 +387,93 @@ interface MyfidpassApi {
     @GET("/api/businesses/{slug}/dashboard/social-oauth/google-business/start")
     suspend fun socialOAuthGoogleBusinessStart(@Path("slug") slug: String): JsonObject
 
+    @GET("/api/businesses/{slug}/dashboard/google-business/status")
+    suspend fun googleBusinessStatus(@Path("slug") slug: String): GoogleBusinessStatusResponse
+
+    @GET("/api/businesses/{slug}/dashboard/google-business/reviews")
+    suspend fun googleBusinessReviews(
+        @Path("slug") slug: String,
+        @Query("limit") limit: Int? = 20,
+    ): GoogleBusinessReviewsResponse
+
+    @POST("/api/businesses/{slug}/dashboard/google-business/reviews/sync")
+    suspend fun googleBusinessReviewsSync(
+        @Path("slug") slug: String,
+        @Body body: JsonObject,
+    ): JsonObject
+
+    @POST("/api/businesses/{slug}/dashboard/google-business/reviews/{reviewId}/reply")
+    suspend fun googleBusinessReviewReply(
+        @Path("slug") slug: String,
+        @Path("reviewId") reviewId: String,
+        @Body body: GoogleBusinessReviewReplyRequest,
+    ): JsonObject
+
+    @GET("/api/businesses/{slug}/dashboard/google-business/posts")
+    suspend fun googleBusinessPosts(
+        @Path("slug") slug: String,
+        @Query("limit") limit: Int? = 20,
+    ): GoogleBusinessPostsResponse
+
+    @POST("/api/businesses/{slug}/dashboard/google-business/posts")
+    suspend fun googleBusinessPostCreate(
+        @Path("slug") slug: String,
+        @Body body: fr.myfidpass.data.dto.GoogleBusinessCreatePostRequest,
+    ): JsonObject
+
+    @POST("/api/businesses/{slug}/dashboard/google-business/reviews/mark-all-seen")
+    suspend fun googleBusinessReviewsMarkAllSeen(
+        @Path("slug") slug: String,
+        @Body body: JsonObject,
+    ): JsonObject
+
+    @POST("/api/businesses/{slug}/dashboard/google-business/reviews/{reviewId}/reply-ai")
+    suspend fun googleBusinessReviewReplyAi(
+        @Path("slug") slug: String,
+        @Path("reviewId") reviewId: String,
+        @Body body: JsonObject,
+    ): JsonObject
+
+    @DELETE("/api/businesses/{slug}/dashboard/google-business/reviews/{reviewId}/reply")
+    suspend fun googleBusinessReviewDeleteReply(
+        @Path("slug") slug: String,
+        @Path("reviewId") reviewId: String,
+    ): JsonObject
+
+    @GET("/api/businesses/{slug}/dashboard/google-business/questions")
+    suspend fun googleBusinessQuestions(@Path("slug") slug: String): JsonObject
+
+    @POST("/api/businesses/{slug}/dashboard/google-business/questions/{questionId}/answer")
+    suspend fun googleBusinessQuestionAnswer(
+        @Path("slug") slug: String,
+        @Path("questionId") questionId: String,
+        @Body body: JsonObject,
+    ): JsonObject
+
+    @GET("/api/businesses/{slug}/dashboard/google-business/insights")
+    suspend fun googleBusinessInsights(
+        @Path("slug") slug: String,
+        @Query("days") days: Int? = 30,
+    ): JsonObject
+
+    @POST("/api/businesses/{slug}/dashboard/google-business/retry-pending-location")
+    suspend fun googleBusinessRetryPendingLocation(
+        @Path("slug") slug: String,
+        @Body body: JsonObject,
+    ): JsonObject
+
+    @GET("/api/businesses/{slug}/members/{memberId}/pass")
+    suspend fun walletPass(
+        @Path("slug") slug: String,
+        @Path("memberId") memberId: String,
+    ): JsonObject
+
+    @POST("/api/businesses/{slug}/members/import")
+    suspend fun membersImport(
+        @Path("slug") slug: String,
+        @Body body: JsonObject,
+    ): JsonObject
+
     @GET("/api/businesses/{slug}/dashboard/social-oauth/tiktok/start")
     suspend fun socialOAuthTiktokStart(@Path("slug") slug: String): JsonObject
 
@@ -288,6 +494,12 @@ interface MyfidpassApi {
         @Path("slug") slug: String,
         @Body body: ScanRequest,
     ): ScanResponse
+
+    @POST("/api/businesses/{slug}/integration/reward-redeem")
+    suspend fun integrationRewardRedeem(
+        @Path("slug") slug: String,
+        @Body body: RewardRedeemScanRequest,
+    ): RewardRedeemScanResponse
 
     @GET("/api/businesses/{slug}/notifications/campaign-segments")
     suspend fun notificationSegments(@Path("slug") slug: String): JsonObject
@@ -325,8 +537,14 @@ interface MyfidpassApi {
     @POST("/api/payment/create-checkout-session")
     suspend fun paymentCheckout(@Body body: PaymentCheckoutRequest): CheckoutUrlResponse
 
+    @POST("/api/payment/create-business-checkout-session")
+    suspend fun paymentBusinessCheckout(@Body body: BusinessCheckoutSessionRequest): CheckoutUrlResponse
+
     @POST("/api/payment/reconcile-subscription")
     suspend fun paymentReconcile(): PaymentReconcileResponse
+
+    @POST("/api/businesses/{slug}/dashboard/dev-simulate-payment")
+    suspend fun devSimulatePayment(@Path("slug") slug: String): DevSimulatePaymentResponse
 
     @POST("/api/payment/create-portal-session")
     suspend fun paymentPortal(): PortalUrlResponse
@@ -432,11 +650,37 @@ interface MyfidpassApi {
         @Path("slug") slug: String,
     ): WorkspaceTeamListResponse
 
+    @GET("/api/businesses/{slug}/dashboard/team/members/{memberId}")
+    suspend fun workspaceTeamMemberDetail(
+        @Path("slug") slug: String,
+        @Path("memberId") memberId: String,
+    ): WorkspaceTeamMemberDetailResponse
+
+    @PATCH("/api/businesses/{slug}/dashboard/team/members/{memberId}")
+    suspend fun workspaceTeamMemberPatch(
+        @Path("slug") slug: String,
+        @Path("memberId") memberId: String,
+        @Body body: WorkspaceTeamMemberPatchRequest,
+    ): WorkspaceTeamMemberPatchResponse
+
+    @POST("/api/businesses/{slug}/dashboard/team/members/{memberId}/resend-access")
+    suspend fun workspaceTeamMemberResendAccess(
+        @Path("slug") slug: String,
+        @Path("memberId") memberId: String,
+        @Body body: JsonObject,
+    ): WorkspaceTeamResendAccessResponse
+
     @POST("/api/businesses/{slug}/dashboard/team/invites")
     suspend fun workspaceTeamInvite(
         @Path("slug") slug: String,
         @Body body: WorkspaceTeamInviteRequest,
     ): WorkspaceTeamInviteResponse
+
+    @POST("/api/businesses/{slug}/dashboard/team/staff-accounts")
+    suspend fun businessTeamStaffAccount(
+        @Path("slug") slug: String,
+        @Body body: WorkspaceTeamStaffAccountRequest,
+    ): WorkspaceTeamStaffAccountResponse
 
     @DELETE("/api/businesses/{slug}/dashboard/team/members/{memberId}")
     suspend fun workspaceTeamRevoke(

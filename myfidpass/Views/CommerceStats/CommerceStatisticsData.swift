@@ -131,12 +131,10 @@ struct CommerceStatisticsPresentation {
     let trendPanierDeltaEuro: Double?
     let trendFrequenceDelta: Double?
     let donutSegments: [CommerceDonutSegment]
-    /// Section « Plus d’indicateurs » (sans doublon avec la carte nouveaux membres, ni avis Google).
+    /// Section « Plus de données » (actifs, points, récompenses — hors engagement).
     let categoryRows: [CommerceCategoryRowData]
-    /// Section dédiée « Avis Google ».
-    let googleReviewsRows: [CommerceCategoryRowData]
-    /// Section dédiée réseaux sociaux (Instagram, TikTok, Facebook, X) — vide si non configuré.
-    let socialNetworkRows: [CommerceCategoryRowData]
+    /// Section « Engagement » : avis Google + réseaux (missions fidélité).
+    let engagementRows: [CommerceCategoryRowData]
     let barWeeksOperations: [CommerceBarWeekData]
     /// Courbe haute de la tuile **Membres** : **une** valeur normalisée [0,1] par semaine (API), préf. `membersCount`, sinon `operationsCount`. Pas les parts du donut.
     let membersWeeklySparkline: [CGFloat]
@@ -243,22 +241,20 @@ enum CommerceStatisticsDataBuilder {
             ),
         ]
 
-        let googleReviewsRows: [CommerceCategoryRowData] = [
-            .init(
-                id: "grev",
-                title: "Avis Google (nouveaux)",
-                subtitle: "Détectés sur la période",
-                rightPrimary: "+\(StatsFR.formatInt(googleRev))",
-                rightSecondary: weightPctGoogle(wG),
-                iconName: "star.bubble.fill",
-                swatch: Color(red: 0.26, green: 0.52, blue: 0.96),
-                audienceSplit: nil,
-                googleReviewsDetail: .init(
-                    monthKey: stats?.periodKey ?? stats?.period,
-                    newReviewsInPeriod: max(0, googleRev)
-                )
-            ),
-        ]
+        let googleReviewRow = CommerceCategoryRowData(
+            id: "grev",
+            title: "Google",
+            subtitle: "Clients ayant validé la mission avis",
+            rightPrimary: "+\(StatsFR.formatInt(googleRev))",
+            rightSecondary: weightPctGoogle(wG),
+            iconName: "star.bubble.fill",
+            swatch: Color(red: 0.26, green: 0.52, blue: 0.96),
+            audienceSplit: nil,
+            googleReviewsDetail: .init(
+                monthKey: stats?.periodKey ?? stats?.period,
+                newReviewsInPeriod: max(0, googleRev)
+            )
+        )
 
         let panier: Double? = {
             guard let api = stats?.avgBasketEur, api > 0 else { return nil }
@@ -291,7 +287,7 @@ enum CommerceStatisticsDataBuilder {
 
         let (dPanier, dFreq) = trendDeltas(evolution: evolution, stats: stats)
 
-        let socialNetworkRows: [CommerceCategoryRowData] = {
+        let socialEngagementRows: [CommerceCategoryRowData] = {
             guard let sf = stats?.socialFollowsClaimed else { return [] }
             let nets: [(id: String, label: String, icon: String, count: Int)] = [
                 ("social-instagram", "Instagram", "camera.fill",      sf.instagram ?? 0),
@@ -319,6 +315,8 @@ enum CommerceStatisticsDataBuilder {
             }
         }()
 
+        let engagementRows = [googleReviewRow] + socialEngagementRows
+
 
         return CommerceStatisticsPresentation(
             panierMoyenEuro: panier,
@@ -329,8 +327,7 @@ enum CommerceStatisticsDataBuilder {
             trendFrequenceDelta: dFreq,
             donutSegments: donut,
             categoryRows: indicatorRows,
-            googleReviewsRows: googleReviewsRows,
-            socialNetworkRows: socialNetworkRows,
+            engagementRows: engagementRows,
             barWeeksOperations: bars,
             membersWeeklySparkline: membersSpark,
             membersTotal: members,
@@ -350,8 +347,7 @@ enum CommerceStatisticsDataBuilder {
             trendFrequenceDelta: mock.trendFrequenceDelta,
             donutSegments: real.donutSegments,
             categoryRows: mock.categoryRows,
-            googleReviewsRows: mock.googleReviewsRows,
-            socialNetworkRows: mock.socialNetworkRows,
+            engagementRows: mock.engagementRows,
             barWeeksOperations: mock.barWeeksOperations,
             membersWeeklySparkline: real.membersWeeklySparkline,
             membersTotal: real.membersTotal,
@@ -552,6 +548,12 @@ enum CommerceStatsMonthNavigator {
         let raw = f.string(from: date)
         guard let first = raw.first else { return key }
         return String(first).uppercased() + raw.dropFirst()
+    }
+
+    /// Titre carrousel stats : « En mai », « En septembre »…
+    static func displayTitleInMonth(forMonthKey key: String) -> String {
+        let month = displayTitleMonthOnly(forMonthKey: key)
+        return "En \(month.lowercased())"
     }
 
     /// Titre type « Avril » (sans année).

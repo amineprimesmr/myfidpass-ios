@@ -25,8 +25,8 @@ enum DashboardHomeLayoutMetrics {
     static let scrollHorizontalPadding: CGFloat = 16
     /// Aligné sur le bloc carte (`AppTheme.Spacing.lg`) : même bord gauche/droit, plus d’étroitissement excessif du titre.
     static let transactionsSectionExtraHorizontal: CGFloat = AppTheme.Spacing.lg
-    /// Accueil commerçant uniquement : réduit l’inset sous la barre pour remonter la carte (Profil / Périmètre inchangés).
-    static let homeScrollTopPullUp: CGFloat = 8
+    /// Conservé à 0 : un « pull-up » masquait les coins arrondis du panneau sous la barre.
+    static let homeScrollTopPullUp: CGFloat = 0
 }
 
 // MARK: - Pastilles type barre nav / fiche membre (Liquid Glass iOS 26)
@@ -114,19 +114,23 @@ struct DashboardHomeCardModel {
     @MainActor
     static func resolve(dataService: DataService) -> DashboardHomeCardModel? {
         _ = dataService.updateTrigger
-        guard let template = dataService.currentCardTemplate() else { return nil }
-        let slug = AuthStorage.currentBusinessSlug ?? ""
-        let snap = slug.isEmpty ? nil : CardPreviewDisplaySnapshotStore.load(slug: slug)
+        let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !slug.isEmpty else { return nil }
+        let snap = CardPreviewDisplaySnapshotStore.load(slug: slug)
+        let template = dataService.currentCardTemplate()
+        if snap == nil, template == nil {
+            return neutralLoadingPreview(slug: slug)
+        }
 
-        let displayName = snap?.displayName ?? template.displayName ?? "Ma Carte Fidélité"
+        let displayName = snap?.displayName ?? template?.displayName ?? "Ma Carte Fidélité"
         let programType = (snap?.programType ?? "points").lowercased()
         let pt = (programType == "points") ? "points" : "stamps"
         let primaryHex = normalizeHex(
-            snap?.primaryHex ?? template.primaryColorHex,
+            snap?.primaryHex ?? template?.primaryColorHex,
             fallback: AppTheme.WalletCardAppearanceDefaults.backgroundHex
         )
         let accentHex = normalizeHex(
-            snap?.accentHex ?? template.accentColorHex,
+            snap?.accentHex ?? template?.accentColorHex,
             fallback: AppTheme.WalletCardAppearanceDefaults.bodyTextHex
         )
         let labelHex = normalizeHex(
@@ -141,17 +145,17 @@ struct DashboardHomeCardModel {
         if let s = snap?.logoURL, !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             logoRaw = s
         } else {
-            let strip = template.logoURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let icon = template.logoIconURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let strip = template?.logoURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let icon = template?.logoIconURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             logoRaw = strip.isEmpty ? icon : strip
         }
         let logoURL = logoRaw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : logoRaw
-        let stampRaw = snap?.stampEmoji ?? template.stampEmoji ?? ""
+        let stampRaw = snap?.stampEmoji ?? template?.stampEmoji ?? ""
         let stampEmoji = stampRaw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : stampRaw
-        let req = snap?.requiredStamps ?? Int(template.requiredStamps)
+        let req = snap?.requiredStamps ?? Int(template?.requiredStamps ?? 10)
         let requiredStamps: Int32 = Int32(max(1, req))
         let cap = max(1, Int(requiredStamps))
-        let uniqueCards = dataService.uniqueClientCards(for: template)
+        let uniqueCards = template.map { dataService.uniqueClientCards(for: $0) } ?? []
         let firstNonPreview = uniqueCards.first { card in
             !WalletPreviewMember.shouldExcludeFromMerchantActivity(clientEmail: card.clientEmail)
         }
@@ -167,19 +171,22 @@ struct DashboardHomeCardModel {
             previewPoints = 0
             previewStamps = Int32(min(max(0, balance), cap))
         }
-        // Fond distant : snapshot (rempli après sync, ou créé depuis settings si jamais « Ma carte ») ; repli cache scan si course entre vues.
+        // Fond distant : mode points uniquement (tampons = grille, pas de photo bandeau).
         let bgRemote: String?
-        if let snap, snap.hasRemoteCardBackground, let u = snap.cardBackgroundRemoteURL, !u.isEmpty {
-            bgRemote = u
-        } else if let cached = ScanFlowSettingsCache.cached(for: slug), cached.hasCardBackground == true {
-            bgRemote = Self.buildCardBackgroundRemoteURL(slug: slug, updatedAt: cached.cardBackgroundUpdatedAt)
+        if pt == "points" {
+            if let snap, snap.hasRemoteCardBackground, let u = snap.cardBackgroundRemoteURL, !u.isEmpty {
+                bgRemote = u
+            } else if let cached = ScanFlowSettingsCache.cached(for: slug), cached.hasCardBackground == true {
+                bgRemote = Self.buildCardBackgroundRemoteURL(slug: slug, updatedAt: cached.cardBackgroundUpdatedAt)
+            } else {
+                bgRemote = nil
+            }
         } else {
             bgRemote = nil
         }
-        /// Fond local : uniquement si le snapshot **de ce slug** indique explicitement un brouillon (évite le PNG
-        /// `CardLogos/cardBackground.png` partagé entre commerces).
+        /// Fond local : mode points uniquement.
         let localCardBgRelative: String? = {
-            guard snap?.hasLocalCardBackground == true else { return nil }
+            guard pt == "points", snap?.hasLocalCardBackground == true else { return nil }
             let rel = CardLogoStorage.relativeCardBackgroundPath
             guard let full = CardLogoStorage.fullPath(forRelative: rel),
                   FileManager.default.fileExists(atPath: full) else { return nil }
@@ -227,6 +234,33 @@ struct DashboardHomeCardModel {
             stampMidRewardLabel: stampMidResolved,
             stampRewardLabel: stampRewardResolved,
             fidelityQRPayloadURL: fidelityURL
+        )
+    }
+
+    /// Aperçu stable pendant le chargement sync (même chrome que la carte finale, sans message « Synchronisez… »).
+    private static func neutralLoadingPreview(slug: String) -> DashboardHomeCardModel {
+        DashboardHomeCardModel(
+            displayName: "Ma Carte Fidélité",
+            programType: "points",
+            primaryHex: AppTheme.WalletCardAppearanceDefaults.backgroundHex,
+            accentHex: AppTheme.WalletCardAppearanceDefaults.bodyTextHex,
+            labelHex: AppTheme.WalletCardAppearanceDefaults.labelTitlesHex,
+            stripDisplayMode: "logo",
+            stripText: "",
+            logoURL: nil,
+            stampEmoji: nil,
+            requiredStamps: 10,
+            previewStampsCount: 0,
+            previewPointsCount: 0,
+            cardBackgroundImagePath: nil,
+            cardBackgroundRemoteURL: nil,
+            headerRightText: nil,
+            memberPreviewText: "Prévisualisation",
+            labelRestants: "Restants",
+            memberColumnTitle: "MEMBRE",
+            stampMidRewardLabel: "",
+            stampRewardLabel: "",
+            fidelityQRPayloadURL: LegalURLs.fidelityCardPage(slug: slug)?.absoluteString
         )
     }
 
@@ -348,6 +382,13 @@ struct FintechTransactionRow: View {
     /// `true` quand le programme fidélité est en points (pas tampons) — aligné sur `CardPreviewDisplaySnapshot.programType`.
     var isPointsProgram: Bool = false
 
+    private static let relativeDateFormatter: RelativeDateTimeFormatter = {
+        let f = RelativeDateTimeFormatter()
+        f.locale = Locale(identifier: "fr_FR")
+        f.unitsStyle = .abbreviated
+        return f
+    }()
+
     private static let timeOnlyFormatter: DateFormatter = {
         let f = DateFormatter()
         f.locale = Locale(identifier: "fr_FR")
@@ -385,10 +426,7 @@ struct FintechTransactionRow: View {
         if cal.isDateInYesterday(d) {
             return "Hier · \(Self.timeOnlyFormatter.string(from: d))"
         }
-        let rel = RelativeDateTimeFormatter()
-        rel.locale = Locale(identifier: "fr_FR")
-        rel.unitsStyle = .abbreviated
-        return rel.localizedString(for: d, relativeTo: Date())
+        return Self.relativeDateFormatter.localizedString(for: d, relativeTo: Date())
     }
 
     var body: some View {
@@ -491,15 +529,6 @@ struct FintechTransactionsSectionHeader: View {
                 .layoutPriority(0)
                 /// Légèrement plus haut et à gauche pour équilibrer le titre deux lignes + grossir le touch target.
                 .offset(x: Self.scannerVisualOffset.width, y: Self.scannerVisualOffset.height)
-                .onBoarding(2, cornerRadius: 50, visualOffset: Self.scannerVisualOffset) {
-                    VStack(spacing: 8) {
-                        Text("Scanner les cartes de vos clients")
-                            .font(.title3.weight(.semibold))
-                        Text("Scannez la carte Wallet d'un client pour enregistrer son passage ou créditer ses points.")
-                            .font(.subheadline)
-                            .multilineTextAlignment(.center)
-                    }
-                }
         }
     }
 
@@ -523,15 +552,69 @@ struct FintechTransactionsSectionHeader: View {
     }
 }
 
-// MARK: - Barre haute minimaliste
+// MARK: - Chrome onglets (barre noire + panneau arrondi)
 
-/// Inset vertical commun au-dessus du contenu scrollé pour s’aligner sur `DashboardHomeMinimalTopBar` (Accueil, Campagnes, stats Commerce).
+/// Panneau scroll partagé Accueil / Notifications / Statistiques.
+enum MerchantTopRoundedPanel {
+    static let cornerRadius: CGFloat = 24
+    static let shape = UnevenRoundedRectangle(
+        topLeadingRadius: cornerRadius,
+        bottomLeadingRadius: 0,
+        bottomTrailingRadius: 0,
+        topTrailingRadius: cornerRadius,
+        style: .continuous
+    )
+}
+
+/// Mesures communes barre haute + décalage du panneau (coins 24 pt visibles sur le fond noir).
 enum DashboardHomeMinimalTopBarLayout {
-    /// Inset réduit pour remonter nettement le haut des pages (Accueil / Notifications / Commerce).
-    static let scrollContentTopInset: CGFloat = 56
+    /// Rangée titre + actions (hors safe area / status bar).
+    static let barContentHeight: CGFloat = 44
+    static let barPaddingTop: CGFloat = 2
+    static let barPaddingBottom: CGFloat = 6
+    static var barBlockHeight: CGFloat { barPaddingTop + barContentHeight + barPaddingBottom }
+    /// Espace noir entre le bas de la barre et le panneau — laisse voir l’arrondi.
+    static let cornerRevealGap: CGFloat = 6
+    /// Décalage du panneau depuis le haut du safe area (sous la barre overlay).
+    static var scrollPanelTopOffset: CGFloat { barBlockHeight + cornerRevealGap }
+    /// Alias historique — ne pas réduire (évite que le panneau passe sous la barre).
+    static var scrollContentTopInset: CGFloat { scrollPanelTopOffset }
+}
+
+/// ZStack partagé : fond noir (status bar) + barre overlay + panneau scroll arrondi.
+struct MerchantTabScaffold<TopBar: View, Panel: View>: View {
+    var panelBackground: Color
+    /// Bandeau ou chrome additionnel sous la barre (ex. progression envoi Notifications).
+    var extraPanelTopInset: CGFloat = 0
+    @ViewBuilder var topBar: () -> TopBar
+    @ViewBuilder var panel: () -> Panel
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            Color.black
+                .ignoresSafeArea(edges: .top)
+
+            panel()
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .background(panelBackground)
+                .clipShape(MerchantTopRoundedPanel.shape)
+                .padding(.top, DashboardHomeMinimalTopBarLayout.scrollPanelTopOffset + extraPanelTopInset)
+                .ignoresSafeArea(edges: .bottom)
+
+            VStack(spacing: 0) {
+                topBar()
+                Color.clear
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .allowsHitTesting(false)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        }
+    }
 }
 
 struct DashboardHomeMinimalTopBar: View {
+    @Environment(\.merchantTabIsActive) private var merchantTabIsActive
+
     let title: String
     var merchantName: String? = nil
     var accountEmail: String? = nil
@@ -540,6 +623,16 @@ struct DashboardHomeMinimalTopBar: View {
     var businesses: [BusinessDTO] = []
     var activeBusinessSlug: String? = nil
     var canCreateBusiness: Bool = true
+    /// Admin plateforme : liste = tous les commerces ; masque « Ajouter un commerce » et affiche « Tous les commerces ».
+    var isPlatformAdminAllCommercesMode: Bool = false
+    var onOpenAdministration: (() -> Void)? = nil
+    /// Admin : recharger la liste plateforme à l’ouverture du popover.
+    var onBusinessSwitcherWillOpen: (() -> Void)? = nil
+    /// Accueil : ouvre le menu latéral style X (☰ en haut à gauche).
+    var onOpenSideMenu: (() -> Void)? = nil
+    /// Affiche l’avatar commerce (Notifications / Statistiques). Masqué sur l’Accueil.
+    var showsBusinessSwitcher: Bool = true
+    /// Forcer la pastille (rare) ; par défaut calculée depuis l’état flyer du commerce actif.
     var showSettingsAttentionDot: Bool = false
     var onOpenSettings: (() -> Void)? = nil
     var onSelectBusiness: ((String) -> Void)? = nil
@@ -548,33 +641,95 @@ struct DashboardHomeMinimalTopBar: View {
     @State private var showBusinessPopover = false
     @State private var localSelectedBusinessSlug: String?
     @State private var isSwitchingBusiness = false
+    @State private var switcherSearchText = ""
     @Namespace private var businessSwitcherAnimation
+    @State private var autoSettingsAttentionDot = false
+
+    private var effectiveSettingsAttentionDot: Bool {
+        showSettingsAttentionDot || autoSettingsAttentionDot
+    }
 
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
+            if let onOpenSideMenu {
+                sideMenuButton(action: onOpenSideMenu)
+            }
+
             Text(title)
                 .font(.system(size: 20, weight: .bold, design: .default))
                 .foregroundStyle(.white)
                 .lineLimit(1)
                 .truncationMode(.tail)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .layoutPriority(-1)
+
+            Spacer(minLength: 0)
+
             if let onOpenSettings {
                 settingsButton(action: onOpenSettings)
             }
-            businessSwitcherButton
+
+            if showsBusinessSwitcher {
+                businessSwitcherButton
+            }
         }
+        .frame(height: DashboardHomeMinimalTopBarLayout.barContentHeight)
         .padding(.horizontal, 14)
-        .padding(.top, 2)
-        .padding(.bottom, 6)
-        .background(Color.black)
+        .padding(.top, DashboardHomeMinimalTopBarLayout.barPaddingTop)
+        .padding(.bottom, DashboardHomeMinimalTopBarLayout.barPaddingBottom)
+        .background {
+            Color.black
+                .ignoresSafeArea(edges: .top)
+        }
+        .onAppear { refreshSettingsAttentionDot() }
         .onChange(of: activeBusinessSlug) { _, newValue in
             let incoming = newValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let local = localSelectedBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             if !incoming.isEmpty, incoming == local {
                 localSelectedBusinessSlug = nil
             }
+            refreshSettingsAttentionDot()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .myfidpassMerchantSetupProgressUpdated)) { _ in
+            refreshSettingsAttentionDot()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .myfidpassCardPreviewDisplayDidChange)) { _ in
+            refreshSettingsAttentionDot()
+        }
+        .onChange(of: merchantTabIsActive) { _, active in
+            if active { refreshSettingsAttentionDot() }
+        }
+    }
+
+    private func refreshSettingsAttentionDot() {
+        let slug = activeBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines)
+            ?? AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let slug, !slug.isEmpty {
+            CommerceFlyerStore.shared.hydrateFromDiskIfNeeded(slug: slug)
+        }
+        autoSettingsAttentionDot = PostCardFlyerPromoEligibility.showsCreationAttentionBadge(for: slug)
+    }
+
+    @ViewBuilder
+    private func sideMenuButton(action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            ZStack(alignment: .topTrailing) {
+                Image(systemName: "line.3.horizontal")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 44, height: 44, alignment: .leading)
+                if effectiveSettingsAttentionDot {
+                    Circle()
+                        .fill(Color.red)
+                        .frame(width: 10, height: 10)
+                        .offset(x: -4, y: 6)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(
+            effectiveSettingsAttentionDot
+                ? "Ouvrir le menu, flyer de jeu à créer"
+                : "Ouvrir le menu"
+        )
     }
 
     @ViewBuilder
@@ -584,7 +739,7 @@ struct DashboardHomeMinimalTopBar: View {
                 ZStack(alignment: .topTrailing) {
                     Image(systemName: "person.crop.circle")
                         .font(.system(size: 16, weight: .semibold))
-                    if showSettingsAttentionDot {
+                    if effectiveSettingsAttentionDot {
                         Circle()
                             .fill(Color.red)
                             .frame(width: 10, height: 10)
@@ -594,8 +749,12 @@ struct DashboardHomeMinimalTopBar: View {
             }
             .buttonStyle(.glass)
             .buttonBorderShape(.roundedRectangle(radius: 20))
-            .controlSize(.large)
-            .accessibilityLabel("Compte")
+            .controlSize(.regular)
+                .accessibilityLabel(
+                    effectiveSettingsAttentionDot
+                        ? "Compte, flyer de jeu à créer"
+                        : "Compte"
+                )
         } else {
             Button(action: action) {
                 ZStack(alignment: .topTrailing) {
@@ -608,7 +767,7 @@ struct DashboardHomeMinimalTopBar: View {
                             RoundedRectangle(cornerRadius: 20, style: .continuous)
                                 .stroke(Color.white.opacity(0.28), lineWidth: 1)
                         )
-                    if showSettingsAttentionDot {
+                    if effectiveSettingsAttentionDot {
                         Circle()
                             .fill(Color.red)
                             .frame(width: 10, height: 10)
@@ -617,24 +776,42 @@ struct DashboardHomeMinimalTopBar: View {
                 }
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Compte")
+                .accessibilityLabel(
+                    effectiveSettingsAttentionDot
+                        ? "Compte, flyer de jeu à créer"
+                        : "Compte"
+                )
         }
     }
 
     @ViewBuilder
     private var businessSwitcherButton: some View {
         Button {
+            if isPlatformAdminAllCommercesMode {
+                onBusinessSwitcherWillOpen?()
+            }
             showBusinessPopover.toggle()
         } label: {
-            topBarBusinessAvatar(size: 34)
+            topBarBusinessAvatar(size: 32)
         }
         .buttonStyle(.plain)
         .popover(isPresented: $showBusinessPopover, attachmentAnchor: .point(.bottom), arrowEdge: .top) {
             businessSwitcherPopover
                 .presentationCompactAdaptation(.popover)
         }
-        .accessibilityLabel("Commerce actif")
-        .accessibilityHint("Ouvre le menu du commerce.")
+        .accessibilityLabel(isPlatformAdminAllCommercesMode ? "Tous les commerces" : "Commerce actif")
+        .accessibilityHint(isPlatformAdminAllCommercesMode ? "Ouvre la liste de tous les commerces de la plateforme." : "Ouvre le menu du commerce.")
+    }
+
+    private var filteredSwitcherBusinesses: [BusinessDTO] {
+        let q = switcherSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !q.isEmpty else { return businesses }
+        return businesses.filter {
+            let name = $0.name.lowercased()
+            let slug = $0.slug.lowercased()
+            let org = ($0.organizationName ?? "").lowercased()
+            return name.contains(q) || slug.contains(q) || org.contains(q)
+        }
     }
 
     private var businessSwitcherPopover: some View {
@@ -642,6 +819,12 @@ struct DashboardHomeMinimalTopBar: View {
             HStack(alignment: .top, spacing: 12) {
                 topBarBusinessAvatar(size: 42)
                 VStack(alignment: .leading, spacing: 1) {
+                    if isPlatformAdminAllCommercesMode {
+                        Text("Tous les commerces")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Color.black.opacity(0.55))
+                            .textCase(.uppercase)
+                    }
                     Text(activeBusinessNameForDisplay)
                         .font(.system(size: 19, weight: .semibold))
                         .foregroundStyle(Color.black.opacity(0.86))
@@ -664,33 +847,75 @@ struct DashboardHomeMinimalTopBar: View {
             .transition(.asymmetric(insertion: .opacity.combined(with: .scale(scale: 0.98)), removal: .opacity))
             .animation(.spring(response: 0.34, dampingFraction: 0.84), value: effectiveActiveBusinessSlug)
 
-            Button {
-                showBusinessPopover = false
-                onAddCommerce?()
-            } label: {
-                HStack(spacing: 12) {
-                    Image(systemName: "plus.circle")
-                        .font(.system(size: 25, weight: .regular))
-                        .foregroundStyle(Color.black.opacity(0.7))
-                    Text("Ajouter un commerce")
-                        .font(.system(size: 20, weight: .medium))
-                        .foregroundStyle(Color.black.opacity(0.86))
-                    Spacer(minLength: 0)
+            if isPlatformAdminAllCommercesMode, let onOpenAdministration {
+                Button {
+                    showBusinessPopover = false
+                    onOpenAdministration()
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "shield.lefthalf.filled")
+                            .font(.system(size: 22, weight: .regular))
+                            .foregroundStyle(Color.black.opacity(0.7))
+                        Text("Administration plateforme")
+                            .font(.system(size: 18, weight: .medium))
+                            .foregroundStyle(Color.black.opacity(0.86))
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 12)
+                    .contentShape(Rectangle())
                 }
-                .padding(.horizontal, 18)
-                .padding(.vertical, 14)
-                .contentShape(Rectangle())
+                .buttonStyle(.plain)
+                Divider().padding(.horizontal, 16)
+            } else {
+                Button {
+                    showBusinessPopover = false
+                    if canCreateBusiness {
+                        onAddCommerce?()
+                    } else {
+                        onUpgradeCommerceQuota?()
+                    }
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "plus.circle")
+                            .font(.system(size: 25, weight: .regular))
+                            .foregroundStyle(Color.black.opacity(0.7))
+                        Text("Ajouter un commerce")
+                            .font(.system(size: 20, weight: .medium))
+                            .foregroundStyle(Color.black.opacity(0.86))
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 14)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .padding(.bottom, 8)
             }
-            .buttonStyle(.plain)
-            .padding(.bottom, 8)
 
             if !businesses.isEmpty {
+                if isPlatformAdminAllCommercesMode {
+                    HStack {
+                        Text("Commerces (\(businesses.count))")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Color.black.opacity(0.5))
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 18)
+                    .padding(.bottom, 4)
+                    if businesses.count > 6 {
+                        TextField("Rechercher…", text: $switcherSearchText)
+                            .textFieldStyle(.roundedBorder)
+                            .padding(.horizontal, 16)
+                            .padding(.bottom, 6)
+                    }
+                }
                 Divider()
                     .padding(.horizontal, 16)
                     .padding(.bottom, 6)
                 ScrollView {
                     VStack(spacing: 4) {
-                        ForEach(businesses, id: \.slug) { business in
+                        ForEach(filteredSwitcherBusinesses, id: \.slug) { business in
                             Button {
                                 guard business.slug != effectiveActiveBusinessSlug else {
                                     showBusinessPopover = false
@@ -719,10 +944,18 @@ struct DashboardHomeMinimalTopBar: View {
                                                     .matchedGeometryEffect(id: "activeBusinessDot", in: businessSwitcherAnimation)
                                             }
                                         }
-                                    Text(business.name.isEmpty ? business.slug : business.name)
-                                        .font(.system(size: 16, weight: .medium))
-                                        .foregroundStyle(Color.black.opacity(0.85))
-                                        .lineLimit(1)
+                                    VStack(alignment: .leading, spacing: 1) {
+                                        Text(business.name.isEmpty ? business.slug : business.name)
+                                            .font(.system(size: 16, weight: .medium))
+                                            .foregroundStyle(Color.black.opacity(0.85))
+                                            .lineLimit(1)
+                                        if isPlatformAdminAllCommercesMode {
+                                            Text(business.slug)
+                                                .font(.system(size: 12, weight: .regular))
+                                                .foregroundStyle(Color.black.opacity(0.45))
+                                                .lineLimit(1)
+                                        }
+                                    }
                                     Spacer(minLength: 0)
                                 }
                                 .padding(.horizontal, 18)
@@ -735,13 +968,19 @@ struct DashboardHomeMinimalTopBar: View {
                         }
                     }
                 }
-                .frame(maxHeight: 180)
+                .frame(maxHeight: isPlatformAdminAllCommercesMode ? 280 : 180)
                 .padding(.bottom, 10)
+            } else if isPlatformAdminAllCommercesMode {
+                Text("Chargement des commerces…")
+                    .font(.subheadline)
+                    .foregroundStyle(Color.black.opacity(0.55))
+                    .padding(.vertical, 16)
             }
         }
         .frame(width: 360)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
         .padding(8)
+        .onDisappear { switcherSearchText = "" }
     }
 
     @ViewBuilder

@@ -1,0 +1,82 @@
+CHECKLIST — Google Play Console (MyFidpass, package fr.myfidpass)
+
+═══ DÉJÀ FAIT CÔTÉ PROJET ═══
+✓ AAB release signé : android/app/build/outputs/bundle/release/app-release.aab (~22 Mo)
+✓ applicationId : fr.myfidpass (versionCode 1, versionName 1.0.0)
+✓ google-services.json présent (Firebase myfidpass-mobile)
+✓ Keystore upload : android/keystore/myfidpass-upload.jks (gitignored)
+✓ URLs légales OK (scripts/verify-apple-legal-urls.sh)
+
+═══ 1) TEST INTERNE (priorité — sans review Google) ═══
+Play Console → Tester et publier → Tests → Tests internes → Créer une version
+→ Uploader app-release.aab
+→ Nom de version : 1.0.0 (1)
+→ Notes : coller release_notes_fr-FR.txt
+→ Enregistrer → Examiner → Déployer
+
+Ajouter testeurs : Tests internes → Testeurs → liste e-mails (max 100)
+
+═══ 2) FICHE PLAY STORE (Accroître le nombre d’utilisateurs → Fiche Play Store) ═══
+Français (France) :
+  • Titre : MyFidpass (max 30 car.)
+  • Description courte : short_description_fr-FR.txt
+  • Description complète : description_fr-FR.txt
+  • Icône 512×512 : exporter depuis android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png (agrandir proprement)
+  • Feature graphic 1024×500 : à créer (logo + tagline « Cartes fidélité digitales »)
+  • Captures téléphone : min. 2 (dashboard, scanner, ma carte, paywall)
+  • E-mail : contact_email.txt
+  • Catégorie : Business / Entreprise
+  • Tags : fidélité, commerce, QR code, wallet
+
+Anglais (optionnel) : short_description_en-US.txt + description_en-US.txt
+
+═══ 3) CONTENU DE L’APP (Politique → Contenu de l’app) ═══
+• Politique de confidentialité : privacy_policy_url.txt
+• Public cible : 18+ (commerçants professionnels)
+• Annonces : Non
+• Achats in-app : Oui — mais facturation HORS Play (Stripe) → cocher selon questionnaire :
+  - L’app permet des achats mais ils passent par un site web / paiement externe
+• Accès app : Toutes les fonctions nécessitent un compte commerçant
+
+═══ 4) SÉCURITÉ DES DONNÉES (Data safety) ═══
+Collecte typique MyFidpass commerçant :
+  • E-mail, nom commerce, données clients fidélité (via compte pro)
+  • Localisation : si périmètre géo activé (optionnel)
+  • Photos : logo carte / établissement
+  • Identifiants : e-mail + token session
+  • Données chiffrées en transit (HTTPS)
+  • Suppression : via support ou suppression compte dans l’app
+Politique : privacy_policy_url.txt
+
+═══ 5) CLASSIFICATION DU CONTENU ═══
+Questionnaire IARC → réponses attendues : pas de violence, pas de contenu adulte,
+app outil professionnel B2B.
+
+═══ 6) SIGNATURE DE L’APP (Play App Signing) ═══
+Premier upload : Google propose « laisser Google gérer la clé » → accepter (recommandé).
+Votre clé upload (myfidpass-upload.jks) sert à signer l’AAB ; Google re-signera pour les utilisateurs.
+
+Enregistrer les empreintes SHA release dans Firebase Console :
+  Projet myfidpass-mobile → Paramètres → Vos apps → fr.myfidpass → Empreintes
+  Commande : bash scripts/setup-android-prod.sh
+
+═══ 7) SOUMISSION REVIEW (production ou test fermé) ═══
+Après tests internes OK :
+  • Tests fermés ou Production → nouvelle version + même AAB ou build corrigé
+  • Notes pour l’examinateur : app_review_notes.txt + compte démo OTP
+  • Déclarer : abonnement Stripe externe (pas Play Billing)
+
+═══ 8) OAUTH GOOGLE SIGN-IN (si connexion Google échoue en prod) ═══
+Google Cloud Console → Identifiants → Client OAuth Android
+  • Nom : MyFidpass
+  • Package : fr.myfidpass
+  • SHA-1 : empreinte du keystore release (setup-android-prod.sh)
+
+═══ FICHIERS UTILES ═══
+PlayStoreMetadata/
+  short_description_*.txt, description_*.txt, release_notes_*.txt
+  privacy_policy_url.txt, terms_url.txt, contact_email.txt, app_review_notes.txt
+
+Rebuild AAB après changement :
+  export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
+  cd android && ./gradlew :app:bundleRelease

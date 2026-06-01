@@ -69,6 +69,10 @@ struct CardElementCustomizationSheet: View {
     let actions: CardCustomizationActions
     var cardImageSuggestedColors: [String]
     var dashboardSettingsHydrated: Bool
+    /// Enregistrement API depuis la feuille « Récompenses » (nil = pas de bouton dédié).
+    var onSaveRewards: (() async -> Bool)?
+    var canSaveRewards: Bool = true
+    var rewardsSaveInFlight: Bool = false
     /// État local pour la feuille de cadrage (évite les problèmes de présentation avec un `Binding` parent).
     @State private var cropEditorPayload: ImageCropPayload?
     /// Logo sans fond persisté côté serveur (remove.bg) — proposé comme raccourci dans le sheet logo.
@@ -381,13 +385,24 @@ struct CardElementCustomizationSheet: View {
 
     private var headerRightBlock: some View {
         VStack(alignment: .leading, spacing: 14) {
-            rewardExamplesPresetSection
+            rewardSavePrimarySection
             welcomeBonusSection
             Divider()
             rewardRulesContent
+            rewardExamplesTextButton
         }
         .onAppear {
             enforceWelcomeBonusDefaults()
+            var startLabel = pack.startGameRewardLabel.wrappedValue
+            MyCardProgramDefaults.ensureStartGameRewardLabel(&startLabel)
+            pack.startGameRewardLabel.wrappedValue = startLabel
+            if pack.programType.wrappedValue == "points" {
+                var pts = pack.tierPoints.wrappedValue
+                var labs = pack.tierLabels.wrappedValue
+                MyCardProgramDefaults.sanitizeEditableTierSlots(tierPoints: &pts, tierLabels: &labs)
+                pack.tierPoints.wrappedValue = pts
+                pack.tierLabels.wrappedValue = labs
+            }
         }
         .onChange(of: pack.programType.wrappedValue) { _, _ in
             enforceWelcomeBonusDefaults()
@@ -404,17 +419,43 @@ struct CardElementCustomizationSheet: View {
         }
     }
 
-    private var rewardExamplesPresetSection: some View {
+    @ViewBuilder
+    private var rewardSavePrimarySection: some View {
+        if let onSaveRewards {
+            Button {
+                Task {
+                    _ = await onSaveRewards()
+                }
+            } label: {
+                Group {
+                    if rewardsSaveInFlight {
+                        ProgressView()
+                            .frame(maxWidth: .infinity)
+                    } else {
+                        Text("Enregistrer")
+                            .font(.subheadline.weight(.semibold))
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+            }
+            .buttonBorderShape(.roundedRectangle(radius: 20))
+            .controlSize(.large)
+            .glassStyle()
+            .disabled(!canSaveRewards || rewardsSaveInFlight)
+        }
+    }
+
+    private var rewardExamplesTextButton: some View {
         Button {
             applyRewardExamplePresets()
         } label: {
-            Label("Appliquer les exemples", systemImage: "wand.and.stars")
-                .font(.subheadline.weight(.semibold))
+            Text("Appliquer les exemples")
+                .font(.subheadline)
+                .foregroundStyle(AppTheme.Colors.primary)
                 .frame(maxWidth: .infinity)
         }
-        .buttonBorderShape(.roundedRectangle(radius: 20))
-        .controlSize(.large)
-        .glassStyle()
+        .buttonStyle(.plain)
+        .padding(.top, 4)
     }
 
     private func applyRewardExamplePresets() {

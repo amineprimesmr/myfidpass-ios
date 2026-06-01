@@ -126,11 +126,12 @@ struct BorderBeamManualNotificationComposerView: View {
 
     @FocusState private var titleFieldFocused: Bool
     @FocusState private var messageFieldFocused: Bool
-    @State private var placeholderCharIndex: Int = 0
-    @State private var placeholderLoopTask: Task<Void, Never>?
+    @State private var messagePlaceholderCharIndex: Int = 0
+    @State private var messagePlaceholderLoopTask: Task<Void, Never>?
 
     private static let beamPalette: [Color] = [.green, .blue, .pink, .orange, .indigo]
-    private let placeholderFull = "Écrivez votre message"
+    private let titlePlaceholderLabel = "Titre du message"
+    private let messagePlaceholderFull = "Écrivez votre message"
 
     private var segmentMenuLabel: String {
         guard let s = segment, !s.isEmpty else { return "Tous les clients" }
@@ -146,8 +147,8 @@ struct BorderBeamManualNotificationComposerView: View {
             || !hasSlug
     }
 
-    private var animatedPlaceholderText: String {
-        String(placeholderFull.prefix(placeholderCharIndex))
+    private var animatedMessagePlaceholderText: String {
+        String(messagePlaceholderFull.prefix(messagePlaceholderCharIndex))
     }
 
     var body: some View {
@@ -161,10 +162,12 @@ struct BorderBeamManualNotificationComposerView: View {
             )
             .background(Color.white.opacity(0.06), in: .rect(cornerRadius: 20))
             .preferredColorScheme(.dark)
-            .onAppear { restartPlaceholderAnimation() }
+            .onAppear {
+                restartMessagePlaceholderAnimation()
+            }
             .onDisappear {
-                placeholderLoopTask?.cancel()
-                placeholderLoopTask = nil
+                messagePlaceholderLoopTask?.cancel()
+                messagePlaceholderLoopTask = nil
             }
             .onChange(of: messageBody) { _, newValue in
                 // Ne pas remplacer `\n` par un espace : la touche « Terminé » du clavier peut livrer un `\n`
@@ -175,13 +178,13 @@ struct BorderBeamManualNotificationComposerView: View {
                     return
                 }
                 if !newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    placeholderCharIndex = 0
+                    messagePlaceholderCharIndex = 0
                 }
-                restartPlaceholderAnimation()
+                restartMessagePlaceholderAnimation()
             }
             .onChange(of: messageFieldFocused) { _, focused in
-                if focused { placeholderCharIndex = 0 }
-                restartPlaceholderAnimation()
+                if focused { messagePlaceholderCharIndex = 0 }
+                restartMessagePlaceholderAnimation()
             }
             .onChange(of: segment) { _, newValue in
                 guard let key = newValue, let def = defaultMessages[key] else { return }
@@ -196,19 +199,28 @@ struct BorderBeamManualNotificationComposerView: View {
     @ViewBuilder
     private func customBottomBarLikeBorderBeam() -> some View {
         VStack(alignment: .leading, spacing: 18) {
-            TextField("Titre (facultatif)", text: $notificationTitle, axis: .vertical)
-                .focused($titleFieldFocused)
-                .disabled(sendingLocked)
-                .lineLimit(1 ... 2)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(Color.primary)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 10)
-                .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .submitLabel(.next)
-                .onSubmit {
-                    messageFieldFocused = true
+            ZStack(alignment: .topLeading) {
+                TextField("", text: $notificationTitle, axis: .vertical)
+                    .focused($titleFieldFocused)
+                    .disabled(sendingLocked)
+                    .lineLimit(1 ... 2)
+                    .font(.body)
+                    .foregroundStyle(Color.primary)
+                    .padding(.top, 8)
+                    .submitLabel(.next)
+                    .onSubmit {
+                        messageFieldFocused = true
+                    }
+
+                if notificationTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !titleFieldFocused {
+                    Text(titlePlaceholderLabel)
+                        .font(.body)
+                        .foregroundStyle(Color.primary.opacity(0.42))
+                        .padding(.top, 8)
+                        .allowsHitTesting(false)
                 }
+            }
+            .padding(.horizontal, 8)
 
             ZStack(alignment: .topLeading) {
                 TextField("", text: $messageBody, axis: .vertical)
@@ -224,7 +236,7 @@ struct BorderBeamManualNotificationComposerView: View {
                     }
 
                 if messageBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !messageFieldFocused {
-                    Text(animatedPlaceholderText)
+                    Text(animatedMessagePlaceholderText)
                         .font(.body)
                         .foregroundStyle(Color.primary.opacity(0.42))
                         .padding(.top, 8)
@@ -245,35 +257,51 @@ struct BorderBeamManualNotificationComposerView: View {
         .padding(15)
     }
 
-    private func restartPlaceholderAnimation() {
-        placeholderLoopTask?.cancel()
-        placeholderLoopTask = nil
+    private func restartMessagePlaceholderAnimation() {
+        messagePlaceholderLoopTask?.cancel()
+        messagePlaceholderLoopTask = nil
         let trimmed = messageBody.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.isEmpty, !messageFieldFocused else { return }
 
-        placeholderLoopTask = Task { @MainActor in
-            while !Task.isCancelled {
-                let n = placeholderFull.count
-                guard n > 0 else { break }
-                for i in 0 ... n {
-                    guard !Task.isCancelled else { return }
-                    let stillEmpty = messageBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    guard stillEmpty, !messageFieldFocused else {
-                        placeholderCharIndex = 0
-                        return
-                    }
-                    placeholderCharIndex = i
-                    try? await Task.sleep(nanoseconds: 48_000_000)
-                }
-                try? await Task.sleep(nanoseconds: 1_100_000_000)
-                guard !Task.isCancelled else { return }
-                placeholderCharIndex = 0
-                try? await Task.sleep(nanoseconds: 300_000_000)
-            }
+        messagePlaceholderLoopTask = Task { @MainActor in
+            await runTypewriterPlaceholderLoop(
+                full: messagePlaceholderFull,
+                isStillActive: {
+                    messageBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !messageFieldFocused
+                },
+                setIndex: { messagePlaceholderCharIndex = $0 },
+                resetIndex: { messagePlaceholderCharIndex = 0 }
+            )
         }
     }
 
-    /// Même capsule que « Name/Model Name » : `Menu` pour les catégories (popup système).
+    @MainActor
+    private func runTypewriterPlaceholderLoop(
+        full: String,
+        isStillActive: () -> Bool,
+        setIndex: (Int) -> Void,
+        resetIndex: () -> Void
+    ) async {
+        let n = full.count
+        guard n > 0 else { return }
+        while !Task.isCancelled {
+            for i in 0 ... n {
+                guard !Task.isCancelled else { return }
+                guard isStillActive() else {
+                    resetIndex()
+                    return
+                }
+                setIndex(i)
+                try? await Task.sleep(nanoseconds: 48_000_000)
+            }
+            try? await Task.sleep(nanoseconds: 1_100_000_000)
+            guard !Task.isCancelled else { return }
+            resetIndex()
+            try? await Task.sleep(nanoseconds: 300_000_000)
+        }
+    }
+
+    /// Sélecteur segment — même chrome animé (border beam) que le bouton Envoyer.
     @ViewBuilder
     private func categoryCapsuleLikeNameModelButton() -> some View {
         Menu {
@@ -286,15 +314,28 @@ struct BorderBeamManualNotificationComposerView: View {
                 }
             }
         } label: {
-            Text(segmentMenuLabel)
-                .font(.caption)
-                .foregroundStyle(Color.primary.opacity(0.8))
-                .lineLimit(1)
-                .padding(.vertical, 8)
-                .padding(.horizontal, 15)
-                .background(.fill, in: .capsule)
+            HStack(spacing: 6) {
+                Text(segmentMenuLabel)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Color.primary)
+                    .lineLimit(1)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(Color.primary.opacity(0.85))
+            }
+            .padding(.horizontal, 12)
+            .frame(height: 35)
+            .borderBeam(
+                border: .white,
+                beam: Self.beamPalette,
+                beamBlur: 15,
+                cornerRadius: 20,
+                isEnabled: true
+            )
+            .background(.background, in: .capsule)
         }
         .disabled(!hasSlug || sendingLocked)
+        .accessibilityLabel("Destinataires : \(segmentMenuLabel)")
     }
 
     /// Copie de `ContentView.CustomButton()` : `arrow.up` 35×35 + `borderBeam` + cercle `.background`.

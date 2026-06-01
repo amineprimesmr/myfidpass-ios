@@ -90,6 +90,7 @@ enum FirstLaunchOnboarding {
             "myfidpass.ob.priorities",
             "myfidpass.ob.teamSize",
             signupCommerceDraftBackupKey,
+            signupEmailKey,
         ].forEach { d.removeObject(forKey: $0) }
         MerchantLinkedPlaceCache.clear()
     }
@@ -173,7 +174,13 @@ enum FirstLaunchOnboarding {
     /// Lieu saisi pendant l’onboarding — à effacer une fois le compte créé (ne pas réappliquer au prochain utilisateur).
     static func clearPendingEstablishmentFromOnboarding() {
         let d = UserDefaults.standard
-        ["myfidpass.ob.placeId", "myfidpass.ob.placeDescription", "myfidpass.ob.relaxPlaceRequirement", "myfidpass.ob.establishments"].forEach {
+        [
+            "myfidpass.ob.placeId",
+            "myfidpass.ob.placeDescription",
+            "myfidpass.ob.relaxPlaceRequirement",
+            "myfidpass.ob.establishments",
+            signupEmailKey,
+        ].forEach {
             d.removeObject(forKey: $0)
         }
         clearSignupCommerceDraftBackup()
@@ -213,11 +220,44 @@ enum FirstLaunchOnboarding {
         let name = p.description?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return !place.isEmpty && !name.isEmpty
     }
+
+    /// E-mail saisi pendant l’onboarding (étape dédiée avant connexion / inscription).
+    private static let signupEmailKey = "myfidpass.ob.signupEmail"
+
+    static func persistSignupEmail(_ email: String) {
+        let norm = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !norm.isEmpty else {
+            clearSignupEmail()
+            return
+        }
+        UserDefaults.standard.set(norm, forKey: signupEmailKey)
+    }
+
+    static func readSignupEmail() -> String? {
+        let raw = UserDefaults.standard.string(forKey: signupEmailKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() ?? ""
+        return raw.isEmpty ? nil : raw
+    }
+
+    /// Dernier e-mail connu (onboarding, connexion ou session OTP réussie) — préremplissage connexion.
+    static func readLastKnownAuthEmail() -> String? {
+        readSignupEmail()
+    }
+
+    static func clearSignupEmail() {
+        UserDefaults.standard.removeObject(forKey: signupEmailKey)
+    }
 }
 
 struct FirstLaunchOnboardingView: View {
+    @EnvironmentObject private var authService: AuthService
+
     var onComplete: () -> Void
+    var onSignIn: (() -> Void)? = nil
     var onAlreadyHaveAccount: (() -> Void)? = nil
+    /// Compte déjà existant détecté à l’étape e-mail → basculer vers la connexion avec l’e-mail prérempli.
+    var onExistingAccountEmail: ((String) -> Void)? = nil
 
     var body: some View {
         MyfidpassMerchantOnboardingRootView(
@@ -225,6 +265,7 @@ struct FirstLaunchOnboardingView: View {
                 FirstLaunchOnboarding.hasCompleted = true
                 onComplete()
             },
+            onSignIn: onSignIn,
             onAlreadyHaveAccount: {
                 FirstLaunchOnboarding.markRelaxPlaceRequirementForExistingAccountFlow()
                 FirstLaunchOnboarding.hasCompleted = true
@@ -233,12 +274,19 @@ struct FirstLaunchOnboardingView: View {
                 } else {
                     onComplete()
                 }
+            },
+            onExistingAccountEmail: { email in
+                FirstLaunchOnboarding.persistSignupEmail(email)
+                FirstLaunchOnboarding.hasCompleted = true
+                onExistingAccountEmail?(email)
             }
         )
+        .environmentObject(authService)
         .ignoresSafeArea()
     }
 }
 
 #Preview {
     FirstLaunchOnboardingView(onComplete: {})
+        .environmentObject(AuthService())
 }

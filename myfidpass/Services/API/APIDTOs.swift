@@ -28,7 +28,9 @@ struct AuthLoginResponse: Decodable {
     let businesses: [BusinessDTO]
     let subscription: SubscriptionDTO?
     let hasActiveSubscription: Bool?
-    /// Fin d’essai gratuit commerçant (ISO 8601), si compte sans abonnement Stripe payant.
+    /// Abonnement encaissé (App Store / Stripe), pas l’essai gratuit seul.
+    let hasPaidMerchantSubscription: Bool?
+    /// Champ API historique (toujours `null` côté serveur) — ignoré par l’app.
     let merchantTrialEndsAt: String?
     let entitlements: MerchantEntitlementsDTO?
 
@@ -39,6 +41,7 @@ struct AuthLoginResponse: Decodable {
         case businesses
         case subscription
         case hasActiveSubscription
+        case hasPaidMerchantSubscription
         case merchantTrialEndsAt
         case entitlements
     }
@@ -51,6 +54,7 @@ struct AuthLoginResponse: Decodable {
         businesses = try c.decodeIfPresent([BusinessDTO].self, forKey: .businesses) ?? []
         subscription = try c.decodeIfPresent(SubscriptionDTO.self, forKey: .subscription)
         hasActiveSubscription = decodeFlexibleOptionalBool(container: c, key: .hasActiveSubscription)
+        hasPaidMerchantSubscription = decodeFlexibleOptionalBool(container: c, key: .hasPaidMerchantSubscription)
         merchantTrialEndsAt = try c.decodeIfPresent(String.self, forKey: .merchantTrialEndsAt)
         entitlements = try c.decodeIfPresent(MerchantEntitlementsDTO.self, forKey: .entitlements)
     }
@@ -63,6 +67,7 @@ struct AuthLoginResponse: Decodable {
         businesses: [BusinessDTO],
         subscription: SubscriptionDTO? = nil,
         hasActiveSubscription: Bool? = nil,
+        hasPaidMerchantSubscription: Bool? = nil,
         merchantTrialEndsAt: String? = nil,
         entitlements: MerchantEntitlementsDTO? = nil
     ) {
@@ -72,6 +77,7 @@ struct AuthLoginResponse: Decodable {
         self.businesses = businesses
         self.subscription = subscription
         self.hasActiveSubscription = hasActiveSubscription
+        self.hasPaidMerchantSubscription = hasPaidMerchantSubscription
         self.merchantTrialEndsAt = merchantTrialEndsAt
         self.entitlements = entitlements
     }
@@ -105,10 +111,7 @@ struct AuthUser: Decodable {
     let workspaceRole: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, email, name, phone
-        case staffLogin = "staff_login"
-        case isAdmin = "is_admin"
-        case workspaceRole = "workspace_role"
+        case id, email, name, phone, staffLogin, isAdmin, workspaceRole
         /// Variante backend (tolérance).
         case role
     }
@@ -120,12 +123,25 @@ struct AuthUser: Decodable {
         staffLogin = try c.decodeIfPresent(String.self, forKey: .staffLogin)
         name = try c.decodeIfPresent(String.self, forKey: .name)
         phone = try c.decodeIfPresent(String.self, forKey: .phone)
-        isAdmin = try c.decodeIfPresent(Bool.self, forKey: .isAdmin)
+        isAdmin = Self.decodeIsAdminFlag(from: decoder)
         if let w = try c.decodeIfPresent(String.self, forKey: .workspaceRole) {
             workspaceRole = w
         } else {
             workspaceRole = try c.decodeIfPresent(String.self, forKey: .role)
         }
+    }
+
+    /// `JSONDecoder.convertFromSnakeCase` attend `isAdmin` ; tolère aussi la clé brute `is_admin`.
+    private static func decodeIsAdminFlag(from decoder: Decoder) -> Bool? {
+        if let c = try? decoder.container(keyedBy: CodingKeys.self),
+           let v = decodeFlexibleOptionalBool(container: c, key: .isAdmin) {
+            return v
+        }
+        enum RawAdminKey: String, CodingKey { case is_admin }
+        if let raw = try? decoder.container(keyedBy: RawAdminKey.self) {
+            return decodeFlexibleOptionalBool(container: raw, key: .is_admin)
+        }
+        return nil
     }
 }
 
@@ -232,6 +248,7 @@ struct AuthMeResponse: Decodable {
     let businesses: [BusinessDTO]
     let subscription: SubscriptionDTO?
     let hasActiveSubscription: Bool?
+    let hasPaidMerchantSubscription: Bool?
     let merchantTrialEndsAt: String?
     let entitlements: MerchantEntitlementsDTO?
 
@@ -240,6 +257,7 @@ struct AuthMeResponse: Decodable {
         case businesses
         case subscription
         case hasActiveSubscription
+        case hasPaidMerchantSubscription
         case merchantTrialEndsAt
         case entitlements
     }
@@ -250,6 +268,7 @@ struct AuthMeResponse: Decodable {
         businesses = try c.decodeIfPresent([BusinessDTO].self, forKey: .businesses) ?? []
         subscription = try c.decodeIfPresent(SubscriptionDTO.self, forKey: .subscription)
         hasActiveSubscription = decodeFlexibleOptionalBool(container: c, key: .hasActiveSubscription)
+        hasPaidMerchantSubscription = decodeFlexibleOptionalBool(container: c, key: .hasPaidMerchantSubscription)
         merchantTrialEndsAt = try c.decodeIfPresent(String.self, forKey: .merchantTrialEndsAt)
         entitlements = try c.decodeIfPresent(MerchantEntitlementsDTO.self, forKey: .entitlements)
     }
@@ -258,6 +277,11 @@ struct AuthMeResponse: Decodable {
 struct SubscriptionDTO: Decodable {
     let status: String?
     let planId: String?
+
+    init(status: String?, planId: String?) {
+        self.status = status
+        self.planId = planId
+    }
 }
 
 // MARK: - GET .../dashboard/settings
@@ -282,6 +306,7 @@ struct BusinessSettingsResponse: Decodable {
     let stampEmoji: String?
     let stampRewardLabel: String?
     let stampMidRewardLabel: String?
+    let startGameRewardLabel: String?
     let programType: String?
     let loyaltyMode: String?
     let pointsPerTicket: Int?
@@ -1067,8 +1092,48 @@ struct TransactionDTO: Decodable {
 
 // MARK: - GET .../integration/lookup (identifier un membre sans créditer)
 
+struct ScanRewardRedeemPreviewDTO: Decodable {
+    let mode: String?
+    let label: String?
+    let tierIndex: Int?
+    let pointsRequired: Int?
+    let pointsBalance: Int?
+    let eligible: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case mode
+        case label
+        case tierIndex = "tier_index"
+        case pointsRequired = "points_required"
+        case pointsBalance = "points_balance"
+        case eligible
+    }
+}
+
 struct ScanLookupResponse: Decodable {
     let member: ScanMemberDTO
+    let rewardRedeem: ScanRewardRedeemPreviewDTO?
+}
+
+struct IntegrationRewardRedeemResponse: Decodable {
+    let ok: Bool?
+    let type: String?
+    let rewardLabel: String?
+    let pointsDeducted: Int?
+    let previousPoints: Int?
+    let newPoints: Int?
+    let tierIndex: Int?
+    let message: String?
+    let member: ScanMemberDTO?
+
+    enum CodingKeys: String, CodingKey {
+        case ok, type, message, member
+        case rewardLabel = "reward_label"
+        case pointsDeducted = "points_deducted"
+        case previousPoints = "previous_points"
+        case newPoints = "new_points"
+        case tierIndex = "tier_index"
+    }
 }
 
 // MARK: - POST .../integration/scan
@@ -1130,19 +1195,94 @@ struct DashboardFlyerGetResponse: Decodable {
     let flyerAiGenerationsRemaining: Int?
     let flyerAiUnlimited: Bool?
     let flyerAiBillingMonth: String?
+
+    init(
+        flyerPrefs: FlyerPrefsStored?,
+        updatedAt: String?,
+        shareUrl: String?,
+        flyerAiGenerationsUsed: Int?,
+        flyerAiGenerationsRemaining: Int?,
+        flyerAiUnlimited: Bool?,
+        flyerAiBillingMonth: String?
+    ) {
+        self.flyerPrefs = flyerPrefs
+        self.updatedAt = updatedAt
+        self.shareUrl = shareUrl
+        self.flyerAiGenerationsUsed = flyerAiGenerationsUsed
+        self.flyerAiGenerationsRemaining = flyerAiGenerationsRemaining
+        self.flyerAiUnlimited = flyerAiUnlimited
+        self.flyerAiBillingMonth = flyerAiBillingMonth
+    }
+
+    /// Conformité `Decodable` pour `APIClient.request` ; le décodage réel passe par `decodeFromJSON` (état flyer camelCase).
+    init(from decoder: Decoder) throws {
+        throw DecodingError.dataCorrupted(
+            DecodingError.Context(
+                codingPath: decoder.codingPath,
+                debugDescription: "DashboardFlyerGetResponse : utiliser APIClient.request (decodeFromJSON)."
+            )
+        )
+    }
+
+    /// GET dashboard flyer : `state` est toujours en **camelCase** (canvas web / PUT app).
+    /// `JSONDecoder.convertFromSnakeCase` (APIClient global) ne peut pas décoder `wheelColorOdd` → défauts gris/noir.
+    static func decodeFromJSON(_ data: Data) throws -> DashboardFlyerGetResponse {
+        guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw DecodingError.dataCorrupted(
+                DecodingError.Context(codingPath: [], debugDescription: "Réponse flyer invalide.")
+            )
+        }
+        let flyerPrefs: FlyerPrefsStored?
+        if let fp = root["flyer_prefs"] as? [String: Any] {
+            let state: FlyerStateDTO?
+            if let stObj = fp["state"] {
+                state = FlyerStateDTO.decodeFromJSONObject(stObj)
+            } else {
+                state = nil
+            }
+            flyerPrefs = FlyerPrefsStored(
+                state: state,
+                customLogoDataUrl: fp["custom_logo_data_url"] as? String,
+                customBgDataUrl: fp["custom_bg_data_url"] as? String
+            )
+        } else {
+            flyerPrefs = nil
+        }
+        func intVal(_ key: String) -> Int? {
+            let v = root[key]
+            if let i = v as? Int { return i }
+            if let d = v as? Double { return Int(d) }
+            if let s = v as? String, let i = Int(s) { return i }
+            return nil
+        }
+        func boolVal(_ key: String) -> Bool? {
+            let v = root[key]
+            if let b = v as? Bool { return b }
+            if let i = v as? Int { return i != 0 }
+            if let s = v as? String {
+                let t = s.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                if t == "true" || t == "1" { return true }
+                if t == "false" || t == "0" { return false }
+            }
+            return nil
+        }
+        return DashboardFlyerGetResponse(
+            flyerPrefs: flyerPrefs,
+            updatedAt: root["updated_at"] as? String,
+            shareUrl: root["share_url"] as? String,
+            flyerAiGenerationsUsed: intVal("flyer_ai_generations_used"),
+            flyerAiGenerationsRemaining: intVal("flyer_ai_generations_remaining"),
+            flyerAiUnlimited: boolVal("flyer_ai_unlimited"),
+            flyerAiBillingMonth: root["flyer_ai_billing_month"] as? String
+        )
+    }
 }
 
 /// Objet stocké en base (`flyer_prefs_json`) : `state` + images data URL optionnelles.
-struct FlyerPrefsStored: Decodable {
+struct FlyerPrefsStored {
     let state: FlyerStateDTO?
     let customLogoDataUrl: String?
     let customBgDataUrl: String?
-
-    enum CodingKeys: String, CodingKey {
-        case state
-        case customLogoDataUrl = "custom_logo_data_url"
-        case customBgDataUrl = "custom_bg_data_url"
-    }
 }
 
 struct FlyerPutAPIResponse: Decodable {
@@ -1459,6 +1599,70 @@ struct FlyerStateDTO: Codable, Equatable {
         if !st.flyerLogoMaxHFrac.isFinite { st.flyerLogoMaxHFrac = d.flyerLogoMaxHFrac }
     }
 
+    /// Décodage depuis l’objet `flyer_prefs.state` brut (clés **camelCase** ; secours snake_case legacy).
+    static func decodeFromJSONObject(_ object: Any) -> FlyerStateDTO? {
+        guard JSONSerialization.isValidJSONObject(object),
+              var dict = object as? [String: Any]
+        else { return nil }
+        dict = migrateLegacySnakeCaseFlyerStateKeys(dict)
+        guard let data = try? JSONSerialization.data(withJSONObject: dict) else { return nil }
+        let dec = JSONDecoder()
+        dec.keyDecodingStrategy = .useDefaultKeys
+        guard var st = try? dec.decode(FlyerStateDTO.self, from: data) else { return nil }
+        st.normalizeClamps()
+        return st
+    }
+
+    /// Anciennes lignes SQLite / clients : `wheel_color_odd` au lieu de `wheelColorOdd`.
+    private static func migrateLegacySnakeCaseFlyerStateKeys(_ raw: [String: Any]) -> [String: Any] {
+        var d = raw
+        let pairs: [(String, String)] = [
+            ("wheel_color_odd", "wheelColorOdd"),
+            ("wheel_color_even", "wheelColorEven"),
+            ("wheel_render_mode", "wheelRenderMode"),
+            ("color_primary", "colorPrimary"),
+            ("color_secondary", "colorSecondary"),
+            ("color_accent", "colorAccent"),
+            ("color_bg_top", "colorBgTop"),
+            ("color_bg_bottom", "colorBgBottom"),
+            ("cta_banner_bg_color", "ctaBannerBgColor"),
+            ("cta_text_color", "ctaTextColor"),
+            ("headline_text_color", "headlineTextColor"),
+            ("headline_stroke_color", "headlineStrokeColor"),
+            ("headline_gift_stroke_color", "headlineGiftStrokeColor"),
+        ]
+        for (snake, camel) in pairs {
+            if d[camel] == nil, let v = d[snake] { d[camel] = v }
+        }
+        return d
+    }
+
+    /// Au moins une teinte « élément » présente dans le JSON (évite d’ignorer un `state` serveur valide).
+    var hasExplicitFlyerColorFields: Bool {
+        var st = self
+        st.normalizeClamps()
+        let d = Self.default
+        return st.wheelColorOdd != d.wheelColorOdd
+            || st.wheelColorEven != d.wheelColorEven
+            || st.ctaBannerBgColor != d.ctaBannerBgColor
+            || st.ctaTextColor != d.ctaTextColor
+            || st.headlineTextColor != d.headlineTextColor
+            || st.headlineStrokeColor != d.headlineStrokeColor
+            || st.headlineGiftStrokeColor != d.headlineGiftStrokeColor
+            || st.colorBgTop != d.colorBgTop
+            || st.colorBgBottom != d.colorBgBottom
+            || st.colorPrimary != d.colorPrimary
+    }
+
+    /// Après `normalizeClamps()`, diffère du gabarit app (textes, teintes roue / fond / bandeau, etc.).
+    var isCustomizedComparedToAppDefault: Bool {
+        var lhs = self
+        lhs.normalizeClamps()
+        var rhs = Self.default
+        rhs.normalizeClamps()
+        return lhs != rhs
+    }
+
     private enum CodingKeys: String, CodingKey {
         case templateId, headline, ctaBanner, ctaBannerBgColor, ctaTextColor, step1, step2, step3
         case social1, socialUrl1, social2, socialUrl2, social3, socialUrl3
@@ -1727,6 +1931,22 @@ struct AdminBusinessRow: Decodable, Identifiable, Hashable {
     let memberCount: Int?
     let ownerSubscriptionStatus: String?
     let ownerPlanId: String?
+    let dashboardToken: String?
+
+    func asBusinessDTO() -> BusinessDTO {
+        let display = organizationName?.trimmingCharacters(in: .whitespacesAndNewlines)
+            ?? name?.trimmingCharacters(in: .whitespacesAndNewlines)
+            ?? slug
+        let tokenTrimmed = dashboardToken?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return BusinessDTO(
+            id: id,
+            name: display.isEmpty ? slug : display,
+            slug: slug,
+            organizationName: organizationName,
+            createdAt: createdAt,
+            dashboardToken: (tokenTrimmed?.isEmpty == false) ? tokenTrimmed : nil
+        )
+    }
 }
 
 struct AdminEventsListResponse: Decodable {
@@ -1746,10 +1966,12 @@ struct AdminEventRow: Decodable, Identifiable {
 /// Liste des accès « équipe » pour un commerce (owner, manager, staff).
 struct WorkspaceTeamListResponse: Decodable {
     let members: [WorkspaceTeamMemberDTO]
+    let teamTotals: WorkspaceTeamTotalsDTO?
 
     enum CodingKeys: String, CodingKey {
         case members
         case items
+        case teamTotals = "team_totals"
     }
 
     init(from decoder: Decoder) throws {
@@ -1761,10 +1983,25 @@ struct WorkspaceTeamListResponse: Decodable {
         } else {
             members = []
         }
+        teamTotals = try c.decodeIfPresent(WorkspaceTeamTotalsDTO.self, forKey: .teamTotals)
     }
 }
 
-struct WorkspaceTeamMemberDTO: Decodable, Identifiable {
+struct WorkspaceTeamTotalsDTO: Decodable {
+    let scanCount: Int?
+    let scans7d: Int?
+    let scans30d: Int?
+    let memberCount: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case scanCount = "scan_count"
+        case scans7d = "scans_7d"
+        case scans30d = "scans_30d"
+        case memberCount = "member_count"
+    }
+}
+
+struct WorkspaceTeamMemberDTO: Decodable, Identifiable, Hashable {
     let membershipId: String?
     let userId: String?
     let email: String?
@@ -1773,11 +2010,16 @@ struct WorkspaceTeamMemberDTO: Decodable, Identifiable {
     let role: String?
     let status: String?
     let createdAt: String?
-    /// Activité caisse enregistrée sur les transactions (`actor_user_id`) — optionnel si l’API est ancienne.
+    let invitedByLabel: String?
+    let scanCount: Int?
     let pointsAddCount: Int?
     let rewardRedeemCount: Int?
+    let pointsCorrectionCount: Int?
     let pointsIssued: Int?
     let amountEurSum: Double?
+    let lastActivityAt: String?
+    let scans7d: Int?
+    let scans30d: Int?
 
     var id: String {
         if let m = membershipId?.trimmingCharacters(in: .whitespacesAndNewlines), !m.isEmpty { return "m:\(m)" }
@@ -1787,16 +2029,94 @@ struct WorkspaceTeamMemberDTO: Decodable, Identifiable {
         return "row:\(name ?? ""):\(status ?? ""):\(role ?? "")"
     }
 
+    /// Identifiant API pour GET/PATCH/DELETE (membership_id prioritaire, sinon user_id).
+    var apiMemberId: String? {
+        if let m = membershipId?.trimmingCharacters(in: .whitespacesAndNewlines), !m.isEmpty { return m }
+        if let u = userId?.trimmingCharacters(in: .whitespacesAndNewlines), !u.isEmpty { return u }
+        return nil
+    }
+
+    var displayName: String {
+        let n = (name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !n.isEmpty { return n }
+        let s = (staffLogin ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !s.isEmpty { return s }
+        let e = (email ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !e.isEmpty { return e }
+        return "Membre"
+    }
+
+    var isOwner: Bool {
+        (role ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "owner"
+    }
+
     enum CodingKeys: String, CodingKey {
         case membershipId = "membership_id"
         case userId = "user_id"
         case email, name, role, status
         case staffLogin = "staff_login"
         case createdAt = "created_at"
+        case invitedByLabel = "invited_by_label"
+        case scanCount = "scan_count"
         case pointsAddCount = "points_add_count"
         case rewardRedeemCount = "reward_redeem_count"
+        case pointsCorrectionCount = "points_correction_count"
         case pointsIssued = "points_issued"
         case amountEurSum = "amount_eur_sum"
+        case lastActivityAt = "last_activity_at"
+        case scans7d = "scans_7d"
+        case scans30d = "scans_30d"
+    }
+}
+
+struct WorkspaceTeamMemberDetailResponse: Decodable {
+    let member: WorkspaceTeamMemberDTO
+    let recentActivity: [WorkspaceTeamActivityDTO]
+
+    enum CodingKeys: String, CodingKey {
+        case member
+        case recentActivity = "recent_activity"
+    }
+}
+
+struct WorkspaceTeamActivityDTO: Decodable, Identifiable {
+    let id: String
+    let type: String?
+    let points: Int?
+    let createdAt: String?
+    let memberId: String?
+    let memberName: String?
+    let amountEur: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case id, type, points
+        case createdAt = "created_at"
+        case memberId = "member_id"
+        case memberName = "member_name"
+        case amountEur = "amount_eur"
+    }
+}
+
+struct WorkspaceTeamMemberPatchBody: Encodable {
+    let name: String?
+    let role: String?
+}
+
+struct WorkspaceTeamMemberPatchResponse: Decodable {
+    let ok: Bool?
+    let member: WorkspaceTeamMemberDTO?
+}
+
+struct WorkspaceTeamResendAccessResponse: Decodable {
+    let ok: Bool?
+    let message: String?
+    let emailSent: Bool?
+    let emailError: String?
+
+    enum CodingKeys: String, CodingKey {
+        case ok, message
+        case emailSent = "email_sent"
+        case emailError = "email_error"
     }
 }
 
@@ -1818,29 +2138,26 @@ struct WorkspaceTeamInviteBody: Encodable {
     let role: String?
 }
 
-/// POST …/dashboard/team/staff-accounts — création d’un employé sans e-mail.
+/// POST …/dashboard/team/staff-accounts — création d’un employé par e-mail (connexion OTP).
 struct WorkspaceTeamStaffAccountBody: Encodable {
-    let staffLogin: String
-    let password: String
+    let email: String
     let name: String?
     let role: String?
-
-    enum CodingKeys: String, CodingKey {
-        case staffLogin = "staff_login"
-        case password, name, role
-    }
 }
 
 struct WorkspaceTeamStaffAccountResponse: Decodable {
     let ok: Bool?
     let message: String?
     let userId: String?
-    let staffLogin: String?
+    let email: String?
+    let emailSent: Bool?
+    let emailError: String?
 
     enum CodingKeys: String, CodingKey {
-        case ok, message
+        case ok, message, email
         case userId = "user_id"
-        case staffLogin = "staff_login"
+        case emailSent = "email_sent"
+        case emailError = "email_error"
     }
 }
 

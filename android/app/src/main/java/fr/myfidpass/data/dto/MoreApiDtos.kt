@@ -6,8 +6,23 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class CreateBusinessRequest(
     val name: String,
-    val slug: String,
+    val slug: String? = null,
     @SerialName("organizationName") val organizationName: String? = null,
+)
+
+@Serializable
+data class CreateBusinessFromPlaceRequest(
+    @SerialName("establishment_name") val establishmentName: String,
+    @SerialName("google_place_id") val googlePlaceId: String,
+)
+
+@Serializable
+data class CreateBusinessFromPlaceResponse(
+    val slug: String,
+    val name: String? = null,
+    @SerialName("organization_name") val organizationName: String? = null,
+    @SerialName("dashboard_token") val dashboardToken: String? = null,
+    val businesses: List<BusinessDto>? = null,
 )
 
 @Serializable
@@ -25,7 +40,10 @@ data class UpdateMemberCategoriesRequest(
 )
 
 @Serializable
-data class DeviceRegisterRequest(val token: String)
+data class DeviceRegisterRequest(
+    @SerialName("device_token") val deviceToken: String,
+    val platform: String = "android",
+)
 
 @Serializable
 data class NotifyClientsRequest(

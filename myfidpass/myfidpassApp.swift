@@ -14,13 +14,18 @@ struct myfidpassApp: App {
     let persistenceController = PersistenceController.shared
     @StateObject private var authService: AuthService
     @StateObject private var syncService: SyncService
+    @StateObject private var dataService: DataService
     @StateObject private var appState = AppState.shared
 
     init() {
         let auth = AuthService()
+        let container = PersistenceController.shared.container
         _authService = StateObject(wrappedValue: auth)
         _syncService = StateObject(
-            wrappedValue: SyncService(container: PersistenceController.shared.container, authService: auth)
+            wrappedValue: SyncService(container: container, authService: auth)
+        )
+        _dataService = StateObject(
+            wrappedValue: DataService(context: container.viewContext)
         )
     }
 
@@ -30,6 +35,7 @@ struct myfidpassApp: App {
                 .overlay(alignment: .top) { errorBanner }
             .environmentObject(authService)
             .environmentObject(syncService)
+            .environmentObject(dataService)
             .environmentObject(appState)
             .environment(\.managedObjectContext, persistenceController.container.viewContext)
             .preferredColorScheme(.light)

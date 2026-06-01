@@ -67,4 +67,14 @@ enum AuthResponsiveLayout {
         }
         return -8
     }
+
+    /// Hauteur max du visuel welcome (iPhone) — un peu plus compact que le plein écran.
+    static func welcomeHeroMaxHeightFraction(
+        width: CGFloat,
+        horizontalSizeClass: UserInterfaceSizeClass?
+    ) -> CGFloat {
+        if horizontalSizeClass == .regular { return 0.58 }
+        if width >= 600 { return 0.56 }
+        return 0.62
+    }
 }

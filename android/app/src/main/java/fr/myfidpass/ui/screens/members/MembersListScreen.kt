@@ -1,5 +1,8 @@
 package fr.myfidpass.ui.screens.members
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -21,6 +24,7 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHostState
@@ -35,9 +39,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import fr.myfidpass.data.dto.MemberDto
 import fr.myfidpass.data.repo.DashboardRepository
+import fr.myfidpass.services.sync.SyncService
+import fr.myfidpass.util.shareFiles
+import fr.myfidpass.util.writeTempExport
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -47,12 +55,14 @@ import kotlinx.coroutines.launch
 @Composable
 fun MembersListScreen(
     repository: DashboardRepository,
+    syncService: SyncService,
     snackbarHostState: SnackbarHostState,
     appScope: CoroutineScope,
     onBack: () -> Unit,
     onMemberClick: (String) -> Unit,
 ) {
     val slug = repository.currentSlug()
+    val context = LocalContext.current
     var members by remember { mutableStateOf<List<MemberDto>>(emptyList()) }
     var total by remember { mutableStateOf<Int?>(null) }
     var loading by remember { mutableStateOf(false) }
@@ -78,8 +88,45 @@ fun MembersListScreen(
         }
     }
 
+    val pickImport = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
+        uri ?: return@rememberLauncherForActivityResult
+        val s = slug ?: return@rememberLauncherForActivityResult
+        scope.launch {
+            runCatching {
+                val csv = context.contentResolver.openInputStream(uri)?.bufferedReader()?.readText()
+                    ?: error("Fichier illisible")
+                repository.membersImport(s, csv)
+                snackbarHostState.showSnackbar("Import terminé")
+                load(query)
+            }.onFailure {
+                snackbarHostState.showSnackbar(it.message ?: "Import impossible")
+            }
+        }
+    }
+
     LaunchedEffect(slug) {
-        if (slug != null) load("")
+        slug?.let { syncService.syncIfNeeded(it) }
+    }
+
+    LaunchedEffect(slug, query) {
+        val s = slug ?: return@LaunchedEffect
+        val q = query.trim()
+        if (q.isEmpty()) {
+            syncService.memberDao.observeBySlug(s).collect { cached ->
+                members = cached.map { e ->
+                    MemberDto(id = e.id, name = e.name, email = e.email, points = e.points)
+                }
+                if (total == null || cached.isNotEmpty()) total = members.size
+                loading = false
+            }
+        }
+    }
+
+    LaunchedEffect(slug) {
+        if (slug != null && query.trim().isEmpty() && members.isEmpty()) {
+            // Fallback API si cache vide au premier lancement
+            load("")
+        }
     }
 
     Scaffold(
@@ -111,15 +158,49 @@ fun MembersListScreen(
                 onValueChange = { q ->
                     query = q
                     searchJob?.cancel()
+                    if (q.trim().isEmpty()) return@OutlinedTextField
+                    val currentSlug = slug ?: return@OutlinedTextField
                     searchJob = scope.launch {
                         delay(320)
-                        load(q)
+                        val local = syncService.memberDao.search(currentSlug, q.trim())
+                        if (local.isNotEmpty()) {
+                            members = local.map { e ->
+                                MemberDto(id = e.id, name = e.name, email = e.email, points = e.points)
+                            }
+                            total = members.size
+                            loading = false
+                        } else {
+                            load(q)
+                        }
                     }
                 },
                 modifier = Modifier.fillMaxWidth(),
                 label = { Text("Recherche") },
                 singleLine = true,
             )
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = {
+                    val s = slug ?: return@OutlinedButton
+                    scope.launch {
+                        runCatching {
+                            val bytes = repository.businessMembersExportCsv(s, query.trim().ifEmpty { null })
+                            val file = writeTempExport(context, "exports", "membres-$s.csv", bytes)
+                            shareFiles(context, listOf(file), "text/csv")
+                        }.onFailure {
+                            snackbarHostState.showSnackbar(it.message ?: "Export impossible")
+                        }
+                    }
+                },
+                enabled = slug != null,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Exporter CSV") }
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = { pickImport.launch("text/*") },
+                enabled = slug != null,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Importer CSV") }
             Spacer(Modifier.height(12.dp))
             if (loading) {
                 CircularProgressIndicator()

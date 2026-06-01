@@ -15,7 +15,7 @@ data class ResetPasswordRequest(
 
 @Serializable
 data class LogoutRequest(
-    @SerialName("refresh_token") val refreshToken: String? = null,
+    val refreshToken: String? = null,
 )
 
 @Serializable
@@ -76,6 +76,12 @@ data class UpdateCategoryRequest(
 )
 
 @Serializable
+data class BusinessCheckoutSessionRequest(
+    @SerialName("business_slug") val businessSlug: String? = null,
+    val interval: String? = null,
+)
+
+@Serializable
 data class PaymentCheckoutRequest(
     @SerialName("plan_id") val planId: String? = null,
 )
@@ -91,6 +97,14 @@ data class PaymentReconcileResponse(
     val ok: Boolean? = null,
     @SerialName("has_active_subscription") val hasActiveSubscription: Boolean? = null,
     val message: String? = null,
+)
+
+@Serializable
+data class DevSimulatePaymentResponse(
+    val ok: Boolean? = null,
+    val status: String? = null,
+    val simulated: Boolean? = null,
+    @SerialName("has_active_subscription") val hasActiveSubscription: Boolean? = null,
 )
 
 @Serializable

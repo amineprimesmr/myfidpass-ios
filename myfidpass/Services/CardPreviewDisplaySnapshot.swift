@@ -78,7 +78,8 @@ enum CardPreviewDisplaySnapshotStore {
             tierLabels: snap.tierLabels ?? [],
             requiredStamps: snap.requiredStamps,
             stampRewardLabel: snap.stampRewardLabel,
-            stampMidRewardLabel: snap.stampMidRewardLabel ?? ""
+            stampMidRewardLabel: snap.stampMidRewardLabel ?? "",
+            startGameRewardLabel: snap.startGameRewardLabel ?? ""
         ).isEmpty
     }
 

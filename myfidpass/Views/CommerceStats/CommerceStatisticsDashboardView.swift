@@ -8,18 +8,6 @@
 import SwiftUI
 import UIKit
 
-private enum MerchantStatsZoom {
-    static func newMembersSourceID(monthKey: String) -> String {
-        "merchantStats.zoom.newMembers.\(monthKey)"
-    }
-}
-
-private struct MerchantStatsZoomDetailItem: Identifiable, Equatable {
-    let id: String
-    let topic: CommerceStatisticDetailTopic
-    let periodKey: String
-}
-
 enum CommerceStatsRuntimeSession {
     static var hasRevealedEmbeddedDetailSections = false
 }
@@ -29,6 +17,7 @@ struct CommerceStatisticsDashboardView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @EnvironmentObject private var authService: AuthService
+    @EnvironmentObject private var tabRouter: MainTabRouter
     @ObservedObject var vm: MerchantStatsIndicatorsViewModel
     /// Ordre : index 0 = mois le plus récent, … 5 = M-5.
     let statsMonthKeys: [String]
@@ -39,13 +28,10 @@ struct CommerceStatisticsDashboardView: View {
     /// Présentation par-dessus Commerce : fond transparent, en-tête flou, bouton « X » (ref. Revolut).
     var glassOverlayMode: Bool = false
 
-    @Namespace private var statsZoomNamespace
-    @State private var zoomDetailSheetItem: MerchantStatsZoomDetailItem?
     @State private var accountingPackPresented = false
     @State private var panierRepereSheetPresented = false
     @State private var socialMissionsSheetPresented = false
-    /// Même schéma que `scheduleNotificationIconNudgeIfNeeded` sur Campagnes : délai 3 s puis feuille si repère absent.
-    @State private var panierRepereNudgeTask: Task<Void, Never>?
+    @State private var socialMissionsConnectSubtitle = "Instagram · TikTok · Facebook · X — missions & points"
     @State private var showDeferredDetailSections = false
     /// Présentations KPI par mois — mises à jour uniquement quand les données changent (pas à chaque render).
     @State private var cachedMonthPresentations: [String: CommerceStatisticsPresentation] = [:]
@@ -73,17 +59,17 @@ struct CommerceStatisticsDashboardView: View {
     private let kpiMonthCarouselItemSpacing: CGFloat = 10
     /// Déborde légèrement hors du `contentGutter` pour élargir visuellement Membres / Panier / Fréquence.
     private let kpiBlockHorizontalOutdent: CGFloat = 6
+    /// Padding interne gauche des tuiles KPI (titres « Membres », « Panier moyen », etc.).
+    private let kpiCardContentLeadingInset: CGFloat = 18
     /// Aligne "Plus de données" sur la largeur visuelle des KPI réduits.
     private let detailSectionsHorizontalInset: CGFloat = 8
     /// Marge supplémentaire entre le carrousel KPI (panier / fréquence) et « Plus de données ».
     private let kpiToDetailSectionsTopInset: CGFloat = 22
     private let contentGutter: CGFloat = 16
 
-    /// Statistiques détaillées (hors carte Membres) : débloquées avec abonnement Stripe qualifiant (ou admin).
+    /// Statistiques détaillées (hors carte Membres) : essai, abo, admin ou équipe.
     private var commerceStatsInsightsUnlocked: Bool {
-        if authService.isPlatformAdmin { return true }
-        if authService.hasPaidStripeSubscription { return true }
-        return false
+        authService.merchantProInsightsUnlocked
     }
 
     private var statsPaywallBlurRadius: CGFloat { 5 }
@@ -232,10 +218,15 @@ struct CommerceStatisticsDashboardView: View {
         return statsMonthKeys[selectedMonthIndex]
     }
 
-    /// Libellé court du mois civil (ex. « mai », « septembre »).
+    /// Libellé carrousel (ex. « En mai »).
     private var kpiCarouselMonthHeading: String {
         let key = selectedMonthKey ?? CommerceStatsMonthNavigator.calendarMonthKey(for: Date())
-        return CommerceStatsMonthNavigator.displayTitleMonthOnly(forMonthKey: key).lowercased()
+        return CommerceStatsMonthNavigator.displayTitleInMonth(forMonthKey: key)
+    }
+
+    /// Alignement gauche du titre mois et des pastilles = texte des tuiles KPI.
+    private var kpiChromeLeadingInset: CGFloat {
+        kpiMonthCarouselPeek + kpiCardContentLeadingInset
     }
 
     /// Spinner uniquement au tout premier chargement (aucune donnée locale pour ce mois).
@@ -267,40 +258,25 @@ struct CommerceStatisticsDashboardView: View {
         )
     }
 
+    private var statsPageCanvas: Color {
+        DashboardRevolutPalette(colorScheme: colorScheme).canvas
+    }
+
     var body: some View {
         ZStack(alignment: .topLeading) {
             Group {
                 if glassOverlayMode {
                     Color.clear
+                } else if isEmbeddedCommerceStats {
+                    /// Onglet Statistiques : le canvas est déjà peint dans `ProfileView`.
+                    Color.clear
                 } else {
-                    Color.black
+                    statsPageCanvas
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             /// Ne pas ignorer le haut : sinon le `ScrollView` peut perdre le safe area et passer sous la barre d’état / la top bar.
             .ignoresSafeArea(edges: [.horizontal, .bottom])
-
-            if !glassOverlayMode {
-                UnevenRoundedRectangle(
-                    topLeadingRadius: 24,
-                    bottomLeadingRadius: 0,
-                    bottomTrailingRadius: 0,
-                    topTrailingRadius: 24,
-                    style: .continuous
-                )
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            Color(red: 0.92, green: 0.92, blue: 0.93),
-                            Color(red: 0.88, green: 0.88, blue: 0.90),
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                .ignoresSafeArea(edges: [.horizontal, .bottom])
-            }
 
             if glassOverlayMode {
                 statsAmbientBackdrop
@@ -332,7 +308,7 @@ struct CommerceStatisticsDashboardView: View {
 
             if showBlockingStatsLoading {
                 ProgressView()
-                    .tint(.white)
+                    .tint(glassOverlayMode ? .white : CommerceStatisticsTheme.accentBlue)
                     .padding(.top, glassOverlayMode ? statsScrollContentTopPadding + 18 : 14)
                     .frame(maxWidth: .infinity, alignment: .top)
                     .allowsHitTesting(false)
@@ -343,43 +319,18 @@ struct CommerceStatisticsDashboardView: View {
                     .zIndex(20)
             }
 
-            if panierRepereSheetPresented {
-                Color.black.opacity(glassOverlayMode ? 0.24 : 0.18)
-                    .ignoresSafeArea()
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        panierRepereSheetPresented = false
-                        schedulePanierRepereNudgeIfNeeded()
-                    }
-                    .zIndex(28)
-
-                MerchantStatsPanierRepereCompactSheet(
-                    initialEuro: vm.baselinePanierRepereEUR,
-                    onClose: {
-                        panierRepereSheetPresented = false
-                        schedulePanierRepereNudgeIfNeeded()
-                    },
-                    onSave: { value, clear in
-                        await savePanierRepere(value: value, clear: clear)
-                    }
-                )
-                .frame(maxWidth: 430)
-                .padding(.horizontal, 18)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-                .transition(.identity)
-                .zIndex(29)
-            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Color.clear)
         .onDisappear {
-            cancelPanierRepereNudge()
             panierRepereSheetPresented = false
             showDeferredDetailSections = false
+            tabRouter.isCommerceStatsAtRoot = true
         }
         .onAppear {
             refreshMonthCarouselCachesOnly()
             refreshDetailCachesOnly()
+            syncCommerceStatsSubscribePillVisibility()
             if isEmbeddedCommerceStats {
                 /// Affichage immédiat en embarqué: évite l'effet "les blocs arrivent après".
                 showDeferredDetailSections = true
@@ -387,10 +338,7 @@ struct CommerceStatisticsDashboardView: View {
             } else {
                 showDeferredDetailSections = true
             }
-            schedulePanierRepereNudgeIfNeeded()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .myfidpassCommerceStatsTabDidBecomeSelected)) { _ in
-            schedulePanierRepereNudgeIfNeeded()
+            Task { await refreshSocialMissionsConnectSubtitle() }
         }
         .onChange(of: vm.lastSuccessfullyLoadedPeriod) { _, newPeriod in
             let p = newPeriod?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -401,39 +349,37 @@ struct CommerceStatisticsDashboardView: View {
                 refreshCachedPresentations()
             }
         }
-        .onChange(of: vm.baselinePanierRepereEUR) { _, newVal in
+        .onChange(of: vm.baselinePanierRepereEUR) { _, _ in
             refreshCachedPresentations()
-            if newVal != nil {
-                cancelPanierRepereNudge()
-            } else {
-                schedulePanierRepereNudgeIfNeeded()
-            }
-        }
-        .onChange(of: zoomDetailSheetItem) { _, newVal in
-            if newVal != nil {
-                cancelPanierRepereNudge()
-            } else if vm.baselinePanierRepereEUR == nil {
-                schedulePanierRepereNudgeIfNeeded()
-            }
         }
         .onChange(of: accountingPackPresented) { _, presented in
             if presented {
-                cancelPanierRepereNudge()
-            } else if vm.baselinePanierRepereEUR == nil {
-                schedulePanierRepereNudgeIfNeeded()
+                panierRepereSheetPresented = false
             }
+            syncCommerceStatsSubscribePillVisibility()
+        }
+        .onChange(of: panierRepereSheetPresented) { _, _ in
+            syncCommerceStatsSubscribePillVisibility()
+        }
+        .onChange(of: socialMissionsSheetPresented) { _, _ in
+            syncCommerceStatsSubscribePillVisibility()
         }
         .task(id: selectedMonthIndex) {
             await loadMonthForCurrentSelection()
         }
-        .sheet(item: $zoomDetailSheetItem) { item in
-            MerchantStatisticRevolutDetailScreen(topic: item.topic, initialPeriodRaw: item.periodKey)
-                .environment(\.managedObjectContext, viewContext)
-                .environment(\.commerceStatsGlassOverlay, true)
-                .environment(\.colorScheme, .dark)
-                .statsDetailZoomTransition(sourceID: item.id, namespace: statsZoomNamespace)
-                .presentationCornerRadius(28)
-                .presentationDragIndicator(.hidden)
+        .sheet(isPresented: $panierRepereSheetPresented) {
+            MerchantStatsPanierRepereSheet(
+                initialEuro: vm.baselinePanierRepereEUR,
+                onClose: {
+                    panierRepereSheetPresented = false
+                },
+                onSave: { value, clear in
+                    await savePanierRepere(value: value, clear: clear)
+                }
+            )
+            .presentationDetents([.medium])
+            .presentationDragIndicator(.visible)
+            .presentationCornerRadius(28)
         }
         .sheet(isPresented: $accountingPackPresented) {
             NavigationStack {
@@ -443,9 +389,14 @@ struct CommerceStatisticsDashboardView: View {
         }
         .sheet(isPresented: $socialMissionsSheetPresented) {
             if let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines), !slug.isEmpty {
-                SocialMissionsSheet(slug: slug)
-                    .presentationCornerRadius(28)
+                SocialMissionsSheet(slug: slug) {
+                    Task { await refreshSocialMissionsConnectSubtitle() }
+                }
+                .presentationCornerRadius(28)
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .myfidpassSocialMissionsDidSave)) { _ in
+            Task { await refreshSocialMissionsConnectSubtitle() }
         }
         .onChange(of: authService.merchantSubscription?.status) { _, _ in
             refreshCachedPresentations()
@@ -453,6 +404,12 @@ struct CommerceStatisticsDashboardView: View {
         .onChange(of: authService.isPlatformAdmin) { _, _ in
             refreshCachedPresentations()
         }
+    }
+
+    private func syncCommerceStatsSubscribePillVisibility() {
+        tabRouter.isCommerceStatsAtRoot = !accountingPackPresented
+            && !panierRepereSheetPresented
+            && !socialMissionsSheetPresented
     }
 
     /// Contenu scrollé (KPI, sections) — dupliqué seulement en structure si/pas mode verre.
@@ -481,8 +438,6 @@ struct CommerceStatisticsDashboardView: View {
                     .padding(.vertical, 8)
             }
 
-            gatedConnectSocialNetworksButton
-
             Color.clear.frame(height: 44)
         }
         .padding(.horizontal, contentGutter)
@@ -499,68 +454,47 @@ struct CommerceStatisticsDashboardView: View {
                 .font(CommerceStatisticsTheme.statsText(size: 14, weight: .semibold))
                 .foregroundStyle(CommerceStatisticsTheme.onCardSecondary(forGlassOverlay: glassOverlayMode).opacity(0.82))
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color.white.opacity(glassOverlayMode ? 0.08 : 0.5))
+                .fill(Color.black.opacity(glassOverlayMode ? 0.08 : 0.05))
                 .frame(height: 92)
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color.white.opacity(glassOverlayMode ? 0.08 : 0.5))
+                .fill(Color.black.opacity(glassOverlayMode ? 0.08 : 0.05))
                 .frame(height: 92)
         }
     }
 
-    private var gatedConnectSocialNetworksButton: some View {
-        ZStack {
-            connectSocialNetworksButton
-                .blur(radius: commerceStatsInsightsUnlocked ? 0 : statsPaywallBlurRadius)
-                .allowsHitTesting(commerceStatsInsightsUnlocked)
-
-            if !commerceStatsInsightsUnlocked {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(Color.black.opacity(glassOverlayMode ? 0.08 : 0.05))
-                    .allowsHitTesting(false)
-                MerchantProUnlockTeaserButton(preferDarkGlassTint: glassOverlayMode) {
-                    presentCommerceStatsPaywall()
+    private func refreshSocialMissionsConnectSubtitle() async {
+        guard let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines), !slug.isEmpty else {
+            await MainActor.run {
+                socialMissionsConnectSubtitle = "Instagram · TikTok · Facebook · X — missions & points"
+            }
+            return
+        }
+        do {
+            let resp: SocialMissionsResponse = try await APIClient.shared.request(.dashboardSocialMissions(slug: slug))
+            let labels: [(String, SocialMissionConfig?)] = [
+                ("IG", resp.instagram),
+                ("TikTok", resp.tiktok),
+                ("FB", resp.facebook),
+                ("X", resp.twitter),
+            ]
+            let connected = labels.compactMap { tag, cfg -> String? in
+                guard let cfg, cfg.enabled else { return nil }
+                let u = cfg.username.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !u.isEmpty else { return nil }
+                return "\(tag) @\(u)"
+            }
+            await MainActor.run {
+                socialMissionsConnectSubtitle = connected.isEmpty
+                    ? "Configurer les @ et les points offerts aux clients"
+                    : connected.joined(separator: " · ")
+            }
+        } catch {
+            if !APIError.isBenignRequestCancellation(error) {
+                await MainActor.run {
+                    socialMissionsConnectSubtitle = "Instagram · TikTok · Facebook · X — missions & points"
                 }
-                .accessibilityLabel("Déverrouiller avec Pro pour connecter les réseaux sociaux")
-                .accessibilityAddTraits(.isButton)
             }
         }
-    }
-
-    private var connectSocialNetworksButton: some View {
-        Button {
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
-            socialMissionsSheetPresented = true
-        } label: {
-            let fgPrimary = glassOverlayMode ? Color.white : Color.accentColor
-            let fgSecondary = glassOverlayMode ? Color.white.opacity(0.6) : Color(UIColor.secondaryLabel)
-            let bgFill = glassOverlayMode ? Color.white.opacity(0.1) : Color.accentColor.opacity(0.07)
-            let border = glassOverlayMode ? Color.white.opacity(0.2) : Color.accentColor.opacity(0.18)
-            HStack(spacing: 10) {
-                Image(systemName: "person.2.wave.2.fill")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(fgPrimary)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Connecter mes réseaux")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(fgPrimary)
-                    Text("Instagram · TikTok · Facebook · X — missions & points")
-                        .font(.caption2)
-                        .foregroundStyle(fgSecondary)
-                        .lineLimit(1)
-                }
-                Spacer(minLength: 8)
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(fgSecondary)
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(bgFill))
-            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(border, lineWidth: 1))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
     }
 
     // MARK: - Ambiance
@@ -641,16 +575,25 @@ struct CommerceStatisticsDashboardView: View {
 
     @ViewBuilder
     private var kpiCarouselSection: some View {
+        if statsMonthKeys.isEmpty {
+            EmptyView()
+        } else {
+            kpiCarouselSectionContent
+        }
+    }
+
+    @ViewBuilder
+    private var kpiCarouselSectionContent: some View {
         let g = glassOverlayMode
         VStack(alignment: .leading, spacing: kpiClusterVerticalSpacing) {
-            /// Même marge de départ que « Outils d'analyse » : l’outdent ne s’applique qu’au carrousel, pas à ce titre.
             HStack(alignment: .firstTextBaseline) {
                 Text(kpiCarouselMonthHeading)
                     .font(CommerceStatisticsTheme.statsChromeSectionTitle(size: 32, weight: .bold))
                     .foregroundStyle(CommerceStatisticsTheme.pageTitle(forGlassOverlay: g))
                     .multilineTextAlignment(.leading)
-                Spacer()
+                Spacer(minLength: 0)
             }
+            .padding(.leading, kpiChromeLeadingInset)
             .padding(.bottom, kpiMonthTitleBottomInset)
 
             VStack(alignment: .leading, spacing: 0) {
@@ -691,8 +634,8 @@ struct CommerceStatisticsDashboardView: View {
                     g.selectionChanged()
                 }
             }
-            .padding(.horizontal, -kpiBlockHorizontalOutdent)
         }
+        .padding(.horizontal, -kpiBlockHorizontalOutdent)
     }
 
     @ViewBuilder
@@ -717,7 +660,8 @@ struct CommerceStatisticsDashboardView: View {
                     .padding(.horizontal, 3)
                 }
             }
-            .frame(maxWidth: .infinity)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.leading, kpiChromeLeadingInset)
             .padding(.top, 4)
             .accessibilityElement(children: .combine)
             .accessibilityLabel("Mois affiché")
@@ -729,8 +673,6 @@ struct CommerceStatisticsDashboardView: View {
     private func kpiCluster(forMonthKey monthKey: String, panierFreqCellSide: CGFloat) -> some View {
         let pres = cachedMonthPresentations[monthKey] ?? CommerceStatisticsDataBuilder.build(stats: nil, evolution: [], panierRepereEuro: nil)
         let monthStats = vm.businessStats(forMonthKey: monthKey)
-        let zoomID = MerchantStatsZoom.newMembersSourceID(monthKey: monthKey)
-
         VStack(alignment: .leading, spacing: kpiMembersToPanierRowSpacing) {
             CommerceStatsLargeMetricCard(
                 title: "Membres",
@@ -739,18 +681,7 @@ struct CommerceStatisticsDashboardView: View {
                 subtitle: newMembersInscriptionSubtitle(stats: monthStats),
                 membersWeeklySparkline: pres.membersWeeklySparkline,
                 segments: pres.donutSegments,
-                onTap: {
-                    let item = MerchantStatsZoomDetailItem(
-                        id: zoomID,
-                        topic: .newMembers,
-                        periodKey: monthKey
-                    )
-                    DispatchQueue.main.async {
-                        zoomDetailSheetItem = item
-                    }
-                },
-                zoomTransitionSourceID: zoomID,
-                zoomTransitionNamespace: statsZoomNamespace
+                onTap: nil
             )
             .frame(height: membersKpiCardFixedHeight, alignment: .top)
             .scaleEffect(kpiCardsMicroScale, anchor: .top)
@@ -770,7 +701,6 @@ struct CommerceStatisticsDashboardView: View {
         let locked = !commerceStatsInsightsUnlocked
         ZStack {
             panierFrequenceSquareRow(presentation: presentation, cellSide: panierFreqCellSide) {
-                cancelPanierRepereNudge()
                 panierRepereSheetPresented = true
             }
             .blur(radius: locked ? statsPaywallBlurRadius : 0)
@@ -791,29 +721,55 @@ struct CommerceStatisticsDashboardView: View {
 
     @ViewBuilder
     private var detailSectionsBelowCarousel: some View {
+        VStack(alignment: .leading, spacing: 28) {
+            statsDetailSection(
+                title: "Plus de données",
+                accessibilityUnlockLabel: "Déverrouiller avec Pro pour le détail des statistiques"
+            ) {
+                CommerceStatsCategoryListCard(rows: cachedDetailPresentation.categoryRows) { rowId in
+                    guard rowId == "rewards" else { return }
+                    accountingPackPresented = true
+                }
+
+                if !cachedNotificationCampaigns.isEmpty {
+                    CommerceNotificationImpactListCard(
+                        campaigns: cachedNotificationCampaigns,
+                        notificationIconURL: commerceStatsInsightsUnlocked ? vm.statsNotificationIconURL : nil
+                    )
+                }
+            }
+
+            statsDetailSection(
+                title: "Engagement",
+                accessibilityUnlockLabel: "Déverrouiller avec Pro pour les statistiques d’engagement"
+            ) {
+                CommerceStatsCategoryListCard(rows: cachedDetailPresentation.engagementRows)
+
+                CommerceStatsConnectNetworksButton(
+                    subtitle: socialMissionsConnectSubtitle,
+                    glassOverlayMode: glassOverlayMode,
+                    action: {
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        socialMissionsSheetPresented = true
+                    }
+                )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func statsDetailSection<Content: View>(
+        title: String,
+        accessibilityUnlockLabel: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
         let locked = !commerceStatsInsightsUnlocked
-        VStack(alignment: .leading, spacing: 22) {
-            CommerceStatsSectionHeader(title: "Plus de données", titleFontSize: 18, titleWeight: .bold)
+        VStack(alignment: .leading, spacing: 16) {
+            CommerceStatsSectionHeader(title: title, titleFontSize: 18, titleWeight: .bold)
 
             ZStack {
-                VStack(alignment: .leading, spacing: 22) {
-                    CommerceStatsCategoryListCard(rows: cachedDetailPresentation.categoryRows + cachedDetailPresentation.googleReviewsRows) { rowId in
-                        guard rowId == "rewards" else { return }
-                        accountingPackPresented = true
-                    }
-
-                    let socialRows = cachedDetailPresentation.socialNetworkRows
-                    if !socialRows.isEmpty {
-                        CommerceStatsSectionHeader(title: "Réseaux sociaux", titleFontSize: 16, titleWeight: .semibold)
-                        CommerceStatsCategoryListCard(rows: socialRows)
-                    }
-
-                    if !cachedNotificationCampaigns.isEmpty {
-                        CommerceNotificationImpactListCard(
-                            campaigns: cachedNotificationCampaigns,
-                            notificationIconURL: commerceStatsInsightsUnlocked ? vm.statsNotificationIconURL : nil
-                        )
-                    }
+                VStack(alignment: .leading, spacing: 16) {
+                    content()
                 }
                 .blur(radius: locked ? statsPaywallBlurRadius : 0)
                 .allowsHitTesting(!locked)
@@ -825,7 +781,7 @@ struct CommerceStatisticsDashboardView: View {
                     MerchantProUnlockTeaserButton(preferDarkGlassTint: glassOverlayMode) {
                         presentCommerceStatsPaywall()
                     }
-                    .accessibilityLabel("Déverrouiller avec Pro pour le détail des statistiques")
+                    .accessibilityLabel(accessibilityUnlockLabel)
                     .accessibilityAddTraits(.isButton)
                 }
             }
@@ -839,16 +795,25 @@ struct CommerceStatisticsDashboardView: View {
     ) -> some View {
         HStack(alignment: .top, spacing: kpiPanierFreqInterItemSpacing) {
             panierFreqSquareSlot(cellSide: cellSide) {
-                CommerceStatsCompactMetricCard(
-                    title: "Panier moyen",
-                    value: panierText(presentation: presentation),
-                    valueFontSize: 30,
-                    trendText: panierTrendText(presentation: presentation),
-                    trendPositive: panierTrendPositive(presentation: presentation),
-                    footnote: panierRepereFootnote(presentation: presentation),
-                    onCardTap: onPanierTap
-                ) {
-                    EmptyView()
+                ZStack(alignment: .bottomTrailing) {
+                    CommerceStatsCompactMetricCard(
+                        title: "Panier moyen",
+                        value: panierText(presentation: presentation),
+                        valueFontSize: 30,
+                        trendText: panierTrendText(presentation: presentation),
+                        trendPositive: panierTrendPositive(presentation: presentation),
+                        footnote: panierRepereFootnote(presentation: presentation),
+                        onCardTap: onPanierTap
+                    ) {
+                        EmptyView()
+                    }
+
+                    if shouldShowPanierTouchHint(presentation: presentation) {
+                        CardPreviewConfiguratorPill()
+                            .padding(10)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                    }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -951,6 +916,15 @@ struct CommerceStatisticsDashboardView: View {
         return "Repère : \(StatsFR.formatEuro(r))€"
     }
 
+    /// Badge « Touchez » uniquement tant qu’aucun panier / repère n’est renseigné.
+    private func shouldShowPanierTouchHint(presentation: CommerceStatisticsPresentation) -> Bool {
+        guard commerceStatsInsightsUnlocked else { return false }
+        if vm.baselinePanierRepereEUR != nil { return false }
+        if presentation.panierMoyenEuro != nil { return false }
+        if presentation.panierRepereEuro != nil { return false }
+        return true
+    }
+
     /// Texte court pour la tuile à hauteur fixe (détail complet possible en appui long / accessibilité plus tard).
     private func panierFootnoteShort(presentation: CommerceStatisticsPresentation) -> String? {
         let m = presentation.panierMoyenEuro
@@ -965,30 +939,6 @@ struct CommerceStatisticsDashboardView: View {
             return "Touchez : enregistrer un repère"
         }
         return "vs repère"
-    }
-
-    private func cancelPanierRepereNudge() {
-        panierRepereNudgeTask?.cancel()
-        panierRepereNudgeTask = nil
-    }
-
-    /// Après 3 s sur l’écran stats : feuille « panier repère » si aucun repère (même délai que le rappel icône sur Campagnes).
-    private func schedulePanierRepereNudgeIfNeeded() {
-        cancelPanierRepereNudge()
-        guard commerceStatsInsightsUnlocked else { return }
-        guard vm.baselinePanierRepereEUR == nil else { return }
-        guard !vm.isDemoSixMonthPreviewActive else { return }
-        panierRepereNudgeTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
-            guard !Task.isCancelled else { return }
-            guard vm.baselinePanierRepereEUR == nil else { return }
-            guard !vm.isDemoSixMonthPreviewActive else { return }
-            guard let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines), !slug.isEmpty else { return }
-            guard zoomDetailSheetItem == nil else { return }
-            guard !accountingPackPresented else { return }
-            guard !panierRepereSheetPresented else { return }
-            panierRepereSheetPresented = true
-        }
     }
 
     @MainActor
@@ -1033,9 +983,9 @@ struct CommerceStatisticsDashboardView: View {
 
 }
 
-// MARK: - Panier repère (saisie compacte, clavier numérique)
+// MARK: - Panier repère (feuille — tap sur la tuile Panier moyen)
 
-private struct MerchantStatsPanierRepereCompactSheet: View {
+private struct MerchantStatsPanierRepereSheet: View {
     let initialEuro: Double?
     let onClose: () -> Void
     let onSave: (Double?, Bool) async -> Void
@@ -1161,11 +1111,9 @@ private struct MerchantStatsPanierRepereCompactSheet: View {
 }
 
 private struct MerchantPanierRepereLiquidGlassModifier: ViewModifier {
-    @ViewBuilder
     func body(content: Content) -> some View {
         if #available(iOS 26.0, *) {
-            content
-                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+            content.glassEffect(.regular, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
         } else {
             content
                 .background(

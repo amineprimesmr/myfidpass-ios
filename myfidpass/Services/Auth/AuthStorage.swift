@@ -28,14 +28,16 @@ enum AuthStorage {
         static let currentBusinessSlug = "myfidpass.auth.currentBusinessSlug"
         /// `slug` → `dashboard_token` (GET login/me) pour l’en-tête `X-Dashboard-Token` sur les routes dashboard.
         static let dashboardTokensBySlug = "myfidpass.auth.dashboardTokensBySlug"
-        /// Après `POST /api/auth/register` : afficher le paywall avant l’accès aux onglets.
+        /// Legacy : toujours `false` (paywall post-inscription supprimé). Conservé pour migration UserDefaults.
         static let pendingOpenMerchantSubscriptionSheetAfterSignup = "myfidpass.auth.pendingOpenMerchantSubscriptionSheetAfterSignup"
-        /// Après sortie du paywall post-inscription : relancer le tutoriel commerçant.
+        /// Après inscription : lancer le tutoriel commerçant à l’accueil.
         static let pendingShowMerchantHomeTutorialAfterSignup = "myfidpass.auth.pendingShowMerchantHomeTutorialAfterSignup"
         /// Identifiant utilisateur API (`GET /me` → `user.id`).
         static let userId = "myfidpass.auth.userId"
         /// Dernier `MerchantWorkspaceRole` connu (affichage au cold start avant `GET /me`).
         static let merchantWorkspaceRole = "myfidpass.auth.merchantWorkspaceRole"
+        /// Compte administrateur plateforme (`is_admin`) — évite d’afficher l’UI commerçant au cold start avant `/me`.
+        static let isPlatformAdmin = "myfidpass.auth.isPlatformAdmin"
     }
 
     static var isLoggedIn: Bool {
@@ -169,6 +171,11 @@ enum AuthStorage {
     /// Reprise au tap sur une notif (AppDelegate) avant chargement d’`AuthService`.
     static var isCachedWorkspaceStaff: Bool { merchantWorkspaceRoleRaw == "staff" }
 
+    static var isPlatformAdminFlag: Bool {
+        get { defaults.bool(forKey: Key.isPlatformAdmin) }
+        set { defaults.set(newValue, forKey: Key.isPlatformAdmin) }
+    }
+
     static func clearSession() {
         defaults.removeObject(forKey: Key.isLoggedIn)
         defaults.removeObject(forKey: Key.userEmail)
@@ -185,6 +192,7 @@ enum AuthStorage {
         defaults.removeObject(forKey: Key.pendingOpenMerchantSubscriptionSheetAfterSignup)
         defaults.removeObject(forKey: Key.pendingShowMerchantHomeTutorialAfterSignup)
         defaults.removeObject(forKey: Key.merchantWorkspaceRole)
+        defaults.removeObject(forKey: Key.isPlatformAdmin)
         defaults.removeObject(forKey: "myfidpass.merchantHomeTutorial.v2")
         defaults.removeObject(forKey: "myfidpass.merchantHomeTutorial.v1")
     }

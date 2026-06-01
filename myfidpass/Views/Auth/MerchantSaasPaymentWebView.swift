@@ -14,9 +14,11 @@ struct MerchantSaasPaymentWebContent: UIViewRepresentable {
     let url: URL
     /// Appelé après chaque chargement réussi — injection session web alignée sur `AuthStorage` natif.
     var onPageDidFinish: ((WKWebView) -> Void)?
+    /// Deep link `myfidpass://subscription-paid` — uniquement après confirmation serveur.
+    var onSubscriptionPaidDeepLink: (() -> Void)?
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onPageDidFinish: onPageDidFinish)
+        Coordinator(onPageDidFinish: onPageDidFinish, onSubscriptionPaidDeepLink: onSubscriptionPaidDeepLink)
     }
 
     func makeUIView(context: Context) -> WKWebView {
@@ -44,9 +46,14 @@ struct MerchantSaasPaymentWebContent: UIViewRepresentable {
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
         private let onPageDidFinish: ((WKWebView) -> Void)?
+        private let onSubscriptionPaidDeepLink: (() -> Void)?
 
-        init(onPageDidFinish: ((WKWebView) -> Void)?) {
+        init(
+            onPageDidFinish: ((WKWebView) -> Void)?,
+            onSubscriptionPaidDeepLink: (() -> Void)?
+        ) {
             self.onPageDidFinish = onPageDidFinish
+            self.onSubscriptionPaidDeepLink = onSubscriptionPaidDeepLink
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -76,7 +83,7 @@ struct MerchantSaasPaymentWebContent: UIViewRepresentable {
                 return
             }
             if url.scheme?.lowercased() == "myfidpass", url.host == "subscription-paid" {
-                NotificationCenter.default.post(name: .myfidpassSubscriptionPaymentCompleted, object: nil)
+                onSubscriptionPaidDeepLink?()
                 decisionHandler(.cancel)
                 return
             }
@@ -122,9 +129,10 @@ struct MerchantSaasPaymentWebView: View {
     @State private var isCloseButtonRevealed = false
     @State private var paymentWebViewRef: WKWebView?
 
-    /// URL stable (sans `#fid_auth`) : la session est injectée en JS après chargement pour éviter tokens périmés + rechargements en boucle.
+    /// URL stable : Payment Link Stripe + e-mail commerçant si connu.
     private var paymentURL: URL {
-        LegalURLs.merchantSaasProPaymentPage
+        let email = authService.currentUserEmail ?? AuthStorage.userEmail
+        return LegalURLs.merchantSaasProPaymentPage(prefilledEmail: email)
     }
 
     /// Commerce actif (`slug` stocké) ou premier commerce du compte — affiché comme contexte de paiement.
@@ -177,13 +185,24 @@ struct MerchantSaasPaymentWebView: View {
                 if shouldShowPaymentTopChrome {
                     paymentPageTopChrome
                 }
-                MerchantSaasPaymentWebContent(url: paymentURL, onPageDidFinish: { webView in
-                    paymentWebViewRef = webView
-                    Task { @MainActor in
-                        await APIClient.shared.ensureValidAccessToken()
-                        Self.injectNativeAuthSession(into: webView)
+                MerchantSaasPaymentWebContent(
+                    url: paymentURL,
+                    onPageDidFinish: { webView in
+                        paymentWebViewRef = webView
+                        Task { @MainActor in
+                            await APIClient.shared.ensureValidAccessToken()
+                            Self.injectNativeAuthSession(into: webView)
+                        }
+                    },
+                    onSubscriptionPaidDeepLink: {
+                        Task { @MainActor in
+                            _ = await authService.refreshMerchantBillingStateFromServer(force: true)
+                            await authService.reconcileMerchantSubscriptionFromServer(force: true)
+                            guard authService.hasEncashedMerchantSubscription else { return }
+                            NotificationCenter.default.post(name: .myfidpassSubscriptionPaymentCompleted, object: nil)
+                        }
                     }
-                })
+                )
                     .padding(.top, webViewTopInsetAfterChrome)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }

@@ -109,29 +109,43 @@ Same features worldwide (French-first). Not a regulated financial/medical/legal 
 
 ## 6. Actions obligatoires App Store Connect (avant resoumission)
 
-### A) Métadonnées — CGU / EULA (3.1.2c)
+### A) Métadonnées — CGU / EULA (3.1.2c) — **rejet automatique si absent**
 
-| Champ | Valeur |
-|--------|--------|
-| **Politique de confidentialité** | `https://myfidpass.fr/confidentialite` |
-| **Description de l’app** (fin du texte) | `Conditions d’utilisation (EULA) : https://myfidpass.fr/cgu` |
-| **EULA personnalisée** (option) | Importer le PDF/texte CGU **ou** laisser EULA standard Apple **et** garder le lien CGU dans la description |
+Fichiers prêts à coller : dossier **`AppStoreMetadata/`** à la racine du repo (`description_fr-FR.txt`, `privacy_policy_url.txt`, `app_review_notes.txt`).
+
+| Champ App Store Connect | Valeur **exacte** (www, HTTP 200) |
+|------------------------|-----------------------------------|
+| **Politique de confidentialité** (App Information) | `https://www.myfidpass.fr/politique-confidentialite` |
+| **Description** (fr-FR) | Copier tout `AppStoreMetadata/description_fr-FR.txt` (contient déjà la ligne EULA) |
+| **Description** (en-US, si présent) | Copier `AppStoreMetadata/description_en-US.txt` |
+| **Contrat de licence (EULA)** | Standard Apple **ou** EULA personnalisée (PDF CGU) — dans tous les cas garder dans la description : `Conditions d’utilisation (EULA) : https://www.myfidpass.fr/cgu` |
+
+Vérification locale : `bash scripts/verify-apple-legal-urls.sh`
 
 ### B) Achats intégrés — 2.1(b)
 
-L’app **ne utilise pas StoreKit** : paiement **Stripe** uniquement.
+L’app iOS utilise **StoreKit 2** (achat in-app). Les produits doivent être **soumis avec la build** :
 
-- **Si des abonnements IAP existent** dans Connect (brouillon, non soumis) : **supprimez-les** (Monétisation → Abonnements) **OU** soumettez-les avec capture + binaire en précisant dans les Notes que la facturation réelle est Stripe (risque de confusion).
-- **Recommandé** : **aucun produit IAP** dans Connect + Notes explicites « pas d’In-App Purchase » (comme section 2).
-- Sur la **fiche de version**, ne cochez **aucun** IAP à inclure dans la review si vous n’en avez pas.
+| Produit (référence code) | Identifiant App Store Connect |
+|--------------------------|-----------------------------------|
+| Mensuel 1 commerce | `MFPmensuel` |
+| Annuel 1 commerce | `MFPannuel` |
+| 2 commerces mensuel | `com.myfidpass.merchant.slots2.monthly` |
+| 3 commerces mensuel | `com.myfidpass.merchant.slots3.monthly` |
+| 4 commerces mensuel | `com.myfidpass.merchant.slots4.monthly` |
+| 5 commerces mensuel | `com.myfidpass.merchant.slots5.monthly` |
+
+- Monétisation → Abonnements : statut **Prêt à soumettre**, captures d’écran, prix.
+- Fiche de version : **cocher les IAP** inclus dans cette soumission.
+- Railway : `APP_STORE_ISSUER_ID`, `APP_STORE_KEY_ID`, `APP_STORE_PRIVATE_KEY`, `APPLE_BUNDLE_ID=com.myfidpass` (validation serveur).
 
 ### C) Notes pour la review (à ajouter)
 
 ```
-Sign in with Apple : écran Connexion / Inscription, bouton natif au-dessus de Google.
-Abonnement : MyFidpass Pro — durée et prix visibles sur /paiement et bandeau légal dans l’app.
-EULA : https://myfidpass.fr/cgu | Confidentialité : https://myfidpass.fr/confidentialite
-Pas d’achat in-app StoreKit ; Stripe sur le web.
+Copier le contenu de AppStoreMetadata/app_review_notes.txt (remplir compte démo).
+Terms of Use (EULA): https://www.myfidpass.fr/cgu
+Privacy Policy: https://www.myfidpass.fr/politique-confidentialite
+In-app paywall: title, length, price, Restore Purchases, functional EULA/Privacy links.
 ```
 
 ### D) Nouvelle build

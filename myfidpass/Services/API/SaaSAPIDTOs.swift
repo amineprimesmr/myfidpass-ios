@@ -107,6 +107,82 @@ struct PatchGameBody: Encodable {
     }
 }
 
+// MARK: - Challenge pronostics foot
+
+struct MatchPredictionsDashboardResponse: Decodable {
+    let config: MatchPredictionConfigDTO?
+    let matches: [MatchPredictionMatchDTO]
+}
+
+struct MatchPredictionConfigDTO: Decodable {
+    let enabled: Bool?
+    let pointsPerCorrectPrediction: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case enabled
+        case pointsPerCorrectPrediction = "points_per_correct_prediction"
+    }
+}
+
+struct MatchPredictionMatchDTO: Decodable, Identifiable {
+    let id: String
+    let title: String?
+    let teamHome: String
+    let teamAway: String
+    let startsAt: String
+    let cutoffAt: String?
+    let status: String?
+    let resultChoice: String?
+    let locked: Bool?
+    let entriesCount: Int?
+    let correctCount: Int?
+    let pointsDistributed: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case id, title, status, locked
+        case teamHome = "team_home"
+        case teamAway = "team_away"
+        case startsAt = "starts_at"
+        case cutoffAt = "cutoff_at"
+        case resultChoice = "result_choice"
+        case entriesCount = "entries_count"
+        case correctCount = "correct_count"
+        case pointsDistributed = "points_distributed"
+    }
+}
+
+struct MatchPredictionsConfigPatchBody: Encodable {
+    let enabled: Bool
+    let pointsPerCorrectPrediction: Int
+
+    enum CodingKeys: String, CodingKey {
+        case enabled
+        case pointsPerCorrectPrediction = "points_per_correct_prediction"
+    }
+}
+
+struct MatchPredictionsResultBody: Encodable {
+    let resultChoice: String
+
+    enum CodingKeys: String, CodingKey {
+        case resultChoice = "result_choice"
+    }
+}
+
+struct MatchPredictionsResultResponse: Decodable {
+    let ok: Bool?
+    let awardedCount: Int?
+    let correctCount: Int?
+    let winnersCount: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case ok
+        case awardedCount = "awarded_count"
+        case correctCount = "correct_count"
+        case winnersCount = "winners_count"
+    }
+}
+
 // MARK: - Notifications dashboard
 
 struct NotificationSendPayload: Encodable {
@@ -401,6 +477,44 @@ struct PaymentReconcileSubscriptionResponse: Decodable {
     let hasActiveSubscription: Bool?
     let message: String?
     let subscriptionStatus: String?
+}
+
+/// POST `/api/businesses/:slug/dashboard/dev-simulate-payment` — accès PRO test sans Stripe / App Store.
+struct DevSimulatePaymentResponse: Decodable {
+    let ok: Bool?
+    let status: String?
+    let simulated: Bool?
+    let hasActiveSubscription: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case ok, status, simulated
+        case hasActiveSubscription = "has_active_subscription"
+    }
+}
+
+// MARK: - Paiement App Store (StoreKit 2)
+
+struct PaymentAppleSyncTransactionPayload: Encodable {
+    let signedTransactionInfo: String?
+    let transactionId: String?
+
+    enum CodingKeys: String, CodingKey {
+        case signedTransactionInfo = "signed_transaction_info"
+        case transactionId = "transaction_id"
+    }
+}
+
+struct PaymentAppleSyncResponse: Decodable {
+    let ok: Bool?
+    let hasActiveSubscription: Bool?
+    let hasPaidMerchantSubscription: Bool?
+    let subscriptionStatus: String?
+}
+
+struct PaymentAppleReconcileResponse: Decodable {
+    let ok: Bool?
+    let hasActiveSubscription: Bool?
+    let message: String?
 }
 
 // MARK: - Inscription / mot de passe

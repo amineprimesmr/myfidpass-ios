@@ -22,7 +22,7 @@ struct MerchantFreemiumBannerView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Mode découverte")
                             .font(.subheadline.weight(.semibold))
-                        Text("Après les 24 h d’essai gratuit (accès complet), scan, points et campagnes nécessitent un abonnement.")
+                        Text("Scan, attribution de points et campagnes marketing nécessitent un abonnement MyFidpass Pro.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.leading)

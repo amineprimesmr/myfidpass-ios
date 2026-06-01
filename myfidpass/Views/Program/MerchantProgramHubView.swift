@@ -210,13 +210,16 @@ private struct ProgramFlyerTabRoot: View {
                 CommerceFlyerEditorDraftStore.clear(slug: slug)
                 await model.load(showProgress: true, forceFullFlyerPrefsMerge: true)
             } else if model.usesInstantCommerceAlignedBootstrap {
-                /// Même contenu que la carte Commerce (snapshot passé par `ProfileView`) : pas besoin d’**attendre** le GET
-                /// pour l’aperçu — on synchronise le serveur en arrière-plan (PUT / quotas), comme sur Commerce après `loadProfileFromServer`.
+                /// Bootstrap disque fiable (teintes présentes) : sync serveur en arrière-plan sans écraser l’état local.
                 Task { @MainActor in
                     await model.load(showProgress: false)
                 }
             } else {
-                await model.load(showProgress: !model.hasCompletedSuccessfulFlyerLoad)
+                /// Cache sparse / défauts : fusion complète depuis GET (couleurs enregistrées côté API).
+                await model.load(
+                    showProgress: !model.hasCompletedSuccessfulFlyerLoad,
+                    forceFullFlyerPrefsMerge: true
+                )
             }
         }
         /// Pas de pull-to-refresh sur le flyer (créer / modifier / aperçu) : évite un rechargement involontaire
@@ -425,6 +428,10 @@ private final class ProgramFlyerEditorModel: ObservableObject {
         } else if !hydrateFromCommerceDiskCacheIfAvailable() {
             refreshPreviewBootstrap()
         }
+        let savedLogo = serverLogoDataUrl?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if savedLogo.isEmpty {
+            suppressDashboardCustomLogoForPreview = true
+        }
     }
 
     private func hydrateFromFlyerStoreIfAvailable() -> Bool {
@@ -483,7 +490,7 @@ private final class ProgramFlyerEditorModel: ObservableObject {
         bgPayload = meta.bgPayload.toPayload()
         synchronizeBackgroundSelectionState()
         loadError = nil
-        lastSuccessfulServerLoadAt = Date()
+        finalizeHydrationFromBootstrap(b64: b64, decodedState: st)
         recomputeServerSnapshotStateFlag(using: st)
         isUndoRedoOrLoad = false
         suppressDashboardCustomLogoForPreview = meta.suppressDashboardCustomLogoForPreview
@@ -518,6 +525,22 @@ private final class ProgramFlyerEditorModel: ObservableObject {
         CommerceFlyerEditorDraftStore.save(slug: slug, bootstrapB64: b, meta: meta)
     }
 
+    /// Après hydratation cache / snapshot : ne marque « chargement instantané » que si le bootstrap porte de vraies teintes.
+    /// Sinon le GET suivant doit fusionner le `state` serveur (évite roue / bandeau / CADEAU en gris-noir à la réouverture).
+    private func finalizeHydrationFromBootstrap(b64: String, decodedState: FlyerStateDTO) {
+        let trustworthy = FlyerBootstrapPreviewPayloadBuilder.bootstrapEmbedsTrustworthyFlyerColors(
+            b64: b64,
+            decodedState: decodedState
+        )
+        if trustworthy {
+            lastSuccessfulServerLoadAt = Date()
+            usesInstantCommerceAlignedBootstrap = true
+        } else {
+            lastSuccessfulServerLoadAt = nil
+            usesInstantCommerceAlignedBootstrap = false
+        }
+    }
+
     /// Même logique que `hydrateFromCommerceDiskCacheIfAvailable`, mais à partir de l’état **déjà en mémoire**
     /// sur l’onglet Commerce (au lieu du seul disque, potentiellement un peu moins à jour).
     private func applyFromLiveCommerceSnapshot(_ snap: CommerceFlyerLiveSnapshot) -> Bool {
@@ -536,6 +559,10 @@ private final class ProgramFlyerEditorModel: ObservableObject {
         if let fp = root["flyer_prefs"] as? [String: Any] {
             if let s = fp["custom_logo_data_url"] as? String, !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { logo = s }
             if let s = fp["custom_bg_data_url"] as? String, !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { bg = s }
+        }
+        let flyerRegistered = CommerceFlyerStateCache.load(slug: slug)?.flyerRegistered ?? false
+        if !flyerRegistered {
+            logo = nil
         }
         let snapBg = (snap.customBgDataURL ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if !snapBg.isEmpty { bg = snapBg } else if (bg == nil || (bg?.isEmpty == true)) {
@@ -556,10 +583,10 @@ private final class ProgramFlyerEditorModel: ObservableObject {
         bgPayload = .leaveUnchanged
         synchronizeBackgroundSelectionState()
         loadError = nil
-        lastSuccessfulServerLoadAt = Date()
+        finalizeHydrationFromBootstrap(b64: b64, decodedState: st)
         recomputeServerSnapshotStateFlag(using: st)
         isUndoRedoOrLoad = false
-        suppressDashboardCustomLogoForPreview = false
+        suppressDashboardCustomLogoForPreview = logo?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
         refreshPreviewBootstrap()
         return true
     }
@@ -584,6 +611,9 @@ private final class ProgramFlyerEditorModel: ObservableObject {
             let c = loaded.customBgDataURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             if !c.isEmpty { bg = c }
         }
+        if !loaded.flyerRegistered {
+            logo = nil
+        }
         var st = stateFromDisk
         st.normalizeClamps()
         st = FlyerWheelWebEmbedPreviewMigration.normalizedStateForPreview(st, businessSlug: slug)
@@ -596,10 +626,10 @@ private final class ProgramFlyerEditorModel: ObservableObject {
         bgPayload = .leaveUnchanged
         synchronizeBackgroundSelectionState()
         loadError = nil
-        lastSuccessfulServerLoadAt = Date()
+        finalizeHydrationFromBootstrap(b64: b64, decodedState: st)
         recomputeServerSnapshotStateFlag(using: st)
         isUndoRedoOrLoad = false
-        suppressDashboardCustomLogoForPreview = false
+        suppressDashboardCustomLogoForPreview = logo?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
         refreshPreviewBootstrap()
         return true
     }
@@ -631,6 +661,7 @@ private final class ProgramFlyerEditorModel: ObservableObject {
             cachedPublicLogoDataUrl = nil
             refreshPreviewBootstrap()
         case .clear:
+            suppressDashboardCustomLogoForPreview = true
             cachedPublicLogoDataUrl = nil
             refreshPreviewBootstrap()
         case .leaveUnchanged:
@@ -750,7 +781,7 @@ private final class ProgramFlyerEditorModel: ObservableObject {
             if let s = serverLogoDataUrl, !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 return s
             }
-            return cachedPublicLogoDataUrl
+            return nil
         case .clear: return nil
         case .dataURL(let s): return s
         }
@@ -761,20 +792,17 @@ private final class ProgramFlyerEditorModel: ObservableObject {
         effectiveLogoPreview()
     }
 
-    /// Bootstrap WK : `""` = pas de logo sur le canvas **et** pas de repli `/public/logo` (évite le logo « Ma Carte » après effacement).
-    /// `nil` = omettre la clé → `flyer-embed` charge le logo public `/public/flyer-qr-logo` (comportement attendu après « Recréer » tant qu’aucun nouveau logo n’est choisi).
+    /// Bootstrap WK : `""` = pas de logo sur le canvas **et** pas de repli `/public/logo` (évite le logo « Ma Carte »).
     private func customLogoDataUrlForBootstrap() -> String? {
-        if suppressDashboardCustomLogoForPreview {
-            switch logoPayload {
-            case .clear: return ""
-            case .dataURL(let s): return s
-            case .leaveUnchanged: return nil
-            }
-        }
         switch logoPayload {
         case .clear: return ""
         case .dataURL(let s): return s
-        case .leaveUnchanged: return effectiveLogoPreview()
+        case .leaveUnchanged:
+            if suppressDashboardCustomLogoForPreview { return "" }
+            if let s = serverLogoDataUrl?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty {
+                return s
+            }
+            return ""
         }
     }
 
@@ -801,6 +829,10 @@ private final class ProgramFlyerEditorModel: ObservableObject {
     /// Télécharge le logo commerce pour l’injecter en data URL dans le bootstrap (évite fetch cross-origin fragile dans la WebView).
     func prefetchPublicLogoCacheIfNeeded() async {
         let skipFetch = await MainActor.run { () -> Bool in
+            if suppressDashboardCustomLogoForPreview {
+                cachedPublicLogoDataUrl = nil
+                return true
+            }
             if case .dataURL = logoPayload {
                 cachedPublicLogoDataUrl = nil
                 return true
@@ -871,6 +903,43 @@ private final class ProgramFlyerEditorModel: ObservableObject {
         }
     }
 
+    /// Bootstrap disque Commerce : réinjecte un `state` complet si le base64 embarqué était trop sparse (embed gris).
+    private func persistRepairedCommerceFlyerCacheIfNeeded() {
+        guard state.hasExplicitFlyerColorFields || state.isCustomizedComparedToAppDefault else { return }
+        let share = shareUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        var b64 = bootstrapPreviewBase64?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !b64.isEmpty else { return }
+        let repaired = FlyerBootstrapPreviewPayloadBuilder.repairBootstrapBase64IfSparseFlyerState(
+            b64,
+            resolvedState: state,
+            businessSlug: slug
+        )
+        if repaired != b64 {
+            bootstrapPreviewBase64 = repaired
+            b64 = repaired
+        }
+        let previousEngagement = CommerceFlyerStateCache.load(slug: slug)?.engagementStepDone ?? false
+        CommerceFlyerStateCache.save(
+            slug: slug,
+            flyerRegistered: serverSnapshotStateWasNonDefault || hasPersistedServerContextForFlyerHero,
+            shareURL: share,
+            bootstrapB64: b64,
+            engagementStepDone: previousEngagement,
+            customBgDataURL: effectiveBgPreview(),
+            revisionKey: serverUpdatedAt
+        )
+        CommerceFlyerStore.shared.upsert(
+            slug: slug,
+            snapshot: .init(
+                flyerRegistered: serverSnapshotStateWasNonDefault || hasPersistedServerContextForFlyerHero,
+                shareURL: share,
+                bootstrapPreviewB64: b64,
+                customBgDataURL: effectiveBgPreview(),
+                revisionKey: serverUpdatedAt
+            )
+        )
+    }
+
     func refreshPreviewBootstrap() {
         let st = FlyerWheelWebEmbedPreviewMigration.normalizedStateForPreview(state, businessSlug: slug)
         let logoB64 = customLogoDataUrlForBootstrap()
@@ -936,7 +1005,9 @@ private final class ProgramFlyerEditorModel: ObservableObject {
 
     /// Avant d’ouvrir le héros d’aperçu : logo public, fond manquant côté GET, puis 1ʳᵉ `refresh` cohérente (teintes + visuels).
     func prepareWebPreviewBeforeReveal() async {
-        await prefetchPublicLogoCacheIfNeeded()
+        if !suppressDashboardCustomLogoForPreview {
+            await prefetchPublicLogoCacheIfNeeded()
+        }
         await hydrateCustomBgFromPublicEndpointIfNeeded()
         refreshPreviewBootstrap()
     }
@@ -1072,13 +1143,17 @@ private final class ProgramFlyerEditorModel: ObservableObject {
                 !forceFullFlyerPrefsMerge
                 && usesInstantCommerceAlignedBootstrap
                 && lastSuccessfulServerLoadAt != nil
+                && (state.hasExplicitFlyerColorFields || serverSnapshotStateWasNonDefault)
 
             if skipHeavyPrefsMerge {
                 loadError = nil
-                suppressDashboardCustomLogoForPreview = false
+                let hasSavedLogo = !(serverLogoDataUrl?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "").isEmpty
+                suppressDashboardCustomLogoForPreview = !hasSavedLogo
                 Task { @MainActor in
                     await withTaskGroup(of: Void.self) { group in
-                        group.addTask { await self.prefetchPublicLogoCacheIfNeeded() }
+                        if hasSavedLogo {
+                            group.addTask { await self.prefetchPublicLogoCacheIfNeeded() }
+                        }
                         group.addTask { await self.hydrateCustomBgFromPublicEndpointIfNeeded() }
                     }
                     self.refreshPreviewBootstrap()
@@ -1096,8 +1171,13 @@ private final class ProgramFlyerEditorModel: ObservableObject {
                     bgDestination: &serverBgDataUrl
                 )
                 if let s = fp.state {
-                    var merged = s
-                    merged.normalizeClamps()
+                    let cachedFallback = FlyerBootstrapPreviewPayloadBuilder.flyerStateFromCommerceCache(slug: slug)
+                    let resolved = FlyerBootstrapPreviewPayloadBuilder.resolvedStateForBootstrap(
+                        serverState: s,
+                        fallback: cachedFallback ?? (serverSnapshotStateWasNonDefault ? state : nil),
+                        businessSlug: slug
+                    )
+                    var merged = resolved
                     let beforeMode = merged.wheelRenderMode
                     merged = FlyerWheelWebEmbedPreviewMigration.normalizedStateForPreview(merged, businessSlug: self.slug)
                     if beforeMode == "segments", merged.wheelRenderMode == "png" {
@@ -1107,7 +1187,11 @@ private final class ProgramFlyerEditorModel: ObservableObject {
                 } else {
                     /// Réponse partielle : `flyer_prefs` sans `state` — ne **pas** écraser roue / bandeau / CADEAU déjà hydratés (cache ou session).
                     if !(hasCompletedSuccessfulFlyerLoad && serverSnapshotStateWasNonDefault) {
-                        state = FlyerStateDTO.default
+                        if let cached = FlyerBootstrapPreviewPayloadBuilder.flyerStateFromCommerceCache(slug: slug) {
+                            state = FlyerWheelWebEmbedPreviewMigration.normalizedStateForPreview(cached, businessSlug: slug)
+                        } else {
+                            state = FlyerStateDTO.default
+                        }
                     }
                 }
             } else {
@@ -1126,19 +1210,21 @@ private final class ProgramFlyerEditorModel: ObservableObject {
             isUndoRedoOrLoad = false
             recomputeServerSnapshotStateFlag(using: state)
             refreshPreviewBootstrap()
-            /// Après un GET réussi, l’aperçu doit à nouveau utiliser le logo du profil (`serverLogoDataUrl` / logo public) —
-            /// ne pas laisser `beginFlyerRecreateSessionForPreview()` bloquer l’injection (sinon `custom_logo` restait « omis »
-            /// et le WK / sheet affichaient le mauvais logo — ou pas de logo).
-            suppressDashboardCustomLogoForPreview = false
+            persistRepairedCommerceFlyerCacheIfNeeded()
+            /// Logo enregistré sur le flyer uniquement — pas de repli logo « Ma Carte » / public tant qu’aucun logo flyer n’est persisté.
+            let hasSavedLogo = !(serverLogoDataUrl?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "").isEmpty
+            suppressDashboardCustomLogoForPreview = !hasSavedLogo
             /// Marquer le chargement **dès** le GET + 1ʳᵉ injection — ne **pas** attendre les GET publics (logo / fond) :
             /// sinon l’écran « Modifier le flyer » reste figé (aperçu vide, formulaire absent) le temps d’un réseau lent
             /// ou d’un timeout long (ordre de la minute), alors que `state` + `serverLogoDataUrl` sont déjà là.
             lastSuccessfulServerLoadAt = Date()
             markInstantCommerceBootstrapEligibleAfterSuccessfulLoad()
-            /// Logo & fond publics en arrière-plan : rafraîchissent le bootstrap quand prêts (sans bloquer `load()`).
+            /// Fond public en arrière-plan ; logo public seulement si un logo flyer est déjà enregistré.
             Task { @MainActor in
                 await withTaskGroup(of: Void.self) { group in
-                    group.addTask { await self.prefetchPublicLogoCacheIfNeeded() }
+                    if hasSavedLogo {
+                        group.addTask { await self.prefetchPublicLogoCacheIfNeeded() }
+                    }
                     group.addTask { await self.hydrateCustomBgFromPublicEndpointIfNeeded() }
                 }
                 self.refreshPreviewBootstrap()
@@ -1379,6 +1465,7 @@ private final class ProgramFlyerEditorModel: ObservableObject {
                     revisionKey: serverUpdatedAt
                 )
             )
+            persistRepairedCommerceFlyerCacheIfNeeded()
             UINotificationFeedbackGenerator().notificationOccurred(.success)
             /// Ne **pas** appeler `load()` ici : le GET immédiat écrasait souvent l’état local (dégradé, teintes)
             /// par une copie serveur légèrement en retard — donnait l’impression que rien ne s’enregistrait.
@@ -1673,6 +1760,91 @@ private struct FlyerAILogoPhotosPickerSlot: View {
     }
 }
 
+/// Jusqu’à 3 visuels d’inspiration (DA, vitrine, produits) pour la génération de fond IA.
+private struct FlyerAIStyleReferenceImagesStrip: View {
+    @Binding var images: [UIImage]
+    @Binding var pickerItems: [PhotosPickerItem]
+    private let maxCount = 3
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 10) {
+                ForEach(Array(images.enumerated()), id: \.offset) { index, ui in
+                    ZStack(alignment: .topTrailing) {
+                        Image(uiImage: ui)
+                            .resizable()
+                            .scaledToFill()
+                            .frame(width: 92, height: 116)
+                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .strokeBorder(Color.white.opacity(0.18), lineWidth: 1)
+                            )
+
+                        Button {
+                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                            images.remove(at: index)
+                            if index < pickerItems.count {
+                                pickerItems.remove(at: index)
+                            }
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 22))
+                                .symbolRenderingMode(.palette)
+                                .foregroundStyle(.white, Color.black.opacity(0.55))
+                        }
+                        .buttonStyle(.plain)
+                        .padding(6)
+                        .accessibilityLabel("Retirer l’image")
+                    }
+                }
+
+                if images.count < maxCount {
+                    PhotosPicker(
+                        selection: $pickerItems,
+                        maxSelectionCount: maxCount,
+                        matching: .images
+                    ) {
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(Color.white.opacity(0.07))
+                            .frame(width: 92, height: 116)
+                            .overlay(
+                                VStack(spacing: 8) {
+                                    Image(systemName: "photo.badge.plus")
+                                        .font(.system(size: 22, weight: .semibold))
+                                    Text("Ajouter")
+                                        .font(.caption.weight(.bold))
+                                }
+                                .foregroundStyle(.white.opacity(0.88))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .strokeBorder(Color.white.opacity(0.2), style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Ajouter des images d’inspiration")
+                }
+            }
+            .padding(.vertical, 2)
+        }
+        .onChange(of: pickerItems) { _, newItems in
+            Task { await reloadImages(from: newItems) }
+        }
+    }
+
+    @MainActor
+    private func reloadImages(from items: [PhotosPickerItem]) async {
+        var loaded: [UIImage] = []
+        for item in items.prefix(maxCount) {
+            guard let data = try? await item.loadTransferable(type: Data.self),
+                  let ui = UIImage(data: data) else { continue }
+            loaded.append(ui)
+        }
+        images = loaded
+    }
+}
+
 /// Masque la tab bar sur l’écran de création / édition flyer (navigation par le chevron retour).
 private struct MerchantFlyerTabBarForCreationVisibility: ViewModifier {
     let isTabRoot: Bool
@@ -1926,6 +2098,8 @@ private struct FlyerAIGeneratorSheet: View {
     /// Feuille « concept commerce » + génération fond IA (OpenAI via backend), depuis **Modifier le flyer**.
     @State private var showFlyerAiBackgroundConceptSheet = false
     @State private var flyerAiCommerceConceptText = ""
+    @State private var flyerAiStyleReferenceImages: [UIImage] = []
+    @State private var flyerAiStyleReferencePickerItems: [PhotosPickerItem] = []
     @State private var isFlyerAiBackgroundGenerating = false
     /// Progression affichée pendant l’appel IA (simulation asymptotique + fin à 100 % au succès).
     @State private var flyerAiGenerationProgress: Double = 0
@@ -2177,7 +2351,7 @@ private struct FlyerAIGeneratorSheet: View {
             await persistSavedFlyerSnapshotIfPossible()
             NotificationCenter.default.post(name: .myfidpassCardPreviewDisplayDidChange, object: nil)
             flyerUserEnteredEditMode = false
-            withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) {
+            withAnimation(.easeOut(duration: 0.22)) {
                 flyerIsViewMode = true
             }
             /// Après sauvegarde, rester sur l’aperçu (téléchargement + étapes) — pas de fermeture automatique du hub.
@@ -2188,9 +2362,32 @@ private struct FlyerAIGeneratorSheet: View {
     private func handleFlyerBackButtonTap() {
         if !flyerIsViewMode, flyerModel.canUndo {
             showUnsavedChangesOnBackAlert = true
+        } else if !flyerIsViewMode, flyerHasSavedState, flyerUserEnteredEditMode, flyerHeroRevealed {
+            returnToFlyerViewModeFromEdit()
         } else {
             performFlyerBackNavigation()
         }
+    }
+
+    private func enterFlyerEditModeFromView() {
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        flyerUserEnteredEditMode = true
+        withAnimation(.easeOut(duration: 0.22)) {
+            flyerIsViewMode = false
+        }
+    }
+
+    private func returnToFlyerViewModeFromEdit() {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        flyerUserEnteredEditMode = false
+        withAnimation(.easeOut(duration: 0.22)) {
+            flyerIsViewMode = true
+        }
+    }
+
+    private func closeFlyerViewMode() {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        performFlyerBackNavigation()
     }
 
     private func saveFlyerAndPerformBack() {
@@ -2203,7 +2400,7 @@ private struct FlyerAIGeneratorSheet: View {
             await persistSavedFlyerSnapshotIfPossible()
             NotificationCenter.default.post(name: .myfidpassCardPreviewDisplayDidChange, object: nil)
             flyerUserEnteredEditMode = false
-            withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) {
+            withAnimation(.easeOut(duration: 0.22)) {
                 flyerIsViewMode = true
             }
             showUnsavedChangesOnBackAlert = false
@@ -2288,40 +2485,46 @@ private struct FlyerAIGeneratorSheet: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 if !isFlyerAiBackgroundGenerating {
-                    HStack(spacing: 0) {
-                        Button {
-                            handleFlyerBackButtonTap()
-                        } label: {
-                            Image(systemName: "chevron.left")
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundStyle(FlyerAIEditorTheme.textPrimary)
-                                .frame(width: 34, height: 34)
-                        }
-                        .modifier(TopBarLiquidGlassButtonModifier())
-                        .accessibilityLabel("Retour")
-
-                        Spacer(minLength: 0)
-
+                    HStack(spacing: 12) {
                         if flyerIsViewMode && flyerHasSavedState {
-                                Button {
-                                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                                    flyerUserEnteredEditMode = true
-                                    withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) {
-                                        flyerIsViewMode = false
-                                    }
-                                } label: {
-                                    Text("Modifier")
-                                        .font(.subheadline.weight(.semibold))
-                                        .foregroundStyle(FlyerAIEditorTheme.textPrimary)
-                                        .padding(.horizontal, 12)
-                                        .frame(minWidth: 40, minHeight: 40)
-                                }
-                                .accessibilityLabel("Modifier le flyer")
-                                .modifier(LiquidGlassCapsuleButtonModifier(
-                                    tint: LiquidGlassNativeTint.darkRegular,
-                                    controlSize: .regular
-                                ))
-                            } else if showTopBarFlyerSave {
+                            Button(action: enterFlyerEditModeFromView) {
+                                Text("Modifier")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(FlyerAIEditorTheme.textPrimary)
+                                    .padding(.horizontal, 12)
+                                    .frame(minWidth: 40, minHeight: 40)
+                            }
+                            .accessibilityLabel("Modifier le flyer")
+                            .modifier(LiquidGlassCapsuleButtonModifier(
+                                tint: LiquidGlassNativeTint.darkRegular,
+                                controlSize: .regular
+                            ))
+
+                            Spacer(minLength: 0)
+
+                            Button(action: closeFlyerViewMode) {
+                                Image(systemName: "checkmark")
+                                    .font(.system(size: 16, weight: .bold))
+                                    .foregroundStyle(FlyerAIEditorTheme.textPrimary)
+                                    .frame(width: 40, height: 40)
+                            }
+                            .modifier(TopBarLiquidGlassButtonModifier())
+                            .accessibilityLabel("Valider et fermer")
+                        } else {
+                            Button {
+                                handleFlyerBackButtonTap()
+                            } label: {
+                                Image(systemName: "chevron.left")
+                                    .font(.system(size: 15, weight: .semibold))
+                                    .foregroundStyle(FlyerAIEditorTheme.textPrimary)
+                                    .frame(width: 34, height: 34)
+                            }
+                            .modifier(TopBarLiquidGlassButtonModifier())
+                            .accessibilityLabel("Retour")
+
+                            Spacer(minLength: 0)
+
+                            if showTopBarFlyerSave {
                                 Button {
                                     UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                                     performSaveFlyerEdits()
@@ -2351,6 +2554,7 @@ private struct FlyerAIGeneratorSheet: View {
                                 Color.clear
                                     .frame(width: 40, height: 40)
                             }
+                        }
                     }
                     .padding(.top, 0)
                 } else {
@@ -2531,8 +2735,11 @@ private struct FlyerAIGeneratorSheet: View {
         }
         .onAppear {
             if !seedRecreateFlyerSession {
-                flyerModel.clearRecreateSessionSuppressionForEditEntry()
-                Task { await flyerModel.prefetchPublicLogoCacheIfNeeded() }
+                let hasSavedFlyerLogo = !(flyerModel.serverLogoDataUrl?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "").isEmpty
+                if hasSavedFlyerLogo {
+                    flyerModel.clearRecreateSessionSuppressionForEditEntry()
+                    Task { await flyerModel.prefetchPublicLogoCacheIfNeeded() }
+                }
             }
             // Vue mode si le disque confirme un flyer enregistré (affichage instantané sans attendre le serveur).
             // Sauf si ouverture explicite « Modifier » (seedOpenFlyerForEdit) ou régénération.
@@ -2568,7 +2775,10 @@ private struct FlyerAIGeneratorSheet: View {
                 /// d’après **une** teinte. À l’ouverture « Modifier le flyer » (ou dès qu’un chargement a réussi), l’état
                 /// `flyerModel.state` vient du serveur / cache : ne pas l’écraser — sinon l’aperçu WebView « perd » les couleurs
                 /// et le rendu (logo, bandeau, roue) semble « vidé » ou uniforme.
-                let skipStompFromParentAccent = flyerModel.hasCompletedSuccessfulFlyerLoad
+                let skipStompFromParentAccent =
+                    (flyerModel.hasCompletedSuccessfulFlyerLoad
+                        && (flyerModel.state.hasExplicitFlyerColorFields
+                            || flyerModel.state.isCustomizedComparedToAppDefault))
                     || (seedOpenFlyerForEdit && !seedRecreateFlyerSession)
                 if skipStompFromParentAccent {
                     isUpdatingAccentFromEngine = true
@@ -2659,7 +2869,7 @@ private struct FlyerAIGeneratorSheet: View {
             if loading {
                 showFlyerFetchLoader = false
                 flyerFetchLoaderTask = Task { @MainActor in
-                    try? await Task.sleep(nanoseconds: 1_100_000_000)
+                    try? await Task.sleep(nanoseconds: 380_000_000)
                     guard !Task.isCancelled, flyerModel.isLoading, !flyerModel.hasCompletedSuccessfulFlyerLoad else { return }
                     showFlyerFetchLoader = true
                 }
@@ -2672,7 +2882,7 @@ private struct FlyerAIGeneratorSheet: View {
             if loading {
                 showHeroCompositeLoader = false
                 heroCompositeLoaderTask = Task { @MainActor in
-                    try? await Task.sleep(nanoseconds: 650_000_000)
+                    try? await Task.sleep(nanoseconds: 320_000_000)
                     guard !Task.isCancelled, heroCompositePreviewLoading else { return }
                     showHeroCompositeLoader = true
                 }
@@ -2685,7 +2895,7 @@ private struct FlyerAIGeneratorSheet: View {
             if loading {
                 showInteractiveWebLoader = false
                 interactiveWebLoaderTask = Task { @MainActor in
-                    try? await Task.sleep(nanoseconds: 650_000_000)
+                    try? await Task.sleep(nanoseconds: 320_000_000)
                     guard !Task.isCancelled, flyerInteractiveWebLoading else { return }
                     showInteractiveWebLoader = true
                 }
@@ -2742,7 +2952,7 @@ private struct FlyerAIGeneratorSheet: View {
             guard loaded, !flyerUserEnteredEditMode, !flyerIsViewMode,
                   !seedOpenFlyerForEdit, !seedRecreateFlyerSession, !startInCreateFromEditBack else { return }
             if flyerModel.serverSnapshotStateWasNonDefault {
-                withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) {
+                withAnimation(.easeOut(duration: 0.22)) {
                     flyerIsViewMode = true
                 }
             }
@@ -2751,7 +2961,7 @@ private struct FlyerAIGeneratorSheet: View {
             if isNonDefault {
                 guard !flyerUserEnteredEditMode, !flyerIsViewMode,
                       !seedOpenFlyerForEdit, !seedRecreateFlyerSession, !startInCreateFromEditBack else { return }
-                withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) {
+                withAnimation(.easeOut(duration: 0.22)) {
                     flyerIsViewMode = true
                 }
             } else if !flyerUserEnteredEditMode, !flyerHeroRevealed {
@@ -2787,11 +2997,12 @@ private struct FlyerAIGeneratorSheet: View {
         logoPickerItem = nil
     }
 
-    /// JPEG pour la vignette « Logo » (écran création + formulaire « Modifier ») : import local ou logo déjà persisté / profil.
+    /// JPEG pour la vignette « Logo » : import local ou logo **enregistré sur le flyer** (pas le logo « Ma Carte »).
     private var flyerModifyFormLogoThumbnailJPEG: Data? {
         if let logoPreview {
             return logoPreview.jpegData(compressionQuality: FlyerAISourcePickerJPEG.quality)
         }
+        if flyerModel.suppressDashboardCustomLogoForPreview { return nil }
         if let s = flyerModel.logoSourceDataURLStringForReexport(),
            let ui = FlyerDataURLImageDecode.uiImage(fromDataURLString: s) {
             return ui.jpegData(compressionQuality: FlyerAISourcePickerJPEG.quality)
@@ -2889,14 +3100,30 @@ private struct FlyerAIGeneratorSheet: View {
         flyerAiProgressSimulationTask = nil
     }
 
+    private var canSubmitFlyerAiBackgroundConcept: Bool {
+        let text = flyerAiCommerceConceptText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !text.isEmpty || !flyerAiStyleReferenceImages.isEmpty
+    }
+
+    private func flyerAiStyleReferenceImagesBase64Payload() -> [String]? {
+        let encoded = flyerAiStyleReferenceImages.compactMap { $0.normalizedFlyerDataURLForFlyerAI() }
+        return encoded.isEmpty ? nil : Array(encoded.prefix(3))
+    }
+
     /// Génère un fond flyer via `POST …/flyer/ai-generate` (job async + polling), puis applique comme un fond personnalisé.
     @MainActor
     private func performFlyerAiBackgroundGenerationFromSheet() async {
-        let concept = flyerAiCommerceConceptText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !concept.isEmpty else {
-            errorMessage = "Décrivez votre commerce ou votre concept pour générer un fond."
+        let conceptTrim = flyerAiCommerceConceptText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard canSubmitFlyerAiBackgroundConcept else {
+            errorMessage = "Décrivez votre commerce ou ajoutez au moins une image d’inspiration."
             return
         }
+        let conceptFinal: String = {
+            if conceptTrim.isEmpty {
+                return "Ambiance et direction artistique inspirées des images de référence jointes."
+            }
+            return String(conceptTrim.prefix(400))
+        }()
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         errorMessage = nil
 
@@ -2918,13 +3145,13 @@ private struct FlyerAIGeneratorSheet: View {
         let logoB64 = await flyerModel.exportLogoDataURLForAIGenerate(logoPickerUIImage: logoPreview)
         let body = FlyerAIGenerateRequestDTO(
             brandName: brandFinal,
-            cuisineOrConcept: String(concept.prefix(400)),
+            cuisineOrConcept: conceptFinal,
             accentColorHex: accent,
             secondaryColorHex: secondary,
             extraContext: nil,
             paletteColorsHex: Array(palette.prefix(3)),
             logoBase64: logoB64,
-            styleReferenceImagesBase64: nil
+            styleReferenceImagesBase64: flyerAiStyleReferenceImagesBase64Payload()
         )
 
         func resetGenerationUI() {
@@ -2984,109 +3211,128 @@ private struct FlyerAIGeneratorSheet: View {
         }
     }
 
-    /// Pop-up « Liquid Glass » (effet verre natif iOS 26 / matériau sinon) — saisie du concept avant génération.
+    /// Pop-up « Liquid Glass » — concept + images d’inspiration avant génération IA.
     private var flyerAiConceptLiquidGlassOverlay: some View {
-        ZStack {
-            Color.black.opacity(0.52)
-                .ignoresSafeArea()
-                .onTapGesture {
-                    if !isFlyerAiBackgroundGenerating {
-                        withAnimation(.spring(response: 0.38, dampingFraction: 0.9)) {
-                            showFlyerAiBackgroundConceptSheet = false
+        GeometryReader { geo in
+            ZStack {
+                Color.black.opacity(0.52)
+                    .ignoresSafeArea()
+                    .onTapGesture {
+                        if !isFlyerAiBackgroundGenerating {
+                            withAnimation(.spring(response: 0.38, dampingFraction: 0.9)) {
+                                showFlyerAiBackgroundConceptSheet = false
+                            }
                         }
                     }
-                }
 
-            VStack(alignment: .leading, spacing: 16) {
-                HStack(alignment: .top, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text("Fond avec l’IA")
-                            .font(.system(size: 22, weight: .bold, design: .rounded))
-                            .foregroundStyle(.white.opacity(0.96))
-                        Text("Décrivez votre commerce")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.white.opacity(0.52))
-                    }
-                    Spacer(minLength: 8)
-                    Button {
-                        withAnimation(.spring(response: 0.38, dampingFraction: 0.9)) {
-                            showFlyerAiBackgroundConceptSheet = false
+                ScrollView(showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 18) {
+                        HStack(alignment: .top, spacing: 12) {
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text("Fond avec l’IA")
+                                    .font(.system(size: 24, weight: .bold, design: .rounded))
+                                    .foregroundStyle(.white.opacity(0.96))
+                                Text("Décrivez votre commerce et ajoutez des visuels")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(.white.opacity(0.52))
+                            }
+                            Spacer(minLength: 8)
+                            Button {
+                                withAnimation(.spring(response: 0.38, dampingFraction: 0.9)) {
+                                    showFlyerAiBackgroundConceptSheet = false
+                                }
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.system(size: 28, weight: .regular))
+                                    .symbolRenderingMode(.hierarchical)
+                                    .foregroundStyle(.white.opacity(0.45))
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Fermer")
                         }
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 28, weight: .regular))
-                            .symbolRenderingMode(.hierarchical)
-                            .foregroundStyle(.white.opacity(0.45))
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Fermer")
-                }
 
-                Text(
-                    "Secteur, ambiance visuelle, produits ou services à suggérer en arrière-plan. Pas de texte ni logo dans l’image — la roue et le QR sont ajoutés par l’app."
-                )
-                .font(.caption.weight(.medium))
-                .foregroundStyle(.white.opacity(0.55))
-                .fixedSize(horizontal: false, vertical: true)
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Images d’inspiration")
+                                .font(.subheadline.weight(.bold))
+                                .foregroundStyle(.white.opacity(0.9))
+                            Text("Photos de votre commerce, carte, enseigne ou ambiance — l’IA s’inspire de la DA et des couleurs.")
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(.white.opacity(0.5))
+                                .fixedSize(horizontal: false, vertical: true)
 
-                TextField("Ex. boulangerie artisanale, tons dorés, pains et viennoiseries…", text: $flyerAiCommerceConceptText, axis: .vertical)
-                    .lineLimit(4...10)
-                    .textFieldStyle(.plain)
-                    .padding(14)
-                    .background(
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .fill(Color.white.opacity(0.08))
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .strokeBorder(Color.white.opacity(0.14), lineWidth: 1)
-                    )
-                    .foregroundStyle(.white.opacity(0.92))
-
-                if let err = errorMessage?.trimmingCharacters(in: .whitespacesAndNewlines), !err.isEmpty {
-                    Text(err)
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(Color(red: 1, green: 0.48, blue: 0.42))
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                Button {
-                    Task { await performFlyerAiBackgroundGenerationFromSheet() }
-                } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: "sparkles")
-                            .font(.system(size: 16, weight: .semibold))
-                        Text("Générer le fond")
-                            .font(.system(.body, design: .rounded).weight(.bold))
-                    }
-                    .foregroundStyle(.white)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 15)
-                }
-                .buttonStyle(.plain)
-                .background(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .fill(
-                            LinearGradient(
-                                colors: [FlyerStudioTheme.accent, FlyerStudioTheme.accent.opacity(0.72)],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
+                            FlyerAIStyleReferenceImagesStrip(
+                                images: $flyerAiStyleReferenceImages,
+                                pickerItems: $flyerAiStyleReferencePickerItems
                             )
+                        }
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Description (optionnelle si images)")
+                                .font(.subheadline.weight(.bold))
+                                .foregroundStyle(.white.opacity(0.9))
+
+                            TextField("Ex. boulangerie artisanale, tons dorés, pains et viennoiseries…", text: $flyerAiCommerceConceptText, axis: .vertical)
+                                .lineLimit(4...8)
+                                .textFieldStyle(.plain)
+                                .padding(14)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                        .fill(Color.white.opacity(0.08))
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                        .strokeBorder(Color.white.opacity(0.14), lineWidth: 1)
+                                )
+                                .foregroundStyle(.white.opacity(0.92))
+                        }
+
+                        if let err = errorMessage?.trimmingCharacters(in: .whitespacesAndNewlines), !err.isEmpty {
+                            Text(err)
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(Color(red: 1, green: 0.48, blue: 0.42))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+
+                        Button {
+                            Task { await performFlyerAiBackgroundGenerationFromSheet() }
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "sparkles")
+                                    .font(.system(size: 16, weight: .semibold))
+                                Text("Générer le fond")
+                                    .font(.system(.body, design: .rounded).weight(.bold))
+                            }
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 16)
+                        }
+                        .buttonStyle(.plain)
+                        .background(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .fill(
+                                    LinearGradient(
+                                        colors: [FlyerStudioTheme.accent, FlyerStudioTheme.accent.opacity(0.72)],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    )
+                                )
                         )
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.22), lineWidth: 1)
-                )
-                .shadow(color: FlyerStudioTheme.accent.opacity(0.35), radius: 16, y: 8)
-                .disabled(flyerAiCommerceConceptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                .opacity(flyerAiCommerceConceptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.45 : 1)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .strokeBorder(Color.white.opacity(0.22), lineWidth: 1)
+                        )
+                        .shadow(color: FlyerStudioTheme.accent.opacity(0.35), radius: 16, y: 8)
+                        .disabled(!canSubmitFlyerAiBackgroundConcept)
+                        .opacity(canSubmitFlyerAiBackgroundConcept ? 1 : 0.45)
+                    }
+                    .padding(24)
+                    .frame(maxWidth: min(geo.size.width - 28, 520))
+                    .glassEffectRegularDark(cornerRadius: 28)
+                    .shadow(color: Color.black.opacity(0.5), radius: 44, y: 22)
+                    .frame(maxWidth: .infinity)
+                }
+                .frame(maxHeight: geo.size.height * 0.88)
             }
-            .padding(22)
-            .frame(maxWidth: 360)
-            .glassEffectRegularDark(cornerRadius: 28)
-            .shadow(color: Color.black.opacity(0.5), radius: 44, y: 22)
-            .padding(.horizontal, 22)
         }
     }
 
@@ -3118,6 +3364,36 @@ private struct FlyerAIGeneratorSheet: View {
         // pour éviter que la couleur de fond reste visible par-dessus le template.
         flyerModel.flyerWebSkipCanvasSolidBackground = true
         applyFlyerBgAfterCrop(flyerFullBleedBackgroundImage(ui), selectionState: .template(key))
+    }
+
+    /// 1ʳᵉ création : fond template aléatoire (pas le dégradé couleur seul) si aucun visuel n’est encore choisi.
+    @MainActor
+    private func applyDefaultFlyerBackgroundTemplateForCreationIfNeeded() async {
+        let hasPersistedBg: Bool = {
+            if let s = flyerModel.flyerCustomBgDataURLForNativeUnderlay?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !s.isEmpty { return true }
+            if let s = flyerModel.serverBgDataUrl?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !s.isEmpty { return true }
+            return false
+        }()
+        guard !hasPersistedBg, generatedBase64 == nil else { return }
+        let keys = flyerBackgroundTemplateKeysState
+        guard !keys.isEmpty, let key = keys.randomElement() else { return }
+        guard let ui = flyerBackgroundTemplateUIImage(for: key) else { return }
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.84)) {
+            flyerModel.setBackgroundSelectionState(.template(key))
+        }
+        flyerModel.flyerWebSkipCanvasSolidBackground = true
+        let cropped = flyerFullBleedBackgroundImage(ui)
+        let maxB = FlyerDashboardFlyerPrefsLimits.maxBgDataURLUtf8Bytes
+        let dataUrl = await Task.detached(priority: .userInitiated) {
+            cropped.flyerCustomBgExportDataURLReliable(maxUtf8: maxB)
+        }.value
+        let trimmed = dataUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        let looksValid = trimmed.hasPrefix("data:image/") && trimmed.contains(",") && !trimmed.hasSuffix(",")
+        guard looksValid else { return }
+        flyerModel.setBackgroundSelectionState(.template(key))
+        flyerModel.applyBgPayload(.dataURL(trimmed), directUnderlay: cropped)
     }
 
     private func setFlyerPaletteProgrammatically(_ hexes: [String]) {
@@ -3229,9 +3505,9 @@ private struct FlyerAIGeneratorSheet: View {
                 }
                 aiPromptComposerCard
             }
-            .animation(.spring(response: 0.52, dampingFraction: 0.86), value: flyerHeroRevealed)
-            .animation(.spring(response: 0.42, dampingFraction: 0.86), value: flyerIsViewMode)
-            .animation(.spring(response: 0.45, dampingFraction: 0.86), value: isFlyerAiBackgroundGenerating)
+            .animation(.easeOut(duration: 0.24), value: flyerHeroRevealed)
+            .animation(.easeOut(duration: 0.22), value: flyerIsViewMode)
+            .animation(.easeOut(duration: 0.24), value: isFlyerAiBackgroundGenerating)
         }
         .frame(maxWidth: .infinity)
     }
@@ -3900,6 +4176,7 @@ private struct FlyerAIGeneratorSheet: View {
             } else if !flyerHeroRevealed {
                 Button {
                     Task { @MainActor in
+                        await applyDefaultFlyerBackgroundTemplateForCreationIfNeeded()
                         let ordered = flyerPalettePriorityHexes.compactMap { Self.normalizeHex($0) }
                         if let first = ordered.first {
                             applyFullFlyerAccentFromWheelPalette(ordered: [first])

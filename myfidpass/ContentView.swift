@@ -11,11 +11,12 @@ import UIKit
 
 struct ContentView: View {
     @Environment(\.managedObjectContext) private var viewContext
+    @Environment(\.scenePhase) private var scenePhase
     @EnvironmentObject private var syncService: SyncService
     @EnvironmentObject private var authService: AuthService
     @StateObject private var tabRouter = MainTabRouter()
     @State private var showMerchantSubscriptionSheet = false
-    @State private var showGlobalSettingsSheet = false
+    @State private var merchantSubscriptionRequiredSlots: Int?
     /// Pastille « Synchronisé » après une sync réussie (masquée si une nouvelle sync démarre).
     @State private var showSyncSuccessChip = false
     @State private var syncSuccessHideTask: Task<Void, Never>?
@@ -31,20 +32,20 @@ struct ContentView: View {
     @State private var softwareKeyboardHeight: CGFloat = 0
     /// Anti-flash: garde la pastille cachée un court instant après un événement clavier.
     @State private var suppressTrialPillUntil: Date = .distantPast
-    /// Masque le bandeau sync pendant le tutoriel (le snapshot du tutoriel ne doit pas capturer ce bandeau).
-    @AppStorage("myfidpass.homeTutorial.v1") private var homeTutorialCompleted = false
     /// Merci écran plein après paiement (deep link ou fermeture gate).
     @State private var showPaymentThankYouOverlay = false
     @State private var subscriptionPaidThankYouEpoch = 0
-    /// Force le recalcul de la pastille essai (checklist lancement complétée, etc.).
-    @State private var merchantTrialChromeRevision = 0
 
     var body: some View {
         ZStack {
             mainMerchantTabStack
-                .disabled(authService.shouldShowMerchantAccessRenewalFullscreen)
-                .onReceive(NotificationCenter.default.publisher(for: .myfidpassOpenMerchantSubscriptionSheet)) { _ in
+                .onReceive(NotificationCenter.default.publisher(for: .myfidpassOpenMerchantSubscriptionSheet)) { notification in
                     guard !authService.isMerchantStaffUser else { return }
+                    if let raw = notification.userInfo?[MyfidpassNotificationUserInfoKey.requiredCommerceSlots] as? Int {
+                        merchantSubscriptionRequiredSlots = min(5, max(1, raw))
+                    } else {
+                        merchantSubscriptionRequiredSlots = nil
+                    }
                     showMerchantSubscriptionSheet = true
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .myfidpassOpenMerchantTrialStripePaymentLink)) { _ in
@@ -54,12 +55,19 @@ struct ContentView: View {
                 .onReceive(NotificationCenter.default.publisher(for: .myfidpassSubscriptionPaymentCompleted)) { _ in
                     subscriptionPaidThankYouEpoch += 1
                     let epoch = subscriptionPaidThankYouEpoch
-                    withAnimation(.easeOut(duration: 0.32)) {
-                        showMerchantSubscriptionSheet = false
-                        showPaymentThankYouOverlay = true
-                    }
                     Task {
                         await runPostPaywallRefreshPipeline()
+                        await MainActor.run {
+                            guard epoch == subscriptionPaidThankYouEpoch else { return }
+                            guard authService.hasEncashedMerchantSubscription else {
+                                showMerchantSubscriptionSheet = true
+                                return
+                            }
+                            withAnimation(.easeOut(duration: 0.32)) {
+                                showMerchantSubscriptionSheet = false
+                                showPaymentThankYouOverlay = true
+                            }
+                        }
                         try? await Task.sleep(for: .milliseconds(2400))
                         await MainActor.run {
                             guard epoch == subscriptionPaidThankYouEpoch else { return }
@@ -70,50 +78,38 @@ struct ContentView: View {
                     }
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .myfidpassOpenGlobalSettingsSheet)) { _ in
-                    showGlobalSettingsSheet = true
-                }
-                .onReceive(NotificationCenter.default.publisher(for: .myfidpassCloseGlobalSettingsSheet)) { _ in
-                    showGlobalSettingsSheet = false
-                }
-                .onReceive(NotificationCenter.default.publisher(for: .myfidpassMerchantSetupProgressUpdated)) { _ in
-                    merchantTrialChromeRevision &+= 1
-                }
-                .onChange(of: showGlobalSettingsSheet) { _, isOpen in
-                    if !isOpen {
-                        merchantTrialChromeRevision &+= 1
-                    }
+                    tabRouter.selectedTab = 0
+                    tabRouter.pendingHomeSidebarOpen = true
                 }
                 .sheet(isPresented: $showMerchantSubscriptionSheet) {
-                    MerchantSubscriptionGateView(isMandatory: false)
-                        .environmentObject(authService)
-                        .presentationDetents([.large])
-                        .presentationDragIndicator(.hidden)
+                    MerchantSubscriptionGateView(
+                        isMandatory: false,
+                        requiredCommerceSlots: merchantSubscriptionRequiredSlots
+                    )
+                    .environmentObject(authService)
+                    .presentationDetents([.large])
+                    .presentationDragIndicator(.hidden)
+                    .presentationCornerRadius(28)
+                    .presentationBackground(.white)
                 }
-                .sheet(isPresented: $showGlobalSettingsSheet) {
-                    NavigationStack {
-                        SettingsView()
-                            .environmentObject(authService)
-                            .environmentObject(syncService)
-                            .environment(\.managedObjectContext, viewContext)
+                .onChange(of: showMerchantSubscriptionSheet) { _, isOpen in
+                    if !isOpen { merchantSubscriptionRequiredSlots = nil }
+                }
+                .task(id: adminPilotSyncTaskKey) {
+                    guard authService.currentScreen == .authenticated else { return }
+                    guard authService.isPlatformAdmin, authService.adminShowsMerchantWorkspace else { return }
+                    await authService.refreshPlatformAdminBusinesses(force: false)
+                    await authService.reconcileMerchantSubscriptionFromServer(force: false)
+                    syncService.invalidateSyncThrottle()
+                    await syncService.syncIfNeeded(force: true)
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .myfidpassAdminPilotDidStart)) { _ in
+                    Task {
+                        guard authService.isPlatformAdmin, authService.adminShowsMerchantWorkspace else { return }
+                        syncService.invalidateSyncThrottle()
+                        await syncService.syncIfNeeded(force: true)
                     }
                 }
-                .task {
-                    await authService.reconcileStripeSubscriptionFromServer(force: true)
-                }
-
-            if authService.shouldShowMerchantAccessRenewalFullscreen {
-                MerchantSubscriptionExpiredBlockingView(
-                    businessName: merchantAccessBlockingBusinessTitle,
-                    onOpenSettings: {
-                        showGlobalSettingsSheet = true
-                    },
-                    onContinueToPayment: {
-                        showMerchantSubscriptionSheet = true
-                    }
-                )
-                .transition(.opacity)
-                .zIndex(150)
-            }
 
             if showPaymentThankYouOverlay {
                 paymentThankYouOverlay
@@ -121,47 +117,31 @@ struct ContentView: View {
                     .zIndex(200)
             }
         }
+        .onAppear { presentPendingSubscriptionThankYouAfterSignupIfNeeded() }
+        .onChange(of: authService.pendingSubscriptionThankYouAfterSignup) { _, pending in
+            if pending { presentPendingSubscriptionThankYouAfterSignupIfNeeded() }
+        }
     }
 
-    /// Titre commerce pour l’écran de renouvellement (slug courant ou premier de la liste).
-    private var merchantAccessBlockingBusinessTitle: String {
+    /// Relance la sync quand l’admin entre en mode pilotage ou change de commerce piloté.
+    private var adminPilotSyncTaskKey: String {
+        guard authService.currentScreen == .authenticated else { return "off" }
+        guard authService.isPlatformAdmin, authService.adminShowsMerchantWorkspace else { return "merchant" }
         let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !slug.isEmpty,
-           let match = authService.businesses.first(where: { $0.slug == slug }) {
-            let name = match.name.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !name.isEmpty { return name }
-        }
-        if let first = authService.businesses.first {
-            let name = first.name.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !name.isEmpty { return name }
-        }
-        return "Mon commerce"
+        return "pilot-\(slug)"
     }
 
-    /// Après inscription : marqueur « lancer le tutoriel une fois l’écran débloqué » (paywall ou accès direct).
-    /// N’envoie `myfidpassResetTutorial` que si le tutoriel était déjà enregistré comme terminé : sinon le
-    /// premier `OneTimeOnBoarding` tourne déjà, et une notif forçait un second montage = flashs et saccades.
-    @MainActor
-    private func processPendingPostSignupHomeTutorial() {
-        guard authService.pendingHomeTutorialAfterSignup else { return }
-        _ = authService.consumePendingHomeTutorialAfterSignup()
-        guard !HomeTutorialTemporaryDisable.isOn else { return }
-        if homeTutorialCompleted {
-            NotificationCenter.default.post(name: .myfidpassResetTutorial, object: nil)
-        }
-    }
-
-    /// Onglets + pastille d’essai + sync (masqué quand le paywall d’inscription / essai bloque l’app).
+    /// Onglets + pastille d’essai + sync.
     @ViewBuilder
     private var mainMerchantTabStack: some View {
         MainTabView()
-            .onAppear { processPendingPostSignupHomeTutorial() }
             .safeAreaInset(edge: .top, spacing: 0) {
                 if authService.isPlatformAdmin && authService.adminShowsMerchantWorkspace {
                     adminMerchantPilotBanner
                 }
             }
             .environment(\.isSoftwareKeyboardVisible, isSoftwareKeyboardVisible)
+            .environment(\.merchantSubscribePillSuppressed, showMerchantSubscriptionSheet)
             .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { note in
                 suppressTrialPillUntil = Date().addingTimeInterval(0.7)
                 applyKeyboardState(from: note)
@@ -172,7 +152,7 @@ struct ContentView: View {
                 isSoftwareKeyboardVisible = false
             }
             .overlay(alignment: .top) {
-                if (homeTutorialCompleted || HomeTutorialTemporaryDisable.isOn) && !floatingOverlaysSuppressed {
+                if !floatingOverlaysSuppressed {
                     topSyncAndErrorOverlay
                 }
             }
@@ -226,14 +206,24 @@ struct ContentView: View {
             }
             .onChange(of: authService.currentScreen) { _, screen in
                 guard screen != .authenticated else { return }
-                showGlobalSettingsSheet = false
+                dismissedSyncErrorBanner = false
+                tabRouter.pendingHomeSidebarOpen = false
+                NotificationCenter.default.post(name: .myfidpassCloseGlobalSettingsSheet, object: nil)
                 showMerchantSubscriptionSheet = false
                 showSyncSuccessChip = false
                 syncSuccessHideTask?.cancel()
                 syncSuccessHideTask = nil
             }
+            .onChange(of: scenePhase) { oldPhase, newPhase in
+                guard authService.currentScreen == .authenticated else { return }
+                guard newPhase == .active, oldPhase != .active else { return }
+                Task {
+                    await APIClient.shared.ensureValidAccessTokenWithRetry()
+                    await authService.refreshBusinessesIfNeeded(force: true)
+                    await syncService.syncIfNeeded(force: true)
+                }
+            }
             .onReceive(NotificationCenter.default.publisher(for: .myfidpassCardPreviewDisplayDidChange)) { _ in
-                merchantTrialChromeRevision &+= 1
                 Task { await NotificationsService.shared.refreshMerchantCardSetupReminder() }
             }
             .environmentObject(tabRouter)
@@ -245,68 +235,41 @@ struct ContentView: View {
                 if relayOAuthUniversalLinkIfNeeded(url: url) { return }
                 handleScanDeepLink(url: url)
             }
-            .overlay(alignment: .bottom) {
-                if shouldShowTrialSubscribePillInCurrentTab,
-                   !showMerchantSubscriptionSheet,
-                   !showGlobalSettingsSheet,
-                   let trialEnd = authService.merchantTrialEndsAt {
-                    MerchantTrialSubscribePillView(trialEndsAt: trialEnd) {
-                        showMerchantSubscriptionSheet = true
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.bottom, trialSubscribePillBottomPadding)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
-            }
     }
 
     @MainActor
     private func runPostPaywallRefreshPipeline() async {
         syncService.invalidateSyncThrottle()
         try? await Task.sleep(nanoseconds: 450_000_000)
-        await authService.reconcileStripeSubscriptionFromServer(force: true)
+        _ = await authService.refreshMerchantBillingStateFromServer(force: true)
+        await authService.reconcileMerchantSubscriptionFromServer(force: true)
         await syncService.syncAfterServerMutation()
     }
 
-    /// Au-dessus de la tab bar. `gap` négatif = pastille plus basse (plus proche des onglets).
-    private var trialSubscribePillBottomPadding: CGFloat {
-        let tabBarApprox: CGFloat = 52
-        let gap: CGFloat = -10
-        guard
-            let scene = UIApplication.shared.connectedScenes
-                .compactMap({ $0 as? UIWindowScene })
-                .first(where: { $0.activationState == .foregroundActive || $0.activationState == .foregroundInactive }),
-            let window = scene.windows.first(where: { $0.isKeyWindow }) ?? scene.windows.first
-        else {
-            return tabBarApprox + gap + 24
+    @MainActor
+    private func presentPendingSubscriptionThankYouAfterSignupIfNeeded() {
+        guard authService.pendingSubscriptionThankYouAfterSignup else { return }
+        authService.consumePendingSubscriptionThankYouAfterSignup()
+        subscriptionPaidThankYouEpoch += 1
+        let epoch = subscriptionPaidThankYouEpoch
+        Task {
+            await runPostPaywallRefreshPipeline()
+            await MainActor.run {
+                guard epoch == subscriptionPaidThankYouEpoch else { return }
+                guard authService.hasEncashedMerchantSubscription else { return }
+                withAnimation(.easeOut(duration: 0.32)) {
+                    showMerchantSubscriptionSheet = false
+                    showPaymentThankYouOverlay = true
+                }
+            }
+            try? await Task.sleep(for: .milliseconds(2400))
+            await MainActor.run {
+                guard epoch == subscriptionPaidThankYouEpoch else { return }
+                withAnimation(.easeInOut(duration: 0.45)) {
+                    showPaymentThankYouOverlay = false
+                }
+            }
         }
-        return window.safeAreaInsets.bottom + tabBarApprox + gap
-    }
-
-    /// Pastille visible sur Accueil, Notif et Commerce.
-    private var shouldShowTrialSubscribePillInCurrentTab: Bool {
-        _ = merchantTrialChromeRevision
-        guard !authService.isMerchantStaffUser else { return false }
-        guard !authService.hasPaidStripeSubscription else { return false }
-        guard authService.isMerchantTrialPeriodActive, authService.merchantTrialEndsAt != nil else { return false }
-        guard !floatingOverlaysSuppressed else { return false }
-        guard merchantLaunchChecklistCompleteForTrialChrome else { return false }
-        return tabRouter.selectedTab == 0 || tabRouter.selectedTab == 1 || tabRouter.selectedTab == 2
-    }
-
-    /// Aligné SaaS web : pas d’incitation 1 € tant que les 4 étapes « lancement » ne sont pas cochées.
-    private var merchantLaunchChecklistCompleteForTrialChrome: Bool {
-        guard let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines), !slug.isEmpty else {
-            return false
-        }
-        CommerceFlyerStore.shared.hydrateFromDiskIfNeeded(slug: slug)
-        let flyerCustom = MerchantSetupProgressCalculator.flyerLooksCustomizedFromDisk(slug: slug)
-        let settings = ScanFlowSettingsCache.cached(for: slug)
-        return MerchantSetupProgressCalculator.compute(
-            settings: settings,
-            slug: slug,
-            flyerLooksCustomized: flyerCustom,
-        ).allDone
     }
 
     /// Confirmation plein écran après paiement (par‑dessus les onglets).
@@ -370,7 +333,10 @@ struct ContentView: View {
             }
             Spacer(minLength: 4)
             Button {
-                Task { await syncService.syncAfterServerMutation() }
+                Task {
+                    await APIClient.shared.ensureValidAccessTokenWithRetry(maxAttempts: 3)
+                    await syncService.syncAfterServerMutation()
+                }
             } label: {
                 Text("Réessayer")
                     .font(.caption.weight(.semibold))
@@ -495,7 +461,7 @@ struct ContentView: View {
     private var adminMerchantPilotBanner: some View {
         HStack(spacing: 12) {
             Button {
-                authService.adminShowsMerchantWorkspace = false
+                authService.returnToPlatformAdministrationHub()
             } label: {
                 HStack(spacing: 8) {
                     Image(systemName: "chevron.backward.circle.fill")

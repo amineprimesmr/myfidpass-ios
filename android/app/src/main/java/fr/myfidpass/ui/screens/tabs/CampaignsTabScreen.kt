@@ -1,63 +1,150 @@
 package fr.myfidpass.ui.screens.tabs
 
-import androidx.compose.animation.AnimatedVisibility
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ExpandLess
-import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import fr.myfidpass.BuildConfig
+import fr.myfidpass.data.dto.CampaignAutomationConfigDto
+import fr.myfidpass.data.dto.CampaignAutomationRuleDto
+import fr.myfidpass.data.local.SessionStore
 import fr.myfidpass.data.repo.DashboardRepository
+import fr.myfidpass.util.readUriAsImageDataUrl
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonObject
 
 @Composable
 fun CampaignsTabScreen(
     modifier: Modifier = Modifier,
     repository: DashboardRepository,
+    sessionStore: SessionStore,
     snackbarHostState: SnackbarHostState,
+    hasProAccess: Boolean = true,
+    onUnlockPro: () -> Unit = {},
+    onRequestAccountRefresh: () -> Unit = {},
 ) {
-    var message by remember { mutableStateOf("") }
-    var title by remember { mutableStateOf("") }
-    var status by remember { mutableStateOf<String?>(null) }
-    var loading by remember { mutableStateOf(false) }
-    var dataLoading by remember { mutableStateOf(true) }
-    var segments by remember { mutableStateOf<JsonObject?>(null) }
-    var stats by remember { mutableStateOf<JsonObject?>(null) }
-    var statsError by remember { mutableStateOf<String?>(null) }
-    var showDebugJson by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
     val slug = repository.currentSlug()
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val authToken = sessionStore.accessToken
+
+    var title by remember { mutableStateOf("") }
+    var bodyText by remember { mutableStateOf("") }
+    var selectedSegment by remember { mutableStateOf<String?>(null) }
+    var automation by remember { mutableStateOf<CampaignAutomationConfigDto?>(null) }
+    var ruleMessages by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var perimeterMessage by remember { mutableStateOf("") }
+    var locationLat by remember { mutableStateOf<Double?>(null) }
+    var locationLng by remember { mutableStateOf<Double?>(null) }
+    var locationRadiusMeters by remember { mutableIntStateOf(100) }
+    var notificationIconUrl by remember { mutableStateOf<String?>(null) }
+    var loadError by remember { mutableStateOf<String?>(null) }
+    var dataLoading by remember { mutableStateOf(true) }
+    var isSending by remember { mutableStateOf(false) }
+    var sendProgress by remember { mutableFloatStateOf(0f) }
+    var sendSuccessCount by remember { mutableStateOf<Int?>(null) }
+    var uploadingIcon by remember { mutableStateOf(false) }
+    var showLogoPopup by remember { mutableStateOf(false) }
+    var showPerimeter by remember { mutableStateOf(false) }
+    var eventEditorRuleId by remember { mutableStateOf<String?>(null) }
+    var showEventEditor by remember { mutableStateOf(false) }
+    var pendingDeleteEventId by remember { mutableStateOf<String?>(null) }
+
+    val hasCustomIcon = !notificationIconUrl.isNullOrBlank()
+    val iconApiUrl = slug?.let {
+        "${BuildConfig.API_BASE_URL.trimEnd('/')}/api/businesses/${it.lowercase()}/notification-icon"
+    }
+
+    val pickNotifIcon = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
+        uri ?: return@rememberLauncherForActivityResult
+        val s = slug ?: return@rememberLauncherForActivityResult
+        readUriAsImageDataUrl(context, uri, maxBytes = 512 * 1024)?.let { dataUrl ->
+            scope.launch {
+                uploadingIcon = true
+                runCatching {
+                    repository.patchDashboardSettings(
+                        s,
+                        buildJsonObject { put("notification_icon_base64", dataUrl) },
+                    )
+                    notificationIconUrl = iconApiUrl
+                    showLogoPopup = false
+                    snackbarHostState.showSnackbar("Icône notification enregistrée")
+                    loadCampaignData(repository, s) { settings, auto ->
+                        automation = auto
+                        notificationIconUrl = settings.notificationIconUrl?.trim()?.takeIf { it.isNotEmpty() }
+                            ?: iconApiUrl
+                    }
+                }.onFailure {
+                    snackbarHostState.showSnackbar(it.message ?: "Erreur")
+                }
+                uploadingIcon = false
+            }
+        } ?: scope.launch { snackbarHostState.showSnackbar("Image invalide (max 512 Ko)") }
+    }
+
+    if (showPerimeter) {
+        PerimeterSettingsScreen(
+            repository = repository,
+            snackbar = snackbarHostState,
+            onBack = {
+                showPerimeter = false
+                slug?.let { s ->
+                    scope.launch {
+                        loadCampaignData(repository, s) { settings, auto ->
+                            automation = auto
+                            perimeterMessage = settings.locationRelevantText.orEmpty()
+                            locationLat = settings.locationLat
+                            locationLng = settings.locationLng
+                            locationRadiusMeters = settings.locationRadiusMeters ?: 100
+                        }
+                    }
+                }
+            },
+        )
+        return
+    }
 
     LaunchedEffect(slug) {
         val s = slug ?: run {
@@ -65,281 +152,328 @@ fun CampaignsTabScreen(
             return@LaunchedEffect
         }
         dataLoading = true
-        statsError = null
-        runCatching { segments = repository.notificationSegments(s) }
-            .onFailure { statsError = it.message }
-        runCatching { stats = repository.notificationStats(s) }
-            .onFailure { statsError = it.message }
+        loadError = null
+        loadCampaignData(repository, s) { settings, auto ->
+            automation = auto
+            title = settings.notificationTitleOverride?.takeIf { it.isNotBlank() }.orEmpty()
+            bodyText = ""
+            perimeterMessage = settings.locationRelevantText.orEmpty()
+            locationLat = settings.locationLat
+            locationLng = settings.locationLng
+            locationRadiusMeters = settings.locationRadiusMeters ?: 100
+            notificationIconUrl = settings.notificationIconUrl?.trim()?.takeIf { it.isNotEmpty() }
+            ruleMessages = auto?.rules?.mapValues { it.value.message.orEmpty() }.orEmpty()
+        }.onFailure { loadError = it.message }
         dataLoading = false
     }
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(20.dp),
-    ) {
-        Text("Notifs", style = MaterialTheme.typography.titleLarge)
-        Spacer(Modifier.height(4.dp))
-        Text(
-            "Envoie une notification push à tes clients (Web, Apple Wallet, app commerçant selon configuration). " +
-                "Les blocs ci‑dessous viennent du serveur : ce ne sont pas des erreurs, mais des compteurs et des textes d’aide pour le dépannage.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.height(12.dp))
-
-        if (dataLoading) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
-                CircularProgressIndicator()
-            }
-            Spacer(Modifier.height(8.dp))
+    LaunchedEffect(notificationIconUrl) {
+        if (notificationIconUrl.isNullOrBlank()) {
+            delay(3000)
+            if (notificationIconUrl.isNullOrBlank()) showLogoPopup = true
+        } else {
+            showLogoPopup = false
         }
+    }
 
-        segments?.takeIf { it.isNotEmpty() }?.let { seg ->
-            Text("Ciblage (segments)", style = MaterialTheme.typography.titleSmall)
-            Spacer(Modifier.height(4.dp))
-            Text(
-                "Nombre de membres correspondant à chaque critère (inactifs, nouveaux, anniversaires, etc.). " +
-                    "Tu choisis le segment au moment de l’envoi côté SaaS / logique serveur ; ici c’est un aperçu des volumes.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+    LaunchedEffect(title) {
+        val s = slug ?: return@LaunchedEffect
+        delay(380)
+        runCatching {
+            repository.patchDashboardSettings(
+                s,
+                buildJsonObject {
+                    put("notification_title_override", title.trim())
+                },
             )
-            Spacer(Modifier.height(8.dp))
-            Card(
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-            ) {
-                Column(Modifier.padding(12.dp)) {
-                    seg.entries.sortedBy { it.key }.forEach { (k, v) ->
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 4.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                        ) {
-                            Text(
-                                segmentKeyLabels[k] ?: k,
-                                style = MaterialTheme.typography.bodyMedium,
-                                modifier = Modifier.weight(1f),
-                            )
-                            Text(
-                                v.displayValue(),
-                                style = MaterialTheme.typography.bodyMedium,
-                            )
+        }
+    }
+
+    fun patchAutomation(onDone: () -> Unit = {}) {
+        val s = slug ?: return
+        scope.launch {
+            runCatching {
+                val current = automation?.rules?.toMutableMap() ?: mutableMapOf()
+                val patch = buildJsonObject {
+                    putJsonObject("campaign_automation") {
+                        put("version", automation?.version ?: 1)
+                        put("global_cooldown_days", automation?.globalCooldownDays ?: 7)
+                        putJsonObject("rules") {
+                            current.forEach { (k, v) ->
+                                putJsonObject(k) {
+                                    val iconOk = hasCustomIcon
+                                    put("enabled", if (iconOk && v.enabled == true) 1 else 0)
+                                    val msg = ruleMessages[k]?.trim()?.takeIf { it.isNotEmpty() } ?: v.message
+                                    msg?.let { put("message", it) }
+                                    v.eventType?.let { put("event_type", it) }
+                                    v.delayMinutes?.let { put("delay_minutes", it) }
+                                    v.title?.let { put("title", it) }
+                                    v.segment?.let { put("segment", it) }
+                                }
+                            }
                         }
                     }
-                }
-            }
-            Spacer(Modifier.height(12.dp))
-        }
-
-        stats?.let { st ->
-            Text("Canaux & diagnostic", style = MaterialTheme.typography.titleSmall)
-            Spacer(Modifier.height(4.dp))
-            Text(
-                "Résumé technique : combien de membres, d’abonnements push, de passes Wallet enregistrés, etc. " +
-                    "Les longs textes en bas sont des guides si « 0 appareil » alors que tu as des clients.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(8.dp))
-            st.lastBatchSummary()?.let { line ->
-                Text(line, style = MaterialTheme.typography.labelLarge)
-                Spacer(Modifier.height(6.dp))
-            }
-            Card(
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-            ) {
-                Column(Modifier.padding(12.dp)) {
-                    st.statsKpiEntries().forEach { (label, value) ->
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 4.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                        ) {
-                            Text(label, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
-                            Text(value, style = MaterialTheme.typography.bodySmall)
-                        }
+                    if (perimeterMessage.isNotBlank()) {
+                        put("location_relevant_text", perimeterMessage.trim())
                     }
                 }
+                repository.patchDashboardSettings(s, patch)
+                onDone()
+            }.onFailure {
+                snackbarHostState.showSnackbar(it.message ?: "Erreur enregistrement")
             }
-            Spacer(Modifier.height(8.dp))
-            st.pickLongHelp().forEach { (helpTitle, body) ->
-                ExpandableHelpBlock(title = helpTitle, body = body)
-                Spacer(Modifier.height(6.dp))
-            }
-            Spacer(Modifier.height(4.dp))
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clickable { showDebugJson = !showDebugJson }
-                    .padding(vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Text(
-                    if (showDebugJson) "Masquer le JSON brut" else "Voir le JSON brut (support)",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-                Icon(
-                    if (showDebugJson) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                )
-            }
-            AnimatedVisibility(visible = showDebugJson) {
-                Text(
-                    st.toString(),
-                    style = MaterialTheme.typography.bodySmall,
-                    fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Spacer(Modifier.height(8.dp))
         }
+    }
 
-        statsError?.let {
-            Text(it, color = MaterialTheme.colorScheme.error)
-            Spacer(Modifier.height(8.dp))
+    fun saveAutomationRule(ruleId: String, enabled: Boolean, message: String) {
+        val current = automation?.rules?.toMutableMap() ?: mutableMapOf()
+        val row = current[ruleId]?.copy(
+            enabled = enabled && hasCustomIcon,
+            message = message,
+        ) ?: CampaignAutomationRuleDto(enabled = enabled && hasCustomIcon, message = message)
+        current[ruleId] = row
+        automation = automation?.copy(rules = current) ?: CampaignAutomationConfigDto(rules = current)
+        ruleMessages = ruleMessages + (ruleId to message)
+        patchAutomation()
+    }
+
+    fun sendNotification() {
+        val s = slug ?: return
+        if (!hasProAccess) {
+            scope.launch { snackbarHostState.showSnackbar("Abonnement Pro requis pour l'envoi manuel") }
+            return
         }
-
-        HorizontalDivider()
-        Spacer(Modifier.height(12.dp))
-        Text("Nouvelle notification", style = MaterialTheme.typography.titleSmall)
-        Spacer(Modifier.height(8.dp))
-        OutlinedTextField(
-            value = title,
-            onValueChange = { title = it },
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text("Titre (optionnel)") },
-            singleLine = true,
-        )
-        Spacer(Modifier.height(8.dp))
-        OutlinedTextField(
-            value = message,
-            onValueChange = { message = it },
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text("Message") },
-            minLines = 3,
-        )
-        Spacer(Modifier.height(12.dp))
-        Button(
-            onClick = {
-                val s = repository.currentSlug() ?: return@Button
-                if (message.isBlank()) return@Button
-                scope.launch {
-                    loading = true
-                    status = runCatching {
-                        repository.sendNotification(
-                            s,
-                            message.trim(),
-                            null,
-                            title.trim().takeIf { it.isNotEmpty() },
-                            null,
+        if (!hasCustomIcon) {
+            showLogoPopup = true
+            return
+        }
+        if (bodyText.isBlank()) return
+        scope.launch {
+            isSending = true
+            sendProgress = 0.08f
+            delay(150)
+            sendProgress = 0.35f
+            val result = runCatching {
+                sendProgress = 0.6f
+                repository.sendNotification(
+                    s,
+                    bodyText.trim(),
+                    null,
+                    title.trim().takeIf { it.isNotEmpty() },
+                    selectedSegment,
+                )
+            }
+            sendProgress = 1f
+            result.fold(
+                onSuccess = { resp ->
+                    val count = resp["total"]?.jsonPrimitive?.intOrNull
+                        ?: resp["sent"]?.jsonPrimitive?.intOrNull
+                        ?: resp["sent_count"]?.jsonPrimitive?.intOrNull
+                        ?: resp["recipients"]?.jsonPrimitive?.intOrNull
+                    sendSuccessCount = count ?: 0
+                    val accepted = resp["accepted"]?.jsonPrimitive?.booleanOrNull == true
+                    val zeroTargets = (count ?: 0) == 0
+                    bodyText = ""
+                    patchAutomation()
+                    delay(1400)
+                    sendSuccessCount = null
+                    when {
+                        zeroTargets -> snackbarHostState.showSnackbar(
+                            resp["message"]?.jsonPrimitive?.content
+                                ?: "Aucun appareil joignable — les clients doivent avoir la carte dans Wallet ou le navigateur.",
                         )
-                    }.fold(
-                        onSuccess = { "Envoyé" },
-                        onFailure = { it.message ?: "Erreur" },
-                    )
-                    loading = false
-                }
-            },
-            enabled = !loading,
-            modifier = Modifier.fillMaxWidth(),
+                        accepted -> snackbarHostState.showSnackbar("Campagne lancée sur le serveur")
+                        else -> snackbarHostState.showSnackbar("Notification envoyée")
+                    }
+                },
+                onFailure = {
+                    snackbarHostState.showSnackbar(it.message ?: "Erreur lors de l'envoi")
+                },
+            )
+            isSending = false
+            sendProgress = 0f
+        }
+    }
+
+    Box(modifier.fillMaxSize()) {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
+                .background(MaterialTheme.colorScheme.background)
+                .verticalScroll(rememberScrollState())
+                .padding(top = 12.dp)
+                .padding(top = if (isSending) 8.dp else 0.dp)
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 100.dp),
         ) {
-            Text(if (loading) "Envoi…" else "Envoyer")
+            if (isSending) {
+                NotificationSendTopProgressStrip(sendProgress)
+                Spacer(Modifier.height(8.dp))
+            }
+
+            if (dataLoading) {
+                CircularProgressIndicator()
+                Spacer(Modifier.height(12.dp))
+            }
+
+            loadError?.let {
+                Text(it, color = MaterialTheme.colorScheme.error)
+                Spacer(Modifier.height(8.dp))
+                TextButton(onClick = {
+                    slug?.let { s ->
+                        scope.launch {
+                            dataLoading = true
+                            loadCampaignData(repository, s) { settings, auto ->
+                                automation = auto
+                                notificationIconUrl = settings.notificationIconUrl?.trim()?.takeIf { it.isNotEmpty() }
+                            }
+                            dataLoading = false
+                        }
+                    }
+                }) { Text("Réessayer") }
+                Spacer(Modifier.height(12.dp))
+            }
+
+            if (slug == null) {
+                Text("Aucun commerce synchronisé.")
+                Spacer(Modifier.height(8.dp))
+                Button(onClick = onRequestAccountRefresh) { Text("Synchroniser") }
+                return@Column
+            }
+
+            Box(Modifier.fillMaxWidth()) {
+                BorderBeamNotificationComposer(
+                    title = title,
+                    message = bodyText,
+                    onTitleChange = { title = it },
+                    onMessageChange = { bodyText = it },
+                    selectedSegment = selectedSegment,
+                    onSegmentSelected = { selectedSegment = it },
+                    onSend = { sendNotification() },
+                    sending = isSending,
+                    sendEnabled = hasProAccess && bodyText.isNotBlank() && hasCustomIcon,
+                    sendSuccessCount = sendSuccessCount,
+                    modifier = Modifier.then(
+                        if (!hasProAccess) Modifier.blur(5.dp).alpha(0.85f) else Modifier,
+                    ),
+                )
+                if (!hasProAccess) {
+                    ProUnlockTeaserButton(
+                        onUnlock = onUnlockPro,
+                        modifier = Modifier.align(Alignment.Center),
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(20.dp))
+
+            AutomationHubCarousel(
+                automation = automation,
+                ruleMessages = ruleMessages,
+                notificationIconUrl = if (hasCustomIcon) iconApiUrl else null,
+                authToken = authToken,
+                perimeterMessage = perimeterMessage,
+                onPerimeterMessageChange = { perimeterMessage = it; patchAutomation() },
+                onRuleMessageChange = { id, msg ->
+                    ruleMessages = ruleMessages + (id to msg)
+                    patchAutomation()
+                },
+                onToggle = { id, enabled ->
+                    saveAutomationRule(id, enabled, ruleMessages[id].orEmpty())
+                },
+                onOpenPerimeter = { showPerimeter = true },
+                locationLat = locationLat,
+                locationLng = locationLng,
+                locationRadiusMeters = locationRadiusMeters,
+                hasCustomIcon = hasCustomIcon,
+                onAddEventProgramming = {
+                    eventEditorRuleId = null
+                    showEventEditor = true
+                },
+                onEditEventProgramming = { id ->
+                    eventEditorRuleId = id
+                    showEventEditor = true
+                },
+                onDeleteEventProgramming = { pendingDeleteEventId = it },
+            )
+
         }
-        status?.let {
-            Spacer(Modifier.height(12.dp))
-            Text(it, color = MaterialTheme.colorScheme.primary)
+
+        if (showLogoPopup && !hasCustomIcon) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.22f))
+                    .clickable(
+                        indication = null,
+                        interactionSource = remember { MutableInteractionSource() },
+                        onClick = { showLogoPopup = false },
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                NotificationLogoPopupCard(
+                    logoUrl = notificationIconUrl,
+                    authToken = authToken,
+                    uploading = uploadingIcon,
+                    onPickLogo = { pickNotifIcon.launch("image/*") },
+                    modifier = Modifier.padding(horizontal = 18.dp),
+                )
+            }
         }
-        Spacer(Modifier.height(24.dp))
-        Text("Pass Apple (test)", style = MaterialTheme.typography.titleSmall)
-        Spacer(Modifier.height(4.dp))
-        Text(
-            "Outils commerçant : envoyer un pass de test ou retirer l’appareil de test du Wallet.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+    }
+
+    if (showEventEditor) {
+        val rule = eventEditorRuleId?.let { automation?.rules?.get(it) }
+        EventAutomationEditorSheet(
+            editingRuleId = eventEditorRuleId,
+            initialTitle = rule?.title.orEmpty(),
+            initialMessage = rule?.message.orEmpty(),
+            initialEventType = rule?.eventType.orEmpty(),
+            initialDelayMinutes = rule?.delayMinutes ?: 60,
+            onDismiss = { showEventEditor = false },
+            onSave = { id, t, msg, eventType, delay ->
+                val current = automation?.rules?.toMutableMap() ?: mutableMapOf()
+                current[id] = CampaignAutomationRuleDto(
+                    enabled = hasCustomIcon,
+                    message = msg,
+                    title = t,
+                    eventType = eventType,
+                    delayMinutes = delay,
+                )
+                automation = automation?.copy(rules = current) ?: CampaignAutomationConfigDto(rules = current)
+                ruleMessages = ruleMessages + (id to msg)
+                patchAutomation()
+            },
         )
-        Spacer(Modifier.height(8.dp))
-        OutlinedButton(
-            onClick = {
-                val s = slug ?: return@OutlinedButton
-                scope.launch {
-                    runCatching {
-                        repository.dashboardTestPasskit(s)
-                        snackbarHostState.showSnackbar("PassKit test déclenché")
-                    }.onFailure {
-                        snackbarHostState.showSnackbar(it.message ?: "Erreur")
-                    }
-                }
+    }
+
+    pendingDeleteEventId?.let { id ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { pendingDeleteEventId = null },
+            title = { Text("Supprimer cette programmation ?") },
+            text = { Text("La programmation sera supprimée.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    val current = automation?.rules?.toMutableMap() ?: mutableMapOf()
+                    current.remove(id)
+                    automation = automation?.copy(rules = current)
+                    patchAutomation()
+                    pendingDeleteEventId = null
+                }) { Text("Supprimer", color = MaterialTheme.colorScheme.error) }
             },
-            enabled = slug != null,
-            modifier = Modifier.fillMaxWidth(),
-        ) { Text("Tester PassKit") }
-        Spacer(Modifier.height(8.dp))
-        OutlinedButton(
-            onClick = {
-                val s = slug ?: return@OutlinedButton
-                scope.launch {
-                    runCatching {
-                        repository.dashboardRemoveTestDevice(s)
-                        snackbarHostState.showSnackbar("Device de test retiré")
-                    }.onFailure {
-                        snackbarHostState.showSnackbar(it.message ?: "Erreur")
-                    }
-                }
+            dismissButton = {
+                TextButton(onClick = { pendingDeleteEventId = null }) { Text("Annuler") }
             },
-            enabled = slug != null,
-            modifier = Modifier.fillMaxWidth(),
-        ) { Text("Retirer le device de test") }
+        )
     }
 }
 
-@Composable
-private fun ExpandableHelpBlock(title: String, body: String) {
-    var expanded by remember { mutableStateOf(false) }
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { expanded = !expanded },
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-    ) {
-        Column(Modifier.padding(12.dp)) {
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(title, style = MaterialTheme.typography.titleSmall)
-                Icon(
-                    if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                    contentDescription = null,
-                )
-            }
-            if (!expanded) {
-                Text(
-                    body.take(100).let { if (body.length > 100) "$it…" else it },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text(
-                    "Appuyer pour tout lire",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(top = 4.dp),
-                )
-            }
-            AnimatedVisibility(visible = expanded) {
-                Text(
-                    body,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 8.dp),
-                )
-            }
-        }
-    }
+private suspend fun loadCampaignData(
+    repository: DashboardRepository,
+    slug: String,
+    onLoaded: (fr.myfidpass.data.dto.BusinessSettingsResponse, CampaignAutomationConfigDto?) -> Unit,
+): Result<Unit> = runCatching {
+    val settings = repository.businessSettings(slug)
+    onLoaded(settings, settings.campaignAutomation)
 }

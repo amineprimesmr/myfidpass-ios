@@ -31,13 +31,12 @@ final class NotificationsService: NSObject, ObservableObject {
     /// Relances onboarding commerçant (local notifications).
     private static let merchantCardReminderRequestId = "myfidpass.merchant.cardSetup.reminder.v1"
     private static let merchantFlyerReminderRequestId = "myfidpass.merchant.flyerSetup.reminder.v1"
-    private static let merchantTrialReminderRequestId = "myfidpass.merchant.trialEnding.reminder.v1"
     private static let merchantCardReminderScheduledAtBySlugKey = "myfidpass.merchant.cardSetup.reminder.scheduledAtBySlug.v1"
     private static let merchantFlyerReminderScheduledAtBySlugKey = "myfidpass.merchant.flyerSetup.reminder.scheduledAtBySlug.v1"
-    private static let merchantTrialReminderScheduledAtBySlugKey = "myfidpass.merchant.trialEnding.reminder.scheduledAtBySlug.v1"
     private static let merchantCardReminderDelay: TimeInterval = 3 * 60 * 60
     private static let merchantFlyerReminderDelay: TimeInterval = 8 * 60 * 60
-    private static let merchantTrialEndsAtIsoKey = "myfidpass.merchantTrialEndsAtIso"
+    /// Ancienne notif fin d’essai — retirée du produit, conservée pour annuler les rappels déjà planifiés.
+    private static let legacyTrialReminderRequestId = "myfidpass.merchant.trialEnding.reminder.v1"
 
     override private init() {
         super.init()
@@ -200,7 +199,9 @@ final class NotificationsService: NSObject, ObservableObject {
         let pending = await pendingNotificationRequests()
         await refreshCardReminder(slug: slug, pending: pending)
         await refreshFlyerReminder(slug: slug, pending: pending)
-        await refreshTrialEndingReminder(slug: slug, pending: pending)
+        UNUserNotificationCenter.current().removePendingNotificationRequests(
+            withIdentifiers: [Self.legacyTrialReminderRequestId]
+        )
     }
 
     private func refreshCardReminder(slug: String, pending: [UNNotificationRequest]) async {
@@ -273,54 +274,12 @@ final class NotificationsService: NSObject, ObservableObject {
         markReminderScheduledNow(for: slug, key: Self.merchantFlyerReminderScheduledAtBySlugKey)
     }
 
-    private func refreshTrialEndingReminder(slug: String, pending: [UNNotificationRequest]) async {
-        guard let trialEnd = parseISO8601(UserDefaults.standard.string(forKey: Self.merchantTrialEndsAtIsoKey)) else {
-            UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [Self.merchantTrialReminderRequestId])
-            clearScheduleStamp(for: slug, key: Self.merchantTrialReminderScheduledAtBySlugKey)
-            return
-        }
-        let now = Date()
-        guard trialEnd > now else {
-            UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [Self.merchantTrialReminderRequestId])
-            clearScheduleStamp(for: slug, key: Self.merchantTrialReminderScheduledAtBySlugKey)
-            return
-        }
-
-        if let existing = pending.first(where: { $0.identifier == Self.merchantTrialReminderRequestId }) {
-            let existingSlug = existing.content.userInfo["business_slug"] as? String
-            if existingSlug == slug { return }
-            UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [Self.merchantTrialReminderRequestId])
-        }
-
-        if isReminderRecentlyScheduled(for: slug, key: Self.merchantTrialReminderScheduledAtBySlugKey, delay: 10 * 60) {
-            return
-        }
-
-        let targetFireDate = max(now.addingTimeInterval(10 * 60), trialEnd.addingTimeInterval(-(12 * 60 * 60)))
-        let interval = max(60, targetFireDate.timeIntervalSince(now))
-        let hoursLeft = max(1, Int(ceil(trialEnd.timeIntervalSince(targetFireDate) / 3600)))
-
-        let content = UNMutableNotificationContent()
-        content.title = "Offre 1 € : il reste du temps"
-        content.body = "Il vous reste environ \(hoursLeft)h pour activer votre mois à 1 € et débloquer toutes les fonctionnalités commerçant."
-        content.sound = .default
-        content.userInfo = ["business_slug": slug, "campaign": "merchant_trial_ending_reminder"]
-        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: interval, repeats: false)
-        let request = UNNotificationRequest(
-            identifier: Self.merchantTrialReminderRequestId,
-            content: content,
-            trigger: trigger
-        )
-        await addNotificationRequest(request)
-        markReminderScheduledNow(for: slug, key: Self.merchantTrialReminderScheduledAtBySlugKey)
-    }
-
     private func cancelMerchantOnboardingReminders() async {
         UNUserNotificationCenter.current().removePendingNotificationRequests(
             withIdentifiers: [
                 Self.merchantCardReminderRequestId,
                 Self.merchantFlyerReminderRequestId,
-                Self.merchantTrialReminderRequestId,
+                Self.legacyTrialReminderRequestId,
             ]
         )
     }
@@ -347,7 +306,8 @@ final class NotificationsService: NSObject, ObservableObject {
             tierLabels: snapshot.tierLabels ?? [],
             requiredStamps: snapshot.requiredStamps,
             stampRewardLabel: snapshot.stampRewardLabel,
-            stampMidRewardLabel: snapshot.stampMidRewardLabel ?? ""
+            stampMidRewardLabel: snapshot.stampMidRewardLabel ?? "",
+            startGameRewardLabel: snapshot.startGameRewardLabel ?? ""
         )
         return missing.isEmpty
     }

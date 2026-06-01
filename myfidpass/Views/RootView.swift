@@ -2,104 +2,100 @@
 //  RootView.swift
 //  myfidpass
 //
-//  Racine de l’app : affiche le flux auth/onboarding ou l’app principale selon l’état de connexion.
+//  Racine : onboarding / auth (Process) ou app connectée.
 //
 
 import SwiftUI
 import CoreData
 
-/// Accueil : renseigner l'établissement si la phase `merchantPremises` n'est pas terminée
-/// (premier lancement explicite ou après suppression de compte), sinon écran connexion / inscription.
+/// Accueil : welcome intégrée au parcours commerçant → connexion ou app authentifiée.
 private struct WelcomeFlow: View {
     @EnvironmentObject private var authService: AuthService
 
-    /// Snapshot au montage (et à chaque incrément de `firstLaunchOnboardingRestartEpoch` via `.id`).
-    @State private var needsMerchantPremises: Bool = !FirstLaunchOnboarding.hasCompleted
-    @State private var stage: WelcomeStage = .entry
-    @State private var authEntryPath: AuthEntryPath = .signUp
+    @State private var stage: WelcomeStage = .onboarding
+    @State private var signInPrefillIdentifier: String?
+    @State private var signInAccountAlreadyVerified = false
 
     private enum WelcomeStage {
-        case entry
-        case merchantPremises
-        case authChoice
-    }
-
-    private enum AuthEntryPath {
-        case signUp
-        case signIn
+        case onboarding
+        case signInFlow
+        case signUpChoice
     }
 
     var body: some View {
-        Group {
-            switch stage {
-            case .entry:
-                AuthLaunchEntryView(
-                    onCreateAccount: handleCreateAccountEntry,
-                    onSignIn: handleSignInEntry
-                )
-            case .merchantPremises:
-                FirstLaunchOnboardingView(onComplete: handleMerchantPremisesComplete, onAlreadyHaveAccount: handleMerchantPremisesAlreadyHaveAccount)
-            case .authChoice:
-                authChoiceContent
-            }
+        ZStack {
+            AppTheme.Colors.background
+                .ignoresSafeArea()
+
+            stageContent
         }
         .id("welcome-flow-\(authService.firstLaunchOnboardingRestartEpoch)")
         .onChange(of: authService.firstLaunchOnboardingRestartEpoch) { _, _ in
-            needsMerchantPremises = !FirstLaunchOnboarding.hasCompleted
-            authEntryPath = .signUp
-            stage = .entry
-        }
-    }
-
-    private func handleCreateAccountEntry() {
-        authEntryPath = .signUp
-        FirstLaunchOnboarding.rewindToMerchantPremisesSelectionForFreshCommercePick()
-        withAnimation(.easeInOut(duration: 0.25)) {
-            needsMerchantPremises = true
-            stage = .merchantPremises
-        }
-    }
-
-    private func handleSignInEntry() {
-        authEntryPath = .signIn
-        FirstLaunchOnboarding.markRelaxPlaceRequirementForExistingAccountFlow()
-        withAnimation(.easeInOut(duration: 0.25)) {
-            needsMerchantPremises = false
-            stage = .authChoice
-        }
-    }
-
-    private func handleMerchantPremisesComplete() {
-        withAnimation(.easeInOut(duration: 0.25)) {
-            needsMerchantPremises = false
-            stage = .authChoice
-        }
-    }
-
-    private func handleMerchantPremisesAlreadyHaveAccount() {
-        FirstLaunchOnboarding.rewindToMerchantPremisesSelectionForFreshCommercePick()
-        withAnimation(.easeInOut(duration: 0.25)) {
-            needsMerchantPremises = true
-            authEntryPath = .signUp
-            stage = .entry
-        }
-    }
-
-    private func handleAuthScreensBack() {
-        withAnimation(.easeInOut(duration: 0.22)) {
-            stage = .entry
+            resetSignInFlowState()
+            stage = .onboarding
         }
     }
 
     @ViewBuilder
-    private var authChoiceContent: some View {
-        switch authEntryPath {
-        case .signIn:
-            AuthSignInView(onBack: handleAuthScreensBack)
+    private var stageContent: some View {
+        switch stage {
+        case .onboarding:
+            FirstLaunchOnboardingView(
+                onComplete: handleMerchantPremisesComplete,
+                onSignIn: { transition(to: .signInFlow) },
+                onAlreadyHaveAccount: handleMerchantPremisesAlreadyHaveAccount,
+                onExistingAccountEmail: handleExistingAccountEmailDuringOnboarding
+            )
+            .environmentObject(authService)
+        case .signInFlow:
+            AuthSignInEmailFlowView(
+                initialIdentifier: signInPrefillIdentifier,
+                accountAlreadyVerified: signInAccountAlreadyVerified,
+                onBack: { transition(to: .onboarding) }
+            )
+            .environmentObject(authService)
+        case .signUpChoice:
+            AuthSignUpOtpFlowView(onBack: { transition(to: .onboarding) })
                 .environmentObject(authService)
-        case .signUp:
-            AuthSignUpView(onBack: handleAuthScreensBack)
-                .environmentObject(authService)
+        }
+    }
+
+    private func transition(to newStage: WelcomeStage) {
+        if newStage == .signInFlow {
+            FirstLaunchOnboarding.markRelaxPlaceRequirementForExistingAccountFlow()
+            signInPrefillIdentifier = FirstLaunchOnboarding.readSignupEmail()
+            signInAccountAlreadyVerified = false
+        } else if newStage == .onboarding {
+            resetSignInFlowState()
+        }
+
+        withAnimation(.onboardingTransition) {
+            stage = newStage
+        }
+    }
+
+    private func resetSignInFlowState() {
+        signInPrefillIdentifier = nil
+        signInAccountAlreadyVerified = false
+    }
+
+    private func handleMerchantPremisesComplete() {
+        guard authService.currentScreen != .authenticated else { return }
+        transition(to: .signUpChoice)
+    }
+
+    private func handleMerchantPremisesAlreadyHaveAccount() {
+        FirstLaunchOnboarding.markRelaxPlaceRequirementForExistingAccountFlow()
+        signInPrefillIdentifier = FirstLaunchOnboarding.readSignupEmail()
+        transition(to: .signInFlow)
+    }
+
+    private func handleExistingAccountEmailDuringOnboarding(_ email: String) {
+        FirstLaunchOnboarding.persistSignupEmail(email)
+        signInPrefillIdentifier = email
+        signInAccountAlreadyVerified = true
+        withAnimation(.onboardingTransition) {
+            stage = .signInFlow
         }
     }
 }
@@ -110,16 +106,15 @@ struct RootView: View {
     @AppStorage(AuthStorage.Key.isLoggedIn) private var isLoggedIn = false
 
     private var shouldShowAuthenticatedApp: Bool {
-        authService.currentScreen == .authenticated && isLoggedIn
+        authService.currentScreen == .authenticated
+            && isLoggedIn
+            && !authService.isCompletingSignupCardSetup
+            && !authService.isCompletingSignupPaywallPhase
     }
 
     var body: some View {
         ZStack {
-            if !shouldShowAuthenticatedApp {
-                WelcomeFlow()
-                    .environmentObject(authService)
-                    .transition(.asymmetric(insertion: .opacity.combined(with: .scale(scale: 0.985)), removal: .opacity))
-            } else {
+            if shouldShowAuthenticatedApp {
                 Group {
                     if authService.isPlatformAdmin && !authService.adminShowsMerchantWorkspace {
                         PlatformAdminRootView()
@@ -127,21 +122,19 @@ struct RootView: View {
                         ContentView()
                     }
                 }
+                .animation(nil, value: authService.isPlatformAdmin)
+                .animation(nil, value: authService.adminShowsMerchantWorkspace)
                 .environment(\.managedObjectContext, viewContext)
                 .transition(.asymmetric(insertion: .opacity.combined(with: .move(edge: .trailing)), removal: .opacity))
+                .task(id: isLoggedIn) {
+                    guard isLoggedIn, authService.currentScreen == .authenticated else { return }
+                    await authService.bootstrapAuthenticatedSessionIfNeeded(force: false)
+                }
+            } else {
+                WelcomeFlow()
+                    .environmentObject(authService)
             }
         }
-        .animation(.easeInOut(duration: 0.32), value: shouldShowAuthenticatedApp)
-        .onReceive(NotificationCenter.default.publisher(for: .myfidpassSessionInvalidated)) { _ in
-            // Reset serveur / compte supprimé : les JWT sont morts mais `isLoggedIn` restait vrai sans cette étape.
-            authService.logout()
-        }
+        .animation(shouldShowAuthenticatedApp ? .onboardingTransition : nil, value: shouldShowAuthenticatedApp)
     }
-}
-
-#Preview {
-    RootView()
-        .environmentObject(AuthService())
-        .environmentObject(SyncService(container: PersistenceController.preview.container))
-        .environment(\.managedObjectContext, PersistenceController.preview.container.viewContext)
 }

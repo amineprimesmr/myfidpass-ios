@@ -35,6 +35,11 @@ struct SocialMissionsSheet: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 16) {
+                    Text("Les clients voient une mission « nous suivre » sur leur carte (comme le profil complet). Choisissez le @ de votre commerce et les points offerts par réseau.")
+                        .font(.subheadline)
+                        .foregroundStyle(AppTheme.Colors.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     if isLoading {
                         ProgressView()
                             .frame(maxWidth: .infinity)
@@ -136,35 +141,33 @@ struct SocialMissionsSheet: View {
                     .strokeBorder(AppTheme.Colors.textSecondary.opacity(0.2), lineWidth: 1)
             )
 
-            if network.points != 10 {
-                HStack {
-                    Image(systemName: "star.fill")
-                        .font(.caption)
-                        .foregroundStyle(.yellow)
-                    Text("Récompense client :")
-                        .font(.caption)
-                        .foregroundStyle(AppTheme.Colors.textSecondary)
-                    Spacer()
-                    HStack(spacing: 0) {
-                        Button {
-                            if net.points.wrappedValue > 5 { net.points.wrappedValue -= 5 }
-                        } label: {
-                            Image(systemName: "minus.circle.fill")
-                                .foregroundStyle(AppTheme.Colors.textSecondary)
-                        }
-                        Text("\(network.points) pts")
-                            .font(.caption.weight(.semibold))
-                            .frame(minWidth: 56)
-                            .multilineTextAlignment(.center)
-                        Button {
-                            if net.points.wrappedValue < 200 { net.points.wrappedValue += 5 }
-                        } label: {
-                            Image(systemName: "plus.circle.fill")
-                                .foregroundStyle(AppTheme.Colors.primary)
-                        }
+            HStack {
+                Image(systemName: "star.fill")
+                    .font(.caption)
+                    .foregroundStyle(.yellow)
+                Text("Points offerts au client")
+                    .font(.caption)
+                    .foregroundStyle(AppTheme.Colors.textSecondary)
+                Spacer()
+                HStack(spacing: 0) {
+                    Button {
+                        if net.points.wrappedValue > 5 { net.points.wrappedValue -= 5 }
+                    } label: {
+                        Image(systemName: "minus.circle.fill")
+                            .foregroundStyle(AppTheme.Colors.textSecondary)
                     }
-                    .buttonStyle(.plain)
+                    Text("\(network.points) pts")
+                        .font(.caption.weight(.semibold))
+                        .frame(minWidth: 56)
+                        .multilineTextAlignment(.center)
+                    Button {
+                        if net.points.wrappedValue < 200 { net.points.wrappedValue += 5 }
+                    } label: {
+                        Image(systemName: "plus.circle.fill")
+                            .foregroundStyle(AppTheme.Colors.primary)
+                    }
                 }
+                .buttonStyle(.plain)
             }
 
             if !network.username.isEmpty {
@@ -234,6 +237,7 @@ struct SocialMissionsSheet: View {
                 UINotificationFeedbackGenerator().notificationOccurred(.success)
             }
             onSaved?()
+            NotificationCenter.default.post(name: .myfidpassSocialMissionsDidSave, object: nil)
             await animateCompletedMissionsOffThenDismissOrStay()
         } catch {
             await MainActor.run {

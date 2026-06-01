@@ -264,8 +264,7 @@ private struct PlatformAdminCommerceHubView: View {
                 .buttonStyle(.bordered)
 
                 Button {
-                    authService.selectBusiness(slug: b.slug, showSwitchingOverlay: false)
-                    Task { await authService.openMerchantWorkspaceFromAdmin() }
+                    Task { await authService.openMerchantWorkspaceFromAdmin(preferredSlug: b.slug) }
                 } label: {
                     Label("Piloter", systemImage: "arrow.right.circle.fill")
                         .font(.subheadline.weight(.semibold))
@@ -642,7 +641,7 @@ private struct PlatformAdminCommerceDetailPage: View {
                 VStack(spacing: 12) {
                     Button {
                         authService.selectBusiness(slug: business.slug, showSwitchingOverlay: false)
-                        Task { await authService.openMerchantWorkspaceFromAdmin() }
+                        Task { await authService.openMerchantWorkspaceFromAdmin(preferredSlug: business.slug) }
                     } label: {
                         Label("Ouvrir l’espace commerçant (réglages, carte, notifs, flyer)", systemImage: "slider.horizontal.3")
                             .font(.subheadline.weight(.semibold))

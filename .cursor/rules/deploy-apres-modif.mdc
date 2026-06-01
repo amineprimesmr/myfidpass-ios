@@ -1,20 +1,24 @@
 ---
-description: Déployer le SaaS après chaque modification demandée par l'utilisateur
+description: Déploiement fidelity uniquement sur demande explicite de l'utilisateur
 alwaysApply: true
 ---
 
-# Déploiement après chaque modification
+# Déploiement fidelity — sur demande uniquement
 
 **Dépôt SaaS** : `/Users/amine/Desktop/fidelity` (Bureau). Voir aussi `saas-fidelity.mdc` pour le travail backend obligatoire.
 
-À **chaque fois que l'utilisateur demande une modification** qui touche le projet **fidelity** (SaaS / site myfidpass.fr) :
+**Ne pas** exécuter `npm run deploy` automatiquement après une modification, même sur *fidelity*.
 
-1. **Après avoir appliqué les changements**, exécuter le déploiement sans attendre que l'utilisateur le demande.
-2. **Commande** : `cd /Users/amine/Desktop/fidelity && npm run deploy`
-3. Le script fait `git add -A`, commit, `git push origin main`, ce qui déclenche Vercel (frontend) et Railway (backend). Les changements sont en ligne sur myfidpass.fr sous 1–2 minutes.
-4. Indiquer à l'utilisateur que le déploiement a été fait et qu'il peut rafraîchir le site.
-5. **Si `git push` échoue** avec `fatal: mmap failed` (souvent dépôt sur Bureau iCloud ou pack Git lourd) : appliquer la procédure de secours dans **`Docs/DEPLOY-FIDELITY-GIT-MMAP.md`** (clone `/tmp`, copie des fichiers listés par `git diff origin/main..HEAD`, push via `gh auth token`). Ce n'est **pas** automatique entre sessions : chaque agent doit la relancer si le push standard échoue.
+**Déployer seulement** quand l'utilisateur le demande explicitement (ex. « déploie », « mets en prod », « deploy »).
 
-**Exception** : si l'utilisateur dit explicitement de ne pas déployer, ou si les changements concernent uniquement le projet **myfidpass** (app iOS) sans toucher à fidelity.
+**Commande** (quand demandé) :
 
-Règle à retenir : **modif sur fidelity → déployer à la fin**.
+```bash
+cd /Users/amine/Desktop/fidelity && npm run deploy
+```
+
+Le script fait `git add -A`, commit, `git push origin main` → Vercel + Railway. Indiquer ensuite qu'il peut rafraîchir myfidpass.fr (Cmd+Shift+R).
+
+**Si `git push` échoue** avec `fatal: mmap failed` : procédure dans `Docs/DEPLOY-FIDELITY-GIT-MMAP.md` (clone `/tmp`, copie des fichiers du diff, push via `gh auth token`).
+
+**Exception** : changements **uniquement** dans **myfidpass** (app iOS/Android) sans *fidelity* → pas de déploiement SaaS de toute façon.

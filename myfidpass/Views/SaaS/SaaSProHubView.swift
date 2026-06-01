@@ -591,10 +591,8 @@ struct MembersImportExportView: View {
 
 /// Conservé pour les liens existants (Commerce, etc.) : même écran que l’onglet **Campagnes**.
 struct AdvancedNotificationsView: View {
-    @Environment(\.managedObjectContext) private var viewContext
-
     var body: some View {
-        CampaignNotificationsView(context: viewContext)
+        CampaignNotificationsView()
     }
 }
 

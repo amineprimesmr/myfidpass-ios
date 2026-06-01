@@ -14,6 +14,9 @@ import os.log
 
 private let syncServiceLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "myfidpass", category: "Sync")
 
+/// Sync abandonnée (déconnexion / suppression de compte pendant un pull réseau).
+private enum SyncSessionEnded: Error { case sessionEnded }
+
 fileprivate enum SyncMergeUserDefaults {
     static let lastLogoUploadAt = "myfidpass.lastLogoUploadAt"
     static let lastLogoIconUploadAt = "myfidpass.lastLogoIconUploadAt"
@@ -60,12 +63,33 @@ final class SyncService: ObservableObject {
     static let lastLogoUploadAtKey = SyncMergeUserDefaults.lastLogoUploadAt
     static let lastLogoIconUploadAtKey = SyncMergeUserDefaults.lastLogoIconUploadAt
     /// Dernier envoi de l’icône campagnes / `…/notification-icon` (cache-bust côté aperçu, comme les logos).
-    static let lastNotificationIconUploadAtKey = SyncMergeUserDefaults.lastNotificationIconUploadAt
+    private static let lastNotificationIconUploadAtKey = SyncMergeUserDefaults.lastNotificationIconUploadAt
+
+    /// Incrémenté à chaque fin de session : les syncs encore en file n’écrivent plus d’erreur ni de bandeau.
+    private var sessionGeneration = 0
+    private var sessionEndObserver: AnyCancellable?
 
     init(container: NSPersistentContainer, authService: AuthService? = nil) {
         self.container = container
         self.authService = authService
         self.lastSyncDate = UserDefaults.standard.object(forKey: Self.lastSyncKey) as? Date
+        sessionEndObserver = NotificationCenter.default
+            .publisher(for: .myfidpassLocalSessionDidEnd)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.resetForSessionEnd()
+            }
+    }
+
+    /// Déconnexion / suppression de compte : oublie les syncs en cours et efface les erreurs affichées.
+    func resetForSessionEnd() {
+        sessionGeneration += 1
+        lastError = nil
+        invalidateSyncThrottle()
+    }
+
+    private func syncStillOwnedByCurrentSession(_ capturedGeneration: Int) -> Bool {
+        capturedGeneration == sessionGeneration && AuthStorage.isLoggedIn
     }
 
     /// Push silencieux serveur : désactivé volontairement en mode perf agressif.
@@ -124,7 +148,12 @@ final class SyncService: ObservableObject {
     }
 
     private func performSyncIfNeeded(force: Bool) async {
-        guard AuthStorage.isLoggedIn, let token = APIClient.shared.authToken, !token.isEmpty else { return }
+        let syncGeneration = sessionGeneration
+        guard syncStillOwnedByCurrentSession(syncGeneration),
+              let token = APIClient.shared.authToken, !token.isEmpty else { return }
+        if authService?.isPlatformAdmin == true, authService?.adminShowsMerchantWorkspace != true {
+            return
+        }
         if !force, let last = lastSyncDate, Date().timeIntervalSince(last) < Self.syncThrottleInterval, !isSyncing {
             return
         }
@@ -132,9 +161,8 @@ final class SyncService: ObservableObject {
         lastError = nil
         defer { isSyncing = false }
         do {
-            // Séquentiel volontaire : la phase de sync est prioritaire sur la perf.
-            // Des rafales de requêtes/décodages parallèles au lancement ont déjà été corrélées
-            // à des crashs malloc (`freed pointer was not the last allocation`).
+            await APIClient.shared.ensureValidAccessTokenWithRetry(maxAttempts: 3)
+
             let cachedSlug = AuthStorage.currentBusinessSlug.flatMap { s -> String? in
                 let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
                 return t.isEmpty ? nil : t
@@ -142,62 +170,75 @@ final class SyncService: ObservableObject {
             let lastSaved = UserDefaults.standard.object(forKey: Self.templateLastSavedKey) as? Date
             let skipTemplate = (lastSaved != nil && lastSyncDate != nil && lastSaved! > lastSyncDate!)
 
-            let me: AuthMeResponse
-            if let slug = cachedSlug {
-                // D'abord le profil, ensuite la sync du commerce. Plus lent, mais beaucoup plus sûr.
-                me = try await APIClient.shared.request(.authMe)
-                let resolvedAfterMe = resolvedSlug(from: me) ?? slug
-                try await syncBusiness(slug: resolvedAfterMe, skipTemplateOverwrite: skipTemplate)
-            } else {
-                me = try await APIClient.shared.request(.authMe)
-            }
+            let me: AuthMeResponse = try await APIClient.shared.request(.authMe)
+            guard syncStillOwnedByCurrentSession(syncGeneration) else { return }
             authService?.applyAuthMeResponse(me)
-            let slug = resolvedSlug(from: me)
-            if let slug, slug != cachedSlug {
-                // Slug différent du cache — re-sync avec le slug correct
-                try await syncBusiness(slug: slug, skipTemplateOverwrite: skipTemplate)
-            } else if slug == nil && cachedSlug == nil {
-                // Pas de slug disponible, rien à sync
+
+            let slug = resolvedSlug(from: me) ?? cachedSlug
+            if let slug {
+                try await syncBusiness(slug: slug, skipTemplateOverwrite: skipTemplate, syncGeneration: syncGeneration)
             }
+
             lastSyncDate = Date()
             UserDefaults.standard.set(lastSyncDate, forKey: Self.lastSyncKey)
-            if let slug = (resolvedSlug(from: me) ?? cachedSlug)?.trimmingCharacters(in: .whitespacesAndNewlines), !slug.isEmpty {
+            if let slug = slug?.trimmingCharacters(in: .whitespacesAndNewlines), !slug.isEmpty {
                 MerchantStatisticsDiskCache.removePeriod(slug: slug, period: Self.currentStatsMonthKey())
             }
+            guard syncStillOwnedByCurrentSession(syncGeneration) else { return }
         } catch APIError.unauthorized {
+            guard syncStillOwnedByCurrentSession(syncGeneration) else { return }
+            await APIClient.shared.ensureValidAccessTokenWithRetry(maxAttempts: 3)
+            let refresh = await APIClient.shared.tryRefreshToken()
+            if case .success = refresh {
+                await performSyncIfNeeded(force: true)
+                return
+            }
+            guard syncStillOwnedByCurrentSession(syncGeneration) else { return }
+            if refresh == .transientFailure || APIClient.accessTokenStillWithinValidityWindow() {
+                lastError = "Synchronisation interrompue. Tirez pour rafraîchir ou réessayez dans un instant."
+                postSyncFailureBanner()
+                return
+            }
             lastError = "Session expirée"
             AppState.shared.showError(lastError ?? "Session expirée")
             postSyncFailureBanner()
         } catch APIError.subscriptionRequired {
+            guard syncStillOwnedByCurrentSession(syncGeneration) else { return }
             lastError = "Abonnement inactif ou expiré. Réactivez votre offre (Stripe) pour synchroniser le tableau de bord."
             postSyncFailureBanner()
         } catch let err as APIError where err.isHTTPResourceMissing {
+            guard syncStillOwnedByCurrentSession(syncGeneration) else { return }
             // Souvent slug / URL mal formée ou commerce supprimé : 2ᵉ essai après relecture du profil (slug recalculé).
             do {
                 let meRetry: AuthMeResponse = try await APIClient.shared.request(.authMe)
                 authService?.applyAuthMeResponse(meRetry)
                 guard let slugRetry = resolvedSlug(from: meRetry) else {
-                    presentSyncFailure(err)
+                    presentSyncFailure(err, syncGeneration: syncGeneration)
                     return
                 }
                 let lastSaved = UserDefaults.standard.object(forKey: Self.templateLastSavedKey) as? Date
                 let skipTemplate = (lastSaved != nil && lastSyncDate != nil && lastSaved! > lastSyncDate!)
-                try await syncBusiness(slug: slugRetry, skipTemplateOverwrite: skipTemplate)
+                try await syncBusiness(slug: slugRetry, skipTemplateOverwrite: skipTemplate, syncGeneration: syncGeneration)
                 lastSyncDate = Date()
                 UserDefaults.standard.set(lastSyncDate, forKey: Self.lastSyncKey)
                 if let slug = resolvedSlug(from: meRetry)?.trimmingCharacters(in: .whitespacesAndNewlines), !slug.isEmpty {
                     MerchantStatisticsDiskCache.removePeriod(slug: slug, period: Self.currentStatsMonthKey())
                 }
+            } catch SyncSessionEnded.sessionEnded {
+                return
             } catch {
-                presentSyncFailure(error)
+                presentSyncFailure(error, syncGeneration: syncGeneration)
             }
+        } catch SyncSessionEnded.sessionEnded {
+            return
         } catch {
-            presentSyncFailure(error)
+            presentSyncFailure(error, syncGeneration: syncGeneration)
         }
     }
 
     /// Échec de synchro : l’app continue avec Core Data ; bandeau + `lastError` (Réglages).
-    private func presentSyncFailure(_ error: Error) {
+    private func presentSyncFailure(_ error: Error, syncGeneration: Int) {
+        guard syncStillOwnedByCurrentSession(syncGeneration) else { return }
         if isCancelledNetworkError(error) {
             lastError = nil
             return
@@ -205,6 +246,11 @@ final class SyncService: ObservableObject {
         if let api = error as? APIError, api.isHTTPResourceMissing {
             lastError =
                 "Le serveur ne trouve pas ce commerce (ou la connexion est désynchronisée). Ouvrez l’onglet Commerce pour vérifier l’établissement, ou fermez puis rouvrez l’app."
+        } else if let api = error as? APIError, case .sessionRefreshTransient = api {
+            let hasProfile = !(authService?.businesses.isEmpty ?? true)
+            lastError = hasProfile
+                ? "Synchronisation du commerce incomplète. Réessayez dans un instant."
+                : (api.errorDescription ?? "Connexion instable. Réessayez.")
         } else {
             lastError = (error as? APIError)?.errorDescription ?? error.localizedDescription
             if let api = error as? APIError, case let .decoding(underlying) = api {
@@ -224,31 +270,23 @@ final class SyncService: ObservableObject {
         return (error as? URLError)?.code == .cancelled
     }
 
-    private func syncBusiness(slug: String, skipTemplateOverwrite: Bool = false) async throws {
+    private func syncBusiness(slug: String, skipTemplateOverwrite: Bool = false, syncGeneration: Int) async throws {
+        guard syncStillOwnedByCurrentSession(syncGeneration) else { throw SyncSessionEnded.sessionEnded }
         // Vague 1 : séquentielle, plus sûre que trois requêtes parallèles au démarrage.
         let settings: BusinessSettingsResponse = try await APIClient.shared.request(.businessSettings(slug: slug))
+        guard syncStillOwnedByCurrentSession(syncGeneration) else { throw SyncSessionEnded.sessionEnded }
         ScanFlowSettingsCache.store(settings, for: slug)
         let stats: BusinessStatsResponse = try await APIClient.shared.request(.businessStats(slug: slug, period: nil))
         let categoriesResponse = await fetchCategoriesOptional(slug: slug)
-
-        let emptyMembers = BusinessMembersResponse(members: [], total: nil)
-        let emptyTransactions = BusinessTransactionsResponse(transactions: [], total: nil)
-        try await mergeOnBackground(
-            slug: slug,
-            settings: settings,
-            stats: stats,
-            members: emptyMembers,
-            transactions: emptyTransactions,
-            categories: categoriesResponse,
-            skipTemplateOverwrite: skipTemplateOverwrite
-        )
-        // Après la 1ère vague (settings disponibles), mettre à jour le snapshot d'aperçu avec
-        // l'URL du fond distant — sans attendre que l'utilisateur ouvre « Ma carte ».
+        guard syncStillOwnedByCurrentSession(syncGeneration) else { throw SyncSessionEnded.sessionEnded }
         updateSnapshotRemoteBackground(settings: settings, slug: slug)
 
-        // Vague 2 : entièrement séquentielle pour supprimer une autre source de courses.
-        let members = try await fetchAllMembers(slug: slug)
-        let transactions = try await fetchAllTransactions(slug: slug)
+        // Vague 2 : membres + transactions en parallèle, puis un seul merge Core Data (UI notifiée).
+        async let membersTask = fetchAllMembers(slug: slug)
+        async let transactionsTask = fetchAllTransactions(slug: slug)
+        let members = try await membersTask
+        let transactions = try await transactionsTask
+        guard syncStillOwnedByCurrentSession(syncGeneration) else { throw SyncSessionEnded.sessionEnded }
 
         try await mergeOnBackground(
             slug: slug,
@@ -256,49 +294,25 @@ final class SyncService: ObservableObject {
             stats: stats,
             members: members,
             transactions: transactions,
-            categories: nil,
-            skipTemplateOverwrite: true
+            categories: categoriesResponse,
+            skipTemplateOverwrite: skipTemplateOverwrite,
+            notifyUI: true
         )
     }
 
-    /// Met à jour le snapshot d'aperçu carte (UserDefaults) avec l'URL du fond distant issu des settings API,
-    /// pour que l'accueil reflète l'état serveur sans que l'utilisateur ait à ouvrir « Ma carte ».
-    /// Si aucun snapshot n’existe encore, en crée un minimal depuis `settings` (sinon l’accueil n’avait jamais `cardBackgroundRemoteURL`).
-    /// Préserve `hasLocalCardBackground` (fond photo local) établi depuis « Ma carte » — jamais déduit du fichier global.
+    /// Met à jour le snapshot d'aperçu carte depuis GET settings pour que l'accueil reflète
+    /// logo, couleurs, mode, récompenses, etc. après modification sur un autre appareil.
+    /// Préserve uniquement l'état brouillon local (fond photo, icône tampon en cours d'édition).
     private func updateSnapshotRemoteBackground(settings: BusinessSettingsResponse, slug: String) {
-        var snap = CardPreviewDisplaySnapshotStore.load(slug: slug)
-        let createdFresh = snap == nil
-        if snap == nil {
-            snap = Self.minimalDisplaySnapshotFromSettings(settings, slug: slug)
+        let existing = CardPreviewDisplaySnapshotStore.load(slug: slug)
+        var merged = Self.minimalDisplaySnapshotFromSettings(settings, slug: slug)
+        if let existing {
+            merged.hasLocalCardBackground = existing.hasLocalCardBackground
+            merged.stampIconPendingBase64 = existing.stampIconPendingBase64
+            merged.stampIconWasRemoved = existing.stampIconWasRemoved
         }
-        guard var snap = snap else { return }
-        var changed = createdFresh
-
-        if settings.hasCardBackground == true {
-            let bgURL = Self.cardBackgroundRemoteURLString(slug: slug, updatedAt: settings.cardBackgroundUpdatedAt)
-            if snap.cardBackgroundRemoteURL != bgURL || !snap.hasRemoteCardBackground {
-                snap.hasRemoteCardBackground = true
-                snap.cardBackgroundRemoteURL = bgURL
-                changed = true
-            }
-        } else if snap.hasRemoteCardBackground {
-            snap.hasRemoteCardBackground = false
-            snap.cardBackgroundRemoteURL = nil
-            changed = true
-        }
-
-        /// Ne pas repasser à `false` ici : une sync en parallèle d’un enregistrement carte peut encore recevoir `has_stamp_icon` obsolète.
-        if settings.hasStampIcon == true, snap.hasServerStampIcon != true {
-            snap.hasServerStampIcon = true
-            changed = true
-        }
-
-        // Ne pas déduire `hasLocalCardBackground` depuis `CardLogos/cardBackground.png` : ce fichier est **global**
-        // sur disque ; pour un nouveau commerce la sync créerait un snapshot avec `true` par erreur.
-
-        if changed {
-            CardPreviewDisplaySnapshotStore.save(snap, slug: slug)
-        }
+        guard existing != merged else { return }
+        CardPreviewDisplaySnapshotStore.save(merged, slug: slug)
     }
 
     /// URL absolue du fond carte (API authentifiée), alignée sur `MyCardView` / `DashboardHomeCardModel`.
@@ -339,11 +353,21 @@ final class SyncService: ObservableObject {
 
         var tierPoints: [String] = []
         var tierLabels: [String] = []
+        var startGame = settings.startGameRewardLabel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if let tiers = settings.pointsRewardTiers {
             for t in tiers.filter({ $0.points > 0 }).sorted(by: { $0.points < $1.points }).prefix(5) {
+                let lab = t.label.trimmingCharacters(in: .whitespacesAndNewlines)
+                if lab.isEmpty { continue }
+                if t.points == 10 {
+                    if startGame.isEmpty { startGame = lab }
+                    continue
+                }
                 tierPoints.append(String(t.points))
-                tierLabels.append(t.label.isEmpty ? "Récompense" : t.label)
+                tierLabels.append(lab.isEmpty ? "Récompense" : lab)
             }
+        }
+        if startGame.isEmpty {
+            startGame = "Boisson offerte"
         }
 
         return CardPreviewDisplaySnapshot(
@@ -366,7 +390,7 @@ final class SyncService: ObservableObject {
             hasLocalCardBackground: false,
             stampRewardLabel: settings.stampRewardLabel ?? "",
             stampMidRewardLabel: settings.stampMidRewardLabel,
-            startGameRewardLabel: nil,
+            startGameRewardLabel: startGame,
             labelRestants: settings.labelRestants,
             tierPoints: tierPoints.isEmpty ? nil : tierPoints,
             tierLabels: tierLabels.isEmpty ? nil : tierLabels,
@@ -447,7 +471,8 @@ final class SyncService: ObservableObject {
         members: BusinessMembersResponse,
         transactions: BusinessTransactionsResponse,
         categories: BusinessCategoriesResponse?,
-        skipTemplateOverwrite: Bool
+        skipTemplateOverwrite: Bool,
+        notifyUI: Bool = true
     ) async throws {
         let c = container
         let logoKey = SyncMergeUserDefaults.lastLogoUploadAt
@@ -483,7 +508,9 @@ final class SyncService: ObservableObject {
                             if c.viewContext.hasChanges {
                                 try c.viewContext.save()
                             }
-                            NotificationCenter.default.post(name: .myfidpassMerchantCoreDataDidMergeFromSync, object: nil)
+                            if notifyUI {
+                                NotificationCenter.default.post(name: .myfidpassMerchantCoreDataDidMergeFromSync, object: nil)
+                            }
                             cont.resume()
                         } catch {
                             cont.resume(throwing: error)

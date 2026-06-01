@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">MyFidpass</string>
+    <string name="notification_channel_merchant">Alertes commerçant</string>
+    <string name="notification_channel_merchant_desc">Campagnes, avis Google Business et activité du tableau de bord.</string>
 </resources>

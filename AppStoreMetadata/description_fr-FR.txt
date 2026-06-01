@@ -1,0 +1,8 @@
+MyFidpass aide les commerçants à fidéliser leurs clients avec des cartes de fidélité dans l’Apple Wallet : création de carte, scans QR, membres, notifications et statistiques.
+
+Fonctionnalités : tableau de bord, scanner, campagnes, multi-commerces (forfaits 1 à 5 établissements), carte personnalisable, intégration Google Business.
+
+Abonnement auto-renouvelable MyFidpass Pro (achat in-app via l’App Store). Essai promotionnel 1 € le premier mois, puis tarif affiché sur le paywall avant achat.
+
+Conditions d’utilisation (EULA) : https://www.myfidpass.fr/cgu
+Politique de confidentialité : https://www.myfidpass.fr/politique-confidentialite

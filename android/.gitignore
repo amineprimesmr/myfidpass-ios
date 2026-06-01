@@ -8,3 +8,6 @@ local.properties
 captures/
 *.apk
 *.aab
+keystore.properties
+keystore/
+google-services.json

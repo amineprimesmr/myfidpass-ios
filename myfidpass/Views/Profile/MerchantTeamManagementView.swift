@@ -2,8 +2,7 @@
 //  MerchantTeamManagementView.swift
 //  myfidpass
 //
-//  Gestion d’équipe : liste, invitation (e-mail), révocation d’accès.
-//  Voir `Docs/CONTRAT_API_LOGICIEL.md` (section « Équipe »).
+//  Gestion d'équipe : vue d'ensemble, stats, fiches employés.
 //
 
 import SwiftUI
@@ -12,20 +11,15 @@ import Combine
 @MainActor
 final class MerchantTeamManagementViewModel: ObservableObject {
     @Published private(set) var members: [WorkspaceTeamMemberDTO] = []
+    @Published private(set) var teamTotals: WorkspaceTeamTotalsDTO?
     @Published private(set) var isLoading = false
     @Published var errorMessage: String?
     @Published var successMessage: String?
-    @Published var revokeInFlight = false
-    @Published var showRevokeConfirmation = false
-    @Published var pendingRevokeId: String?
-    @Published var staffCreatePassword = ""
-    /// Nom affiché et base de l’identifiant de connexion (normalisé côté app pour `staff_login`).
-    @Published var staffCreateName = ""
     @Published var staffCreateInFlight = false
-    /// Erreurs affichées dans le formulaire inline « Ajouter un employé ».
     @Published var staffFormError: String?
-    /// Champ popup : identifiant employé (simple).
-    @Published var staffCreateLogin = ""
+    @Published var staffCreateEmail = ""
+    @Published var staffCreateName = ""
+    @Published var staffCreateRole = "staff"
 
     private var slug: String? {
         let s = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -43,47 +37,27 @@ final class MerchantTeamManagementViewModel: ObservableObject {
         do {
             let r: WorkspaceTeamListResponse = try await APIClient.shared.request(.businessTeamList(slug: slug))
             members = r.members
+            teamTotals = r.teamTotals
         } catch let e as APIError {
             if e.isHTTPResourceMissing {
-                errorMessage = "Service équipe indisponible (404). Déployez l’API `GET .../dashboard/team` (voir le contrat d’intégration)."
+                errorMessage = "Service équipe indisponible. Mettez l'API à jour puis réessayez."
             } else {
-                errorMessage = e.errorDescription
+                errorMessage = TeamAPIError.message(from: e)
             }
         } catch {
             errorMessage = error.localizedDescription
         }
     }
 
-    func requestRevoke(id: String) {
-        errorMessage = nil
-        successMessage = nil
-        pendingRevokeId = id
-        showRevokeConfirmation = true
-    }
-
-    func createStaffAccount(loginRaw: String) async {
+    func createStaffAccount(emailRaw: String, nameRaw: String?, role: String) async {
         staffFormError = nil
-        let loginInput = loginRaw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !loginInput.isEmpty else {
-            staffFormError = "Saisissez l’identifiant employé."
-            return
-        }
-        let login = normalizedStaffLogin(from: loginInput)
-        guard !login.isEmpty else {
-            staffFormError = "Identifiant invalide après normalisation. Utilisez des lettres ou chiffres (3–32 caractères une fois formaté)."
-            return
-        }
-        guard login.range(of: "^[a-z0-9][a-z0-9_-]{1,30}[a-z0-9]$", options: .regularExpression) != nil else {
-            staffFormError = "L’identifiant doit respecter 3–32 caractères (a-z, 0-9, _ et -)."
-            return
-        }
-        let pw = staffCreatePassword
-        guard pw.count >= 3 else {
-            staffFormError = "Le mot de passe doit faire au moins 3 caractères. Choisissez-le et saisissez-le vous-même."
+        let email = emailRaw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard MerchantOnboardingEmailValidation.isValid(email) else {
+            staffFormError = "Saisissez une adresse e-mail valide."
             return
         }
         guard let slug else {
-            staffFormError = "Aucun commerce sélectionné. Fermez cette feuille, ouvrez l’onglet d’accueil commerçant et assurez-vous qu’un commerce est actif, puis réessayez."
+            staffFormError = "Aucun commerce sélectionné."
             return
         }
         errorMessage = nil
@@ -91,78 +65,43 @@ final class MerchantTeamManagementViewModel: ObservableObject {
         staffCreateInFlight = true
         defer { staffCreateInFlight = false }
         do {
-            let body = WorkspaceTeamStaffAccountBody(staffLogin: login, password: pw, name: loginInput, role: "staff")
+            let trimmedName = nameRaw?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let roleNorm = role.lowercased() == "manager" ? "manager" : "staff"
+            let body = WorkspaceTeamStaffAccountBody(
+                email: email,
+                name: (trimmedName?.isEmpty == false) ? trimmedName : nil,
+                role: roleNorm
+            )
             let r: WorkspaceTeamStaffAccountResponse = try await APIClient.shared.request(
                 .businessTeamStaffAccount(slug: slug, body: body)
             )
             if r.ok == false {
                 staffFormError = r.message ?? "Création refusée."
             } else {
-                staffFormError = nil
-                successMessage = r.message
-                    ?? "Compte employé créé. L’employé se connecte avec l’identifiant affiché sous le nom (identifiant normalisé) et le mot de passe choisi."
-                staffCreateLogin = ""
+                if r.emailSent == false, let err = r.emailError, !err.isEmpty {
+                    staffFormError = err
+                    successMessage = r.message ?? "Employé ajouté, mais l'e-mail n'a pas pu être envoyé."
+                } else {
+                    staffFormError = nil
+                    successMessage = r.message
+                        ?? (r.emailSent == false
+                            ? "Employé ajouté. Il peut se connecter depuis l'app avec son e-mail."
+                            : "Employé ajouté. Un e-mail d'invitation avec le lien de téléchargement a été envoyé.")
+                }
+                staffCreateEmail = ""
+                staffCreateName = ""
+                staffCreateRole = "staff"
             }
             await load()
         } catch let e as APIError {
-            staffFormError = e.errorDescription
+            staffFormError = TeamAPIError.message(from: e)
         } catch {
             staffFormError = error.localizedDescription
         }
     }
 
-    func isValidStaffLogin(_ raw: String) -> Bool {
-        let login = normalizedStaffLogin(from: raw)
-        return login.range(of: "^[a-z0-9][a-z0-9_-]{1,30}[a-z0-9]$", options: .regularExpression) != nil
-    }
-
-    /// Dérive le `staff_login` attendu par l’API (même règles que l’ancien `suggestedStaffLogin`).
-    func normalizedStaffLogin(from name: String) -> String {
-        var out = name.trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-            .replacingOccurrences(of: "\\s+", with: "", options: .regularExpression)
-            .replacingOccurrences(of: "[^a-z0-9_-]", with: "", options: .regularExpression)
-        if out.count < 3 { out += "emp" }
-        out = String(out.prefix(32))
-        if let f = out.first, !f.isLetter && !f.isNumber {
-            out = "e" + out
-        }
-        if out.isEmpty { out = "employe" }
-        return out
-    }
-
-    func performRevoke() async {
-        guard let rawId = pendingRevokeId else { return }
-        showRevokeConfirmation = false
-        pendingRevokeId = nil
-        guard let slug else { return }
-        let id = rawId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !id.isEmpty else { return }
-        revokeInFlight = true
-        defer { revokeInFlight = false }
-        do {
-            let _: EmptyResponse = try await APIClient.shared.request(
-                .businessTeamRevoke(slug: slug, membershipId: id),
-                responseType: EmptyResponse.self
-            )
-            successMessage = "Accès retiré."
-            await load()
-        } catch let e as APIError {
-            errorMessage = e.errorDescription
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    func revokeableId(for member: WorkspaceTeamMemberDTO) -> String? {
-        if let m = member.membershipId?.trimmingCharacters(in: .whitespacesAndNewlines), !m.isEmpty { return m }
-        if let u = member.userId?.trimmingCharacters(in: .whitespacesAndNewlines), !u.isEmpty { return u }
-        return nil
-    }
-
     func canRevoke(_ member: WorkspaceTeamMemberDTO, currentUserEmail: String?, currentUserStaffLogin: String?) -> Bool {
-        let r = (member.role ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if r == "owner" { return false }
+        if member.isOwner { return false }
         if let em = member.email?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
            let cur = currentUserEmail?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
            !em.isEmpty, !cur.isEmpty, em == cur {
@@ -173,11 +112,9 @@ final class MerchantTeamManagementViewModel: ObservableObject {
            !sl.isEmpty, !curS.isEmpty, sl == curS {
             return false
         }
-        return revokeableId(for: member) != nil
+        return member.apiMemberId != nil
     }
 }
-
-// MARK: - Vue
 
 struct MerchantTeamManagementView: View {
     @EnvironmentObject private var authService: AuthService
@@ -190,104 +127,43 @@ struct MerchantTeamManagementView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: GroupedSettingsMetrics.interCardSpacing) {
                     if let s = model.successMessage, !s.isEmpty {
-                        Text(s)
-                            .font(.subheadline.weight(.medium))
-                            .foregroundStyle(Color(UIColor.systemGreen).opacity(0.95))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .multilineTextAlignment(.leading)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .padding(14)
-                            .background(Color(UIColor.secondarySystemBackground))
-                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        TeamBanner(text: s, isError: false)
                     }
                     if let e = model.errorMessage, !e.isEmpty {
-                        Text(e)
-                            .font(.subheadline)
-                            .foregroundStyle(Color(UIColor.label))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .multilineTextAlignment(.leading)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .padding(14)
-                            .background(Color(UIColor.secondarySystemBackground))
-                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        TeamBanner(text: e, isError: true)
                     }
 
-                    GroupedSettingsCard {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Équipe")
-                                .font(.headline)
-                            Text("Ajoutez rapidement un employé, puis gérez les accès dans la liste ci-dessous.")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .multilineTextAlignment(.leading)
-                            if let err = model.staffFormError, !err.isEmpty {
-                                Text(err)
-                                    .font(.footnote)
-                                    .foregroundStyle(Color(UIColor.systemRed))
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, GroupedSettingsMetrics.horizontalPadding)
-                        .padding(.vertical, GroupedSettingsMetrics.rowVerticalPadding)
-                    }
+                    overviewCard
 
                     GroupedSettingsCard {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Button {
-                                model.staffFormError = nil
-                                model.staffCreateLogin = ""
-                                model.staffCreatePassword = ""
-                                showAddEmployeePopup = true
-                            } label: {
-                                HStack {
-                                    GroupedSettingsIconBox(systemName: "person.crop.circle.badge.plus")
-                                    Text("+ Ajouter un employé")
-                                        .font(.body.weight(.semibold))
-                                    Spacer()
-                                }
+                        Button {
+                            model.staffFormError = nil
+                            model.staffCreateEmail = ""
+                            model.staffCreateName = ""
+                            model.staffCreateRole = "staff"
+                            showAddEmployeePopup = true
+                        } label: {
+                            HStack {
+                                GroupedSettingsIconBox(systemName: "person.crop.circle.badge.plus")
+                                Text("Ajouter un employé")
+                                    .font(.body.weight(.semibold))
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(Color(UIColor.tertiaryLabel))
                             }
-                            .buttonStyle(.plain)
-                            .disabled(model.staffCreateInFlight || model.isLoading)
+                            .padding(.horizontal, GroupedSettingsMetrics.horizontalPadding)
+                            .padding(.vertical, GroupedSettingsMetrics.rowVerticalPadding)
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, GroupedSettingsMetrics.horizontalPadding)
-                        .padding(.vertical, GroupedSettingsMetrics.rowVerticalPadding)
+                        .buttonStyle(.plain)
+                        .disabled(model.staffCreateInFlight || model.isLoading)
                     }
 
-                    GroupedSettingsCard {
-                        VStack(alignment: .leading, spacing: 12) {
-                            if model.isLoading {
-                                HStack(spacing: 8) {
-                                    ProgressView()
-                                    Text("Mise à jour de la liste équipe…")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                            if model.members.isEmpty {
-                                Text("Aucun membre d’équipe listé pour ce commerce.")
-                                    .font(.subheadline)
-                                    .foregroundStyle(.secondary)
-                            } else {
-                                VStack(alignment: .leading, spacing: 0) {
-                                    ForEach(model.members) { m in
-                                        teamRow(m)
-                                        if m.id != model.members.last?.id {
-                                            teamRowDivider
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, GroupedSettingsMetrics.horizontalPadding)
-                        .padding(.vertical, GroupedSettingsMetrics.rowVerticalPadding)
-                    }
+                    membersCard
                 }
                 .padding(.horizontal, GroupedSettingsMetrics.horizontalPadding)
                 .padding(.top, 8)
+                .padding(.bottom, 24)
             }
         }
         .navigationTitle("Équipe")
@@ -302,154 +178,176 @@ struct MerchantTeamManagementView: View {
                 .disabled(model.isLoading)
             }
         }
-        .task {
-            await model.load()
-        }
-        .confirmationDialog(
-            "Retirer l’accès de cet utilisateur ?",
-            isPresented: $model.showRevokeConfirmation,
-            titleVisibility: .visible
-        ) {
-            Button("Retirer l’accès", role: .destructive) {
-                Task { await model.performRevoke() }
-            }
-            Button("Annuler", role: .cancel) {
-                model.pendingRevokeId = nil
-            }
-        }
-        .alert("Ajouter un employé", isPresented: $showAddEmployeePopup) {
-            TextField("Identifiant employé", text: $model.staffCreateLogin)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-            SecureField("Mot de passe employé", text: $model.staffCreatePassword)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-            Button("Annuler", role: .cancel) {}
-            Button("Créer") {
-                Task { @MainActor in
-                    await model.createStaffAccount(loginRaw: model.staffCreateLogin)
-                }
-            }
-            .disabled(
-                model.staffCreateInFlight
-                    || model.staffCreateLogin.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    || !model.isValidStaffLogin(model.staffCreateLogin)
-                    || model.staffCreatePassword.count < 3
-            )
-        } message: {
-            Text("Utilisez 3 à 32 caractères pour l’identifiant (a-z, 0-9, _ et -), puis un mot de passe d’au moins 3 caractères.")
+        .task { await model.load() }
+        .sheet(isPresented: $showAddEmployeePopup) {
+            addEmployeeSheet
         }
     }
 
-    private var teamRowDivider: some View {
-        Divider()
-            .padding(.vertical, 8)
+    private var overviewCard: some View {
+        GroupedSettingsCard {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("Vue d'ensemble")
+                    .font(.headline)
+                Text("Suivez l'activité caisse de chaque membre : scans, crédits de points et récompenses.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                if let t = model.teamTotals {
+                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                        TeamStatTile(title: "Employés", value: "\(t.memberCount ?? employeeCount)", icon: "person.2")
+                        TeamStatTile(title: "Scans (30 j)", value: "\(t.scans30d ?? 0)", icon: "qrcode.viewfinder")
+                        TeamStatTile(title: "Scans (7 j)", value: "\(t.scans7d ?? 0)", icon: "calendar")
+                        TeamStatTile(title: "Scans total", value: "\(t.scanCount ?? 0)", icon: "chart.bar")
+                    }
+                } else if model.isLoading {
+                    ProgressView()
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, GroupedSettingsMetrics.horizontalPadding)
+            .padding(.vertical, GroupedSettingsMetrics.rowVerticalPadding)
+        }
+    }
+
+    private var employeeCount: Int {
+        model.members.filter { !$0.isOwner }.count
+    }
+
+    private var membersCard: some View {
+        GroupedSettingsCard {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack {
+                    Text("Membres")
+                        .font(.headline)
+                    Spacer()
+                    if model.isLoading {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                }
+                .padding(.bottom, 12)
+
+                if model.members.isEmpty, !model.isLoading {
+                    Text("Aucun membre pour ce commerce.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(model.members) { member in
+                        memberRow(member)
+                        if member.id != model.members.last?.id {
+                            GroupedSettingsRowDivider()
+                                .padding(.vertical, 4)
+                        }
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, GroupedSettingsMetrics.horizontalPadding)
+            .padding(.vertical, GroupedSettingsMetrics.rowVerticalPadding)
+        }
     }
 
     @ViewBuilder
-    private func teamRow(_ m: WorkspaceTeamMemberDTO) -> some View {
-        let name = (m.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let email = (m.email ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let staff = (m.staffLogin ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let primary = teamMemberPrimaryLine(name: name, email: email, staff: staff)
-        HStack(alignment: .top, spacing: 12) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(primary)
+    private func memberRow(_ member: WorkspaceTeamMemberDTO) -> some View {
+        if let apiId = member.apiMemberId {
+            NavigationLink {
+                MerchantTeamMemberDetailView(memberId: apiId, initialMember: member) {
+                    Task { await model.load() }
+                }
+            } label: {
+                memberRowContent(member)
+            }
+        } else {
+            memberRowContent(member)
+        }
+    }
+
+    private func memberRowContent(_ member: WorkspaceTeamMemberDTO) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            TeamMemberAvatar(name: member.displayName, role: member.role)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(member.displayName)
                     .font(.body.weight(.semibold))
                     .foregroundStyle(Color(UIColor.label))
-                    .multilineTextAlignment(.leading)
-                    .lineLimit(4)
-                    .fixedSize(horizontal: false, vertical: true)
-                if !staff.isEmpty, primary.caseInsensitiveCompare(staff) != .orderedSame {
-                    Text("Identifiant : \(staff)")
-                        .font(.subheadline)
-                        .foregroundStyle(Color(UIColor.secondaryLabel))
-                        .multilineTextAlignment(.leading)
-                        .lineLimit(3)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .textSelection(.enabled)
-                }
-                if !email.isEmpty {
-                    Text(email)
-                        .font(.subheadline)
-                        .foregroundStyle(Color(UIColor.secondaryLabel))
-                        .multilineTextAlignment(.leading)
-                        .lineLimit(4)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .textSelection(.enabled)
-                }
-                if let stats = teamMemberLoyaltyStatsLine(m) {
-                    Text(stats)
-                        .font(.caption)
-                        .foregroundStyle(Color(UIColor.secondaryLabel))
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                if let roleLine = teamMemberRoleLine(m.role) {
-                    Text(roleLine)
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(Color(UIColor.tertiaryLabel))
-                        .fixedSize(horizontal: false, vertical: true)
+                Text(TeamFormatting.roleLabel(member.role))
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+                if let scans = member.scanCount, scans > 0 {
+                    Text("\(scans) scan\(scans > 1 ? "s" : "") · \(member.scans7d ?? 0) cette semaine")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                } else {
+                    Text("Aucune activité caisse")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
                 }
             }
-            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
-            if let rid = model.revokeableId(for: m),
-               model.canRevoke(m, currentUserEmail: authService.currentUserEmail, currentUserStaffLogin: authService.currentUserStaffLogin) {
-                Button {
-                    model.requestRevoke(id: rid)
-                } label: {
-                    Text("Retirer")
-                        .font(.subheadline.weight(.semibold))
+            Spacer()
+            if member.apiMemberId != nil {
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Color(UIColor.tertiaryLabel))
+            }
+        }
+        .padding(.vertical, 8)
+        .contentShape(Rectangle())
+    }
+
+    private var addEmployeeSheet: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("E-mail employé", text: $model.staffCreateEmail)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .keyboardType(.emailAddress)
+                    TextField("Prénom ou nom (optionnel)", text: $model.staffCreateName)
+                        .textInputAutocapitalization(.words)
+                    Picker("Rôle", selection: $model.staffCreateRole) {
+                        Text("Employé").tag("staff")
+                        Text("Gérant").tag("manager")
+                    }
+                } footer: {
+                    Text("L'employé recevra un e-mail d'invitation avec les liens App Store et Google Play. Connexion par e-mail uniquement (code envoyé à la demande).")
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .disabled(model.revokeInFlight)
-                .fixedSize(horizontal: true, vertical: true)
+                if let err = model.staffFormError, !err.isEmpty {
+                    Section {
+                        Text(err)
+                            .foregroundStyle(.red)
+                            .font(.footnote)
+                    }
+                }
+            }
+            .navigationTitle("Ajouter un employé")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Annuler") { showAddEmployeePopup = false }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Inviter") {
+                        Task {
+                            await model.createStaffAccount(
+                                emailRaw: model.staffCreateEmail,
+                                nameRaw: model.staffCreateName,
+                                role: model.staffCreateRole
+                            )
+                            if model.staffFormError == nil, model.successMessage != nil {
+                                showAddEmployeePopup = false
+                            }
+                        }
+                    }
+                    .disabled(
+                        model.staffCreateInFlight
+                            || !MerchantOnboardingEmailValidation.isValid(
+                                model.staffCreateEmail.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                            )
+                    )
+                }
             }
         }
-        .padding(.vertical, 6)
+        .presentationDetents([.medium, .large])
     }
-
-    private func teamMemberPrimaryLine(name: String, email: String, staff: String) -> String {
-        if !name.isEmpty { return name }
-        if !staff.isEmpty { return staff }
-        if !email.isEmpty { return email }
-        return "Membre"
-    }
-
-    private func teamMemberLoyaltyStatsLine(_ m: WorkspaceTeamMemberDTO) -> String? {
-        let add = m.pointsAddCount ?? 0
-        let rede = m.rewardRedeemCount ?? 0
-        let pts = m.pointsIssued ?? 0
-        let eur = m.amountEurSum ?? 0
-        if add == 0, rede == 0, pts == 0, eur == 0 { return nil }
-        var parts: [String] = []
-        if add > 0 { parts.append("\(add) crédit(s) caisse") }
-        if rede > 0 { parts.append("\(rede) récompense(s)") }
-        if pts > 0 { parts.append("\(pts) pts attribués") }
-        if eur > 0 {
-            let f = NumberFormatter()
-            f.locale = Locale(identifier: "fr_FR")
-            f.numberStyle = .decimal
-            f.maximumFractionDigits = 2
-            if let s = f.string(from: NSNumber(value: eur)) {
-                parts.append("\(s) € (montants saisis)")
-            }
-        }
-        guard !parts.isEmpty else { return nil }
-        return "Fidélité : " + parts.joined(separator: " · ")
-    }
-
-    private func teamMemberRoleLine(_ role: String?) -> String? {
-        let r = (role ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !r.isEmpty else { return nil }
-        switch r {
-        case "owner": return "Rôle : propriétaire"
-        case "manager": return "Rôle : gérant"
-        case "staff": return "Rôle : employé"
-        default: return "Rôle : \(r)"
-        }
-    }
-
 }
 
 #Preview {

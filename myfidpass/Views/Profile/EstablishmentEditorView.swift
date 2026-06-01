@@ -380,6 +380,8 @@ struct MerchantEstablishmentForm: View {
     @State private var googleMetricsChannel: SocialMetricsChannelRow?
     @State private var googleMetricsLoading = false
     @State private var googleMetricsRefreshing = false
+    /// Pseudos @ enregistrés via « Connecter mes réseaux » (social-missions API).
+    @State private var socialMissionsCache: SocialMissionsResponse?
     private let sections: Sections
 
     private enum EngagementOAuthBusyKind: Hashable {
@@ -580,6 +582,7 @@ struct MerchantEstablishmentForm: View {
             loadProfile()
             Task {
                 await loadProfileFromServer()
+                await loadSocialMissionsCache()
                 await MainActor.run { suppressAutosave = false }
                 if !sections.useGoogleCommerceDashboard {
                     await loadGoogleMetricsSnapshot()
@@ -605,6 +608,9 @@ struct MerchantEstablishmentForm: View {
                     await loadGoogleMetricsSnapshot()
                 }
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .myfidpassSocialMissionsDidSave)) { _ in
+            Task { await loadSocialMissionsCache() }
         }
         .onReceive(NotificationCenter.default.publisher(for: .myfidpassOpenGoogleBusinessSetupSheet)) { _ in
             runEngagementOAuth(.googleBusiness)
@@ -644,7 +650,9 @@ struct MerchantEstablishmentForm: View {
                 }
             case .socialMissions:
                 if let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines), !slug.isEmpty {
-                    SocialMissionsSheet(slug: slug)
+                    SocialMissionsSheet(slug: slug) {
+                        Task { await loadSocialMissionsCache() }
+                    }
                 } else {
                     Text("Commerce non chargé").padding()
                 }
@@ -862,23 +870,86 @@ struct MerchantEstablishmentForm: View {
         )
     }
 
+    private func loadSocialMissionsCache() async {
+        guard let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines), !slug.isEmpty else {
+            await MainActor.run { socialMissionsCache = nil }
+            return
+        }
+        do {
+            let resp: SocialMissionsResponse = try await APIClient.shared.request(.dashboardSocialMissions(slug: slug))
+            await MainActor.run { socialMissionsCache = resp }
+        } catch {
+            if !APIError.isBenignRequestCancellation(error) {
+                await MainActor.run { socialMissionsCache = nil }
+            }
+        }
+    }
+
+    private func socialMissionConfig(for mode: SocialLinkMode) -> SocialMissionConfig? {
+        guard let cache = socialMissionsCache else { return nil }
+        switch mode {
+        case .instagram: return cache.instagram
+        case .tiktok: return cache.tiktok
+        case .facebook: return cache.facebook
+        case .twitter: return cache.twitter
+        default: return nil
+        }
+    }
+
+    private func socialRowSubtitle(mode: SocialLinkMode, channel: UrlChannelForm) -> String {
+        if let cfg = socialMissionConfig(for: mode) {
+            let u = cfg.username.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !u.isEmpty {
+                let at = "@\(u)"
+                if cfg.enabled {
+                    return "\(at) · +\(cfg.points) pts client"
+                }
+                return at
+            }
+        }
+        let handle = channel.input.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !handle.isEmpty {
+            let display = handle.hasPrefix("@") ? handle : "@\(handle)"
+            return display
+        }
+        switch mode {
+        case .instagram, .facebook, .youtube, .tiktok:
+            return "Toucher pour connecter le compte"
+        default:
+            return "Toucher pour saisir ou coller un lien"
+        }
+    }
+
+    private var connectSocialNetworksSubtitle: String {
+        guard let cache = socialMissionsCache else {
+            return "Instagram, TikTok, Facebook, X — missions & points clients"
+        }
+        let labels: [(String, SocialMissionConfig?)] = [
+            ("IG", cache.instagram),
+            ("TikTok", cache.tiktok),
+            ("FB", cache.facebook),
+            ("X", cache.twitter),
+        ]
+        let connected = labels.compactMap { tag, cfg -> String? in
+            guard let cfg, cfg.enabled else { return nil }
+            let u = cfg.username.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !u.isEmpty else { return nil }
+            return "\(tag) @\(u)"
+        }
+        if connected.isEmpty {
+            return "Configurer les @ et les points offerts aux clients"
+        }
+        return connected.joined(separator: " · ")
+    }
+
     private func socialEngagementRow(mode: SocialLinkMode, shortName: String, channel: Binding<UrlChannelForm>) -> some View {
-        let handle = channel.wrappedValue.input.trimmingCharacters(in: .whitespacesAndNewlines)
+        let subtitle = socialRowSubtitle(mode: mode, channel: channel.wrappedValue)
         let oauthBusyHere: Bool = {
             switch mode {
             case .instagram, .facebook: return oauthBusy == .meta
             case .youtube: return oauthBusy == .youtube
             case .tiktok: return oauthBusy == .tiktok
             default: return false
-            }
-        }()
-        let subtitle: String = {
-            if !handle.isEmpty { return handle }
-            switch mode {
-            case .instagram, .facebook, .youtube, .tiktok:
-                return "Toucher pour connecter le compte"
-            default:
-                return "Toucher pour saisir ou coller un lien"
             }
         }()
         return Button {
@@ -1069,10 +1140,10 @@ struct MerchantEstablishmentForm: View {
                     Text("Connecter mes réseaux")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(AppTheme.Colors.textPrimary)
-                    Text("Instagram, TikTok, Facebook, X — missions & points clients")
+                    Text(connectSocialNetworksSubtitle)
                         .font(.caption2)
                         .foregroundStyle(AppTheme.Colors.textSecondary)
-                        .lineLimit(1)
+                        .lineLimit(2)
                 }
                 Spacer(minLength: 8)
                 Image(systemName: "chevron.right")

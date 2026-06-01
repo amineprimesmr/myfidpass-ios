@@ -18,6 +18,13 @@ enum MyfidpassOnboardingConstants {
     static let titleTopPaddingAfterPrimaryGoal: CGFloat = 60
     /// Comme Process `FirstNameInputStepView` : `titleToContentSpacing + 60` sous la zone titre.
     static let processStyleFieldExtraSpacing: CGFloat = 60
+
+    /// Bouton principal (CONTINUER / COMMENCER) — même ancrage bas sur tout le parcours welcome + onboarding.
+    static let primaryCTABottomInset: CGFloat = 50
+    static let primaryCTAHeight: CGFloat = 56
+    static let primaryCTAHorizontalPaddingCompact: CGFloat = 40
+    static let primaryCTAHorizontalPaddingRegular: CGFloat = 32
+    static let primaryCTAMaxWidthRegular: CGFloat = 520
 }
 
 // MARK: - Titre

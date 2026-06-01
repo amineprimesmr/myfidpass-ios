@@ -3,16 +3,17 @@
 //  myfidpass
 //
 //  Informations obligatoires pour abonnements auto-renouvelables (Guideline 3.1.2).
-//  Affiché sur le paywall natif (WKWebView) en complément de myfidpass.fr/paiement.
 //
 
 import SwiftUI
 
-/// Texte d’abonnement aligné sur la page Stripe `/paiement` (mensuel / annuel).
+/// Informations obligatoires abonnement auto-renouvelable (Guideline 3.1.2) — App Store.
 struct MerchantSubscriptionLegalDisclosureView: View {
     /// `nil` = afficher les deux forfaits (paywall WebView).
     var isAnnualPlan: Bool? = nil
     var compact: Bool = false
+    /// Prix affiché par StoreKit (optionnel) — sinon texte indicatif aligné Connect.
+    var storeKitPriceLine: String? = nil
 
     @State private var safariURL: URL?
 
@@ -32,6 +33,16 @@ struct MerchantSubscriptionLegalDisclosureView: View {
     }
 
     private var subscriptionPriceLine: String {
+        if let storeKitPriceLine, !storeKitPriceLine.isEmpty {
+            switch isAnnualPlan {
+            case .some(true):
+                return "1 € le premier mois, puis \(storeKitPriceLine) / an via l’App Store. Sans engagement."
+            case .some(false):
+                return "1 € le premier mois, puis \(storeKitPriceLine) / mois via l’App Store. Sans engagement."
+            case .none:
+                return "1 € le premier mois, puis tarif affiché par l’App Store (mensuel ou annuel). Sans engagement."
+            }
+        }
         switch isAnnualPlan {
         case .some(true):
             return "1 € le premier mois, puis 399 € / an (soit 34 € / mois en moyenne). Sans engagement."
@@ -54,11 +65,12 @@ struct MerchantSubscriptionLegalDisclosureView: View {
                 .font(.system(size: compact ? 10 : 11))
                 .foregroundStyle(.white.opacity(0.55))
                 .fixedSize(horizontal: false, vertical: true)
-            Text("Le paiement est traité de façon sécurisée via Stripe. L’abonnement se renouvelle automatiquement jusqu’à résiliation depuis l’app (Réglages) ou sur myfidpass.fr.")
+            Text("Le paiement est traité par Apple (achat in-app). L’abonnement se renouvelle automatiquement jusqu’à résiliation dans Réglages → identifiant Apple → Abonnements.")
                 .font(.system(size: compact ? 9 : 10))
                 .foregroundStyle(.white.opacity(0.45))
                 .fixedSize(horizontal: false, vertical: true)
             legalLinks
+            functionalURLRows
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, compact ? 12 : 16)
@@ -82,12 +94,46 @@ struct MerchantSubscriptionLegalDisclosureView: View {
             }
             Text("|")
                 .foregroundStyle(.white.opacity(0.35))
-            Button("Conditions d’utilisation (CGU)") {
+            Button("Conditions d’utilisation (EULA)") {
                 safariURL = LegalURLs.termsOfUse
             }
         }
         .font(.system(size: compact ? 10 : 11, weight: .medium))
         .foregroundStyle(.white.opacity(0.72))
         .tint(.white.opacity(0.85))
+    }
+
+    /// Liens URL explicites (Guideline 3.1.2 — fonctionnels pour la revue).
+    private var functionalURLRows: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            legalURLButton(
+                title: "Privacy Policy",
+                url: LegalURLs.privacyPolicy,
+                display: LegalURLs.privacyPolicyDisplayString
+            )
+            legalURLButton(
+                title: "Terms of Use (EULA)",
+                url: LegalURLs.termsOfUse,
+                display: LegalURLs.termsOfUseDisplayString
+            )
+        }
+        .padding(.top, 2)
+    }
+
+    private func legalURLButton(title: String, url: URL, display: String) -> some View {
+        Button {
+            safariURL = url
+        } label: {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(.system(size: compact ? 9 : 10, weight: .semibold))
+                Text(display)
+                    .font(.system(size: compact ? 8 : 9))
+                    .underline()
+            }
+            .foregroundStyle(.white.opacity(0.55))
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .buttonStyle(.plain)
     }
 }

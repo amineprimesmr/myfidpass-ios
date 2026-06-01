@@ -3,6 +3,25 @@ plugins {
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
     id("org.jetbrains.kotlin.plugin.serialization")
+    id("com.google.devtools.ksp")
+}
+
+if (file("google-services.json").exists()) {
+    apply(plugin = "com.google.gms.google-services")
+}
+
+fun readKeystoreProp(key: String): String? {
+    val env = System.getenv("MYFIDPASS_${key.uppercase()}")?.trim()?.takeIf { it.isNotEmpty() }
+    if (env != null) return env
+    val propsFile = rootProject.file("keystore.properties")
+    if (!propsFile.exists()) return null
+    return propsFile.readLines()
+        .mapNotNull { line ->
+            val idx = line.indexOf('=')
+            if (idx <= 0) null else line.substring(0, idx).trim() to line.substring(idx + 1).trim()
+        }
+        .toMap()[key]
+        ?.takeIf { it.isNotEmpty() }
 }
 
 android {
@@ -19,13 +38,30 @@ android {
         buildConfigField("String", "FLYER_EMBED_URL", "\"https://www.myfidpass.fr/flyer-embed.html\"")
     }
 
+    signingConfigs {
+        create("release") {
+            val storeFilePath = readKeystoreProp("storeFile")
+            if (storeFilePath != null) {
+                storeFile = rootProject.file(storeFilePath)
+                storePassword = readKeystoreProp("storePassword")
+                keyAlias = readKeystoreProp("keyAlias")
+                keyPassword = readKeystoreProp("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            val releaseSigning = signingConfigs.getByName("release")
+            if (releaseSigning.storeFile?.exists() == true) {
+                signingConfig = releaseSigning
+            }
         }
         debug {
             applicationIdSuffix = ".debug"
@@ -59,8 +95,10 @@ dependencies {
     androidTestImplementation(composeBom)
 
     implementation("androidx.core:core-ktx:1.15.0")
+    implementation("androidx.exifinterface:exifinterface:1.3.7")
     implementation("androidx.core:core-splashscreen:1.0.1")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
+    implementation("androidx.lifecycle:lifecycle-process:2.8.7")
     implementation("androidx.activity:activity-compose:1.9.3")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
@@ -96,6 +134,18 @@ dependencies {
 
     implementation("com.google.zxing:core:3.5.3")
     implementation("androidx.browser:browser:1.8.0")
+
+    implementation("org.osmdroid:osmdroid-android:6.1.20")
+
+    val room = "2.6.1"
+    implementation("androidx.room:room-runtime:$room")
+    implementation("androidx.room:room-ktx:$room")
+    ksp("androidx.room:room-compiler:$room")
+
+    implementation(platform("com.google.firebase:firebase-bom:33.7.0"))
+    implementation("com.google.firebase:firebase-messaging-ktx")
+
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.9.0")
 
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")

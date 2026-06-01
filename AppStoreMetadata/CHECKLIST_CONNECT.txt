@@ -1,0 +1,23 @@
+CHECKLIST — à faire dans App Store Connect (obligatoire, non automatisable depuis le code)
+
+1) App Store Connect → Apps → MyFidpass → Informations sur l’app
+   - URL politique de confidentialité : coller privacy_policy_url.txt
+   - Enregistrer
+
+2) App Store → MyFidpass → [Version en préparation] → Français (France)
+   - Description : coller description_fr-FR.txt EN ENTIER (ne pas oublier les 2 lignes EULA en bas)
+   - Enregistrer
+
+3) (Si localisation anglaise) → English (U.S.)
+   - Description : coller description_en-US.txt
+   - Enregistrer
+
+4) App Store Connect → App Review Information
+   - Notes : coller app_review_notes.txt + compte démo
+   - Enregistrer
+
+5) Monétisation → Abonnements → cocher les 6 IAP avec la build 1.04+
+
+6) Product → Archive → Distribute → Soumettre pour examen
+
+7) Terminal (vérif) : bash scripts/verify-apple-legal-urls.sh

@@ -33,8 +33,8 @@ extension EnvironmentValues {
 
 /// Animations partagées — ressorts légèrement amortis pour éviter l’effet « ressort trop nerveux ».
 enum MerchantMotion {
-    /// Changement d’onglet (TabView) ou sélection programmatique.
-    static let tabSwitch: Animation = .easeInOut(duration: 0.18)
+    /// Changement d’onglet (TabView) — ressort proche de l’onboarding.
+    static let tabSwitch: Animation = .spring(response: 0.42, dampingFraction: 0.88, blendDuration: 0)
 
     /// Push / pop dans un `NavigationStack` (profondeur de pile).
     static let navigationPath: Animation = .spring(response: 0.42, dampingFraction: 0.88, blendDuration: 0)
@@ -44,6 +44,24 @@ enum MerchantMotion {
 
     /// Bouton : press / release — réactif, peu de rebond.
     static let buttonPress: Animation = .spring(response: 0.3, dampingFraction: 0.78, blendDuration: 0)
+
+    /// Menu latéral style X (Accueil).
+    static let sidebar: Animation = .interactiveSpring(duration: 0.2, extraBounce: 0.02)
+
+    /// Overlay plein écran / feuille modale lourde.
+    static let overlayPresent: Animation = .spring(response: 0.42, dampingFraction: 0.88, blendDuration: 0)
+
+    /// Crossfade léger entre états racine (ex. auth ↔ app).
+    static let rootCrossfade: Animation = .easeInOut(duration: 0.22)
+}
+
+extension NavigationPath {
+    /// Push animé dans une pile SwiftUI.
+    mutating func appendAnimated<T>(_ value: T, animation: Animation = MerchantMotion.navigationPath) where T: Hashable {
+        withAnimation(animation) {
+            append(value)
+        }
+    }
 }
 
 /// Style de bouton « press » pour cartes et CTA : léger zoom + assombrissement.

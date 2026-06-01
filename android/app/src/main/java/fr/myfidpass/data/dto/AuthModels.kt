@@ -5,7 +5,8 @@ import kotlinx.serialization.Serializable
 
 @Serializable
 data class LoginRequest(
-    val email: String,
+    /** E-mail ou identifiant employé (`staff_login`) — clé API `login`. */
+    val login: String,
     val password: String,
 )
 
@@ -20,7 +21,8 @@ data class RegisterRequest(
 
 @Serializable
 data class RefreshRequest(
-    @SerialName("refresh_token") val refreshToken: String,
+    /** Contrat API : camelCase (`refreshToken`), aligné iOS. */
+    val refreshToken: String,
 )
 
 @Serializable
@@ -41,13 +43,27 @@ data class AppleAuthRequest(
 )
 
 @Serializable
+data class CheckIdentifierRequest(
+    val identifier: String,
+)
+
+@Serializable
+data class CheckIdentifierResponse(
+    @SerialName("account_exists") val accountExists: Boolean? = null,
+    val kind: String? = null,
+)
+
+@Serializable
 data class AuthUser(
     val id: String? = null,
     val email: String? = null,
     val name: String? = null,
-    @SerialName("is_admin") val isAdmin: Boolean? = null,
+    @SerialName("is_admin")
+    @Serializable(with = FlexibleOptionalBooleanSerializer::class)
+    val isAdmin: Boolean? = null,
     /** `owner` | `manager` | `staff` — accès employé limité à l’app commerçant. */
     @SerialName("workspace_role") val workspaceRole: String? = null,
+    @SerialName("staff_login") val staffLogin: String? = null,
 )
 
 @Serializable
@@ -70,19 +86,29 @@ data class SubscriptionDto(
 data class AuthLoginResponse(
     val user: AuthUser,
     val token: String,
-    @SerialName("refresh_token") val refreshToken: String? = null,
+    val refreshToken: String? = null,
     val businesses: List<BusinessDto> = emptyList(),
     val subscription: SubscriptionDto? = null,
-    @SerialName("has_active_subscription") val hasActiveSubscription: Boolean? = null,
+    @SerialName("has_active_subscription")
+    @Serializable(with = FlexibleOptionalBooleanSerializer::class)
+    val hasActiveSubscription: Boolean? = null,
+    @SerialName("has_paid_merchant_subscription")
+    @Serializable(with = FlexibleOptionalBooleanSerializer::class)
+    val hasPaidMerchantSubscription: Boolean? = null,
     @SerialName("merchant_trial_ends_at") val merchantTrialEndsAt: String? = null,
 )
 
 @Serializable
 data class AuthRefreshResponse(
     val token: String,
-    @SerialName("refresh_token") val refreshToken: String? = null,
+    val refreshToken: String? = null,
     val subscription: SubscriptionDto? = null,
-    @SerialName("has_active_subscription") val hasActiveSubscription: Boolean? = null,
+    @SerialName("has_active_subscription")
+    @Serializable(with = FlexibleOptionalBooleanSerializer::class)
+    val hasActiveSubscription: Boolean? = null,
+    @SerialName("has_paid_merchant_subscription")
+    @Serializable(with = FlexibleOptionalBooleanSerializer::class)
+    val hasPaidMerchantSubscription: Boolean? = null,
     @SerialName("merchant_trial_ends_at") val merchantTrialEndsAt: String? = null,
 )
 
@@ -91,11 +117,35 @@ data class AuthMeResponse(
     val user: AuthUser,
     val businesses: List<BusinessDto> = emptyList(),
     val subscription: SubscriptionDto? = null,
-    @SerialName("has_active_subscription") val hasActiveSubscription: Boolean? = null,
+    @SerialName("has_active_subscription")
+    @Serializable(with = FlexibleOptionalBooleanSerializer::class)
+    val hasActiveSubscription: Boolean? = null,
+    @SerialName("has_paid_merchant_subscription")
+    @Serializable(with = FlexibleOptionalBooleanSerializer::class)
+    val hasPaidMerchantSubscription: Boolean? = null,
     @SerialName("merchant_trial_ends_at") val merchantTrialEndsAt: String? = null,
 )
 
 @Serializable
+data class EmailSendCodeRequest(
+    val email: String,
+)
+
+@Serializable
+data class EmailSendCodeResponse(
+    val ok: Boolean? = null,
+)
+
+@Serializable
+data class EmailVerifyRequest(
+    val email: String,
+    val code: String,
+    val name: String? = null,
+    @SerialName("google_place_id") val googlePlaceId: String? = null,
+    @SerialName("establishment_name") val establishmentName: String? = null,
+)
+
+@Serializable
 data class AuthConfigResponse(
-    @SerialName("google_client_id") val googleClientId: String? = null,
+    val googleClientId: String? = null,
 )

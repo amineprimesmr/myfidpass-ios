@@ -26,6 +26,8 @@ enum APIError: LocalizedError {
     case businessPlaceAlreadyLinked(String)
     /// HTTP 422 avec `code: notification_icon_required` — envoi campagne sans icône notif personnalisée.
     case notificationIconRequired(String)
+    /// Refresh token présent mais `POST /auth/refresh` inaccessible (réseau, 5xx) — session locale conservée.
+    case sessionRefreshTransient
 
     var errorDescription: String? {
         switch self {
@@ -34,8 +36,9 @@ enum APIError: LocalizedError {
         case .decoding:
             return "Les données reçues sont incomplètes ou obsolètes. Synchronisez l’application puis réessayez."
         case .server(let code, let msg):
-            // Ne jamais exposer les libellés bruts du backend pour les 404 (ex. « Ressource introuvable »).
             if code == 404 {
+                let trimmed = msg?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                if !trimmed.isEmpty { return trimmed }
                 return "Ce contenu n’est pas disponible pour le moment. Vérifiez le commerce sélectionné ou synchronisez depuis l’écran Compte."
             }
             return msg ?? "Erreur serveur (\(code))."
@@ -46,7 +49,7 @@ enum APIError: LocalizedError {
         case .notFound:
             return "Ce contenu n’est pas disponible pour le moment. Vérifiez le commerce sélectionné ou synchronisez depuis l’écran Compte."
         case .subscriptionRequired:
-            return "Cette action nécessite un abonnement actif (ou une période d’essai gratuite encore en cours). Les nouveaux comptes ont 24 h d’accès complet ; après cette période, souscrivez via Stripe depuis l’écran d’abonnement."
+            return "Cette action nécessite un abonnement MyFidpass Pro actif. Souscrivez depuis l’écran d’abonnement (App Store ou Stripe)."
         case .businessQuotaReached:
             return "Vous avez atteint la limite de commerces autorisés par votre formule actuelle. Passez à l’offre supérieure pour ajouter un commerce."
         case .noAccountInLogiciel:
@@ -57,6 +60,8 @@ enum APIError: LocalizedError {
             return message
         case .notificationIconRequired(let message):
             return message
+        case .sessionRefreshTransient:
+            return "Connexion instable lors du renouvellement de session. Réessayez dans un instant, ou déconnectez-vous puis reconnectez-vous avec Apple."
         }
     }
 
@@ -69,15 +74,37 @@ enum APIError: LocalizedError {
         }
     }
 
+    /// Texte français pour alertes commerçant (évite « The request timed out. » brut d’iOS).
+    static func merchantFacingMessage(from error: Error) -> String? {
+        if isBenignRequestCancellation(error) { return nil }
+        if let api = error as? APIError, let msg = api.errorDescription, !msg.isEmpty { return msg }
+        if let wrapped = error as? APIError, case .network(let underlying) = wrapped {
+            return friendlyNetworkDescription(underlying)
+        }
+        return friendlyNetworkDescription(error)
+    }
+
     /// Messages iOS peu parlants (« Application failed to respond », timeouts) → texte générique (pas lié aux seules notifications).
     private static func friendlyNetworkDescription(_ error: Error) -> String {
         let raw = error.localizedDescription
+        if raw.localizedCaseInsensitiveContains("timed out")
+            || raw.localizedCaseInsensitiveContains("time out")
+            || raw.localizedCaseInsensitiveContains("délai dépassé") {
+            return "La connexion a pris trop de temps. Vérifiez le réseau puis réessayez."
+        }
         if raw.localizedCaseInsensitiveContains("failed to respond")
             || raw.localizedCaseInsensitiveContains("couldn’t be completed")
             || raw.localizedCaseInsensitiveContains("could not be completed") {
             return "Le serveur n’a pas répondu à temps. Réessayez dans un instant. Si c’est une génération IA ou une grosse campagne, l’opération peut être longue : vérifiez aussi votre connexion."
         }
         if let url = error as? URLError {
+            let custom = (url.userInfo[NSLocalizedDescriptionKey] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !custom.isEmpty,
+               !custom.localizedCaseInsensitiveContains("couldn"),
+               !custom.localizedCaseInsensitiveContains("failed to respond") {
+                return custom
+            }
             switch url.code {
             case .timedOut:
                 return "Délai dépassé : le serveur n’a pas fini à temps (génération IA, synchronisation lourde, etc.). Réessayez dans un moment avec une bonne connexion ; si ça bloque souvent, contactez le support."

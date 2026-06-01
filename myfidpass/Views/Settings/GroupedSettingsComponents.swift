@@ -247,13 +247,90 @@ struct GroupedSettingsLogoutRow: View {
     }
 }
 
-/// Titre centré « Compte » au-dessus de la première section.
+// MARK: - Synchronisation
+
+struct GroupedSettingsLastSyncSection: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @EnvironmentObject private var syncService: SyncService
+
+    var showsSyncNowButton: Bool = true
+    var onSyncStarted: (() -> Void)? = nil
+
+    private static let relativeSyncFormatter: RelativeDateTimeFormatter = {
+        let f = RelativeDateTimeFormatter()
+        f.locale = Locale(identifier: "fr_FR")
+        f.unitsStyle = .abbreviated
+        return f
+    }()
+
+    private var lastSyncText: String {
+        guard let d = syncService.lastSyncDate else { return "Jamais" }
+        return Self.relativeSyncFormatter.localizedString(for: d, relativeTo: Date())
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            lastSyncRow
+            if showsSyncNowButton {
+                GroupedSettingsRowDivider()
+                syncNowRow
+            }
+        }
+    }
+
+    private var lastSyncRow: some View {
+        HStack(alignment: .top, spacing: 12) {
+            GroupedSettingsIconBox(systemName: "arrow.triangle.2.circlepath")
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Dernière synchro")
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(Color(UIColor.label))
+                    Spacer(minLength: 8)
+                    Text(lastSyncText)
+                        .font(.body)
+                        .foregroundStyle(Color(UIColor.secondaryLabel))
+                }
+                if let err = syncService.lastError, !err.isEmpty {
+                    Text(err)
+                        .font(.caption)
+                        .foregroundStyle(Color(UIColor.systemRed).opacity(colorScheme == .dark ? 0.9 : 1))
+                }
+            }
+        }
+        .padding(.horizontal, GroupedSettingsMetrics.horizontalPadding)
+        .padding(.vertical, GroupedSettingsMetrics.rowVerticalPadding)
+    }
+
+    private var syncNowRow: some View {
+        Button {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            Task { await syncService.syncAfterServerMutation() }
+            onSyncStarted?()
+        } label: {
+            HStack(spacing: 12) {
+                GroupedSettingsIconBox(systemName: "arrow.clockwise")
+                Text("Synchroniser maintenant")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(Color(UIColor.label))
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, GroupedSettingsMetrics.horizontalPadding)
+            .padding(.vertical, GroupedSettingsMetrics.rowVerticalPadding)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// Titre centré au-dessus de la première section (Compte, Paramètres…).
 struct GroupedSettingsPageTitle: View {
+    var title: String = "Compte"
     /// Dans l’en-tête Commerce : police plus légère pour rester propre dans le panneau.
     var compact: Bool = false
 
     var body: some View {
-        Text("Compte")
+        Text(title)
             .font(compact ? .title2.weight(.bold) : .largeTitle.weight(.bold))
             .foregroundStyle(Color(UIColor.label))
             .frame(maxWidth: .infinity)

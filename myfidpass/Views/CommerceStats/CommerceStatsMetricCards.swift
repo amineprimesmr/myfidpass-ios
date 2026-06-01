@@ -17,24 +17,19 @@ enum CommerceStatsIndicatorLiquidGlass {
 extension View {
     /// Tuiles **Membres / Panier / Fréquence** et listes : relief sculpté, ombre, liseré.
     /// - `useStatic3DSurface` : conteneur non-`Button` (ex. `ZStack` avec plusieurs `Button` internes).
+    /// Surface carte simple (fond blanc + ombre légère) — évite `glassEffect` instable sur l’onglet Stats.
     func commerceStatsLiquidGlassTileButton(
         cornerRadius: CGFloat,
         controlSize: ControlSize = .large,
         useStatic3DSurface: Bool = false
     ) -> some View {
-        Group {
-            if #available(iOS 26.0, *) {
-                self
-                    .glassEffect(.clear, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-            } else {
-                self
-                    .background(
-                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                            .fill(Color.white.opacity(0.94))
-                    )
-            }
-        }
-        .controlSize(controlSize)
+        self
+            .background(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(Color.white)
+                    .shadow(color: Color.black.opacity(0.07), radius: 10, x: 0, y: 4)
+            )
+            .controlSize(controlSize)
     }
 
     func commerceStatsKpiLiquidGlassButton(
@@ -162,35 +157,27 @@ struct CommerceStatsLargeMetricCard: View {
     var membersWeeklySparkline: [CGFloat] = []
     let segments: [CommerceDonutSegment]
     var onTap: (() -> Void)? = nil
-    /// Transition zoom (iOS 18+) : fournir `id` + `namespace` avec `onTap`.
-    var zoomTransitionSourceID: String? = nil
-    var zoomTransitionNamespace: Namespace.ID? = nil
     /// Couleur principale de la courbe/zone.
     var chartLineColor: Color = Color(red: 0, green: 1, blue: 133.0 / 255.0) // #00ff85
 
     var body: some View {
         Group {
             if let onTap {
-                if let zid = zoomTransitionSourceID, let ns = zoomTransitionNamespace {
-                    Button(action: onTap) {
-                        membersMetricCardLabel
-                            .zoomTransitionSource(id: zid, in: ns)
-                    }
-                    .commerceStatsLiquidGlassTileButton(
-                        cornerRadius: CommerceStatsIndicatorLiquidGlass.kpiCornerRadius,
-                        controlSize: .large
-                    )
-                } else {
-                    Button(action: onTap) {
-                        membersMetricCardLabel
-                    }
-                    .commerceStatsLiquidGlassTileButton(
-                        cornerRadius: CommerceStatsIndicatorLiquidGlass.kpiCornerRadius,
-                        controlSize: .large
-                    )
+                Button(action: onTap) {
+                    membersMetricCardLabel
                 }
+                .buttonStyle(.plain)
+                .commerceStatsLiquidGlassTileButton(
+                    cornerRadius: CommerceStatsIndicatorLiquidGlass.kpiCornerRadius,
+                    controlSize: .large
+                )
             } else {
                 membersMetricCardLabel
+                    .commerceStatsLiquidGlassTileButton(
+                        cornerRadius: CommerceStatsIndicatorLiquidGlass.kpiCornerRadius,
+                        controlSize: .large,
+                        useStatic3DSurface: true
+                    )
             }
         }
     }

@@ -24,8 +24,12 @@ struct FullDashboardSettingsPatch: Encodable {
     var stampEmoji: String?
     var stampRewardLabel: String?
     var stampMidRewardLabel: String?
+    /// Récompense « Début du jeu » (10 pts ou 1er palier tampons).
+    var startGameRewardLabel: String?
     /// Si true, envoie `stamp_mid_reward_label: null` (équivalent case « pas de récompense 5ᵉ » sur le web).
     var stampMidRewardLabelIsExplicitNull: Bool = false
+    /// Si true, envoie `points_reward_tiers: null` (changement de mode → tampons).
+    var pointsRewardTiersIsExplicitNull: Bool = false
     var programType: String?
     var loyaltyMode: String?
     var pointsPerTicket: Int?
@@ -87,6 +91,7 @@ struct FullDashboardSettingsPatch: Encodable {
         case stampEmoji = "stamp_emoji"
         case stampRewardLabel = "stamp_reward_label"
         case stampMidRewardLabel = "stamp_mid_reward_label"
+        case startGameRewardLabel = "start_game_reward_label"
         case programType = "program_type"
         case loyaltyMode = "loyalty_mode"
         case pointsPerTicket = "points_per_ticket"
@@ -142,6 +147,7 @@ struct FullDashboardSettingsPatch: Encodable {
         } else if let v = stampMidRewardLabel {
             try c.encode(v, forKey: .stampMidRewardLabel)
         }
+        if let v = startGameRewardLabel { try c.encode(v, forKey: .startGameRewardLabel) }
         if let v = programType { try c.encode(v, forKey: .programType) }
         if let v = loyaltyMode { try c.encode(v, forKey: .loyaltyMode) }
         if let v = pointsPerTicket { try c.encode(v, forKey: .pointsPerTicket) }
@@ -153,7 +159,11 @@ struct FullDashboardSettingsPatch: Encodable {
         } else if let v = baselineAvgBasketEur {
             try c.encode(v, forKey: .baselineAvgBasketEur)
         }
-        if let v = pointsRewardTiers { try c.encode(v, forKey: .pointsRewardTiers) }
+        if pointsRewardTiersIsExplicitNull {
+            try c.encodeNil(forKey: .pointsRewardTiers)
+        } else if let v = pointsRewardTiers {
+            try c.encode(v, forKey: .pointsRewardTiers)
+        }
         if let v = sector { try c.encode(v, forKey: .sector) }
         if let v = logoBase64 { try c.encode(v, forKey: .logoBase64) }
         if let v = logoIconBase64 { try c.encode(v, forKey: .logoIconBase64) }

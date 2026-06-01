@@ -1,5 +1,11 @@
 package fr.myfidpass.ui
 
+import android.net.Uri
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -16,124 +22,204 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
 import fr.myfidpass.di.AppContainer
-import fr.myfidpass.ui.screens.auth.AuthLandingScreen
-import fr.myfidpass.ui.screens.auth.EmailAuthModalSheet
-import fr.myfidpass.ui.screens.onboarding.MerchantEstablishmentScreen
+import fr.myfidpass.services.auth.GoogleOAuthFlow
+import fr.myfidpass.ui.screens.admin.PlatformAdminRootScreen
+import fr.myfidpass.ui.screens.auth.WelcomeFlowScreen
+import android.Manifest
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import fr.myfidpass.ui.screens.main.MainTabsScreen
+import fr.myfidpass.services.notifications.NotificationPermissionHelper
+import fr.myfidpass.services.version.PlayStoreVersionChecker
+import fr.myfidpass.ui.components.AppUpdateDialog
+import fr.myfidpass.ui.components.PaymentThankYouOverlay
+import fr.myfidpass.ui.navigation.MerchantMotion
 import fr.myfidpass.ui.theme.BackgroundLight
 import fr.myfidpass.ui.viewmodel.DashboardViewModel
-import fr.myfidpass.ui.viewmodel.EmailAuthViewModel
-import fr.myfidpass.ui.viewmodel.MerchantOnboardingViewModel
 import fr.myfidpass.ui.viewmodel.RootUiState
 import fr.myfidpass.ui.viewmodel.RootViewModel
+import fr.myfidpass.util.openInCustomTab
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @Composable
-fun AppRoot(container: AppContainer) {
+fun AppRoot(
+    container: AppContainer,
+    pendingOAuthUri: Uri? = null,
+    onOAuthUriConsumed: () -> Unit = {},
+    pendingScanRequest: Int = 0,
+    onScanRequestConsumed: () -> Unit = {},
+) {
     val factory = remember(container) { viewModelFactory(container) }
     val rootVm: RootViewModel = viewModel(factory = factory)
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+
+    var appUpdateInfo by remember { mutableStateOf<PlayStoreVersionChecker.UpdateInfo?>(null) }
+    var notificationPermissionRequested by remember { mutableStateOf(false) }
+    var showPaymentThankYou by remember { mutableStateOf(false) }
+
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) {
+        container.deviceRegistration.registerAfterLogin()
+        container.deviceRegistration.retryPendingIfNeeded()
+    }
+
+    fun ensureNotificationsAndRegister() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            NotificationPermissionHelper.needsRuntimePermission(context)
+        ) {
+            if (!notificationPermissionRequested) {
+                notificationPermissionRequested = true
+                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                return
+            }
+        }
+        container.deviceRegistration.registerAfterLogin()
+        container.deviceRegistration.retryPendingIfNeeded()
+    }
+
+    fun presentPendingSubscriptionThankYouIfNeeded() {
+        if (!container.sessionStore.pendingSubscriptionThankYouAfterSignup) return
+        container.sessionStore.consumePendingSubscriptionThankYouAfterSignup()
+        scope.launch {
+            container.syncService.invalidateThrottle()
+            delay(450)
+            runCatching { container.authRepository.refreshAccount() }
+            runCatching {
+                container.dashboardRepository.currentSlug()?.let { slug ->
+                    container.syncService.syncIfNeeded(slug, force = true)
+                }
+            }
+            if (container.sessionStore.hasPaidMerchantSubscription()) {
+                showPaymentThankYou = true
+                delay(2400)
+                showPaymentThankYou = false
+            }
+        }
+    }
 
     LaunchedEffect(Unit) {
         rootVm.bootstrap()
     }
 
-    var showEmailSheet by remember { mutableStateOf(false) }
-    var showMerchantOverlay by remember { mutableStateOf(false) }
+    LaunchedEffect(pendingOAuthUri) {
+        val uri = pendingOAuthUri ?: return@LaunchedEffect
+        runCatching {
+            val parsed = GoogleOAuthFlow.parseCallbackUri(uri)
+            container.authRepository.applyGoogleOAuthCallback(parsed).getOrThrow()
+            ensureNotificationsAndRegister()
+            rootVm.onLoggedIn()
+        }.onFailure {
+            snackbarHostState.showSnackbar(it.message ?: "Connexion Google échouée")
+        }
+        onOAuthUriConsumed()
+    }
+
+    LaunchedEffect(rootVm.state) {
+        if (rootVm.state is RootUiState.Main || rootVm.state is RootUiState.AuthLanding) {
+            appUpdateInfo = PlayStoreVersionChecker.check(context)
+        }
+        if (rootVm.state is RootUiState.Main) {
+            presentPendingSubscriptionThankYouIfNeeded()
+        }
+    }
+
+    appUpdateInfo?.let { info ->
+        AppUpdateDialog(
+            info = info,
+            onDismiss = {
+                PlayStoreVersionChecker.dismiss(context, info.storeVersion)
+                appUpdateInfo = null
+            },
+            onOpenStore = {
+                openInCustomTab(context, info.playStoreUrl)
+                PlayStoreVersionChecker.dismiss(context, info.storeVersion)
+                appUpdateInfo = null
+            },
+        )
+    }
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
-    ) { padding ->
+    ) {
         Box(Modifier.fillMaxSize().background(BackgroundLight)) {
-            when (val s = rootVm.state) {
+            AnimatedContent(
+                targetState = rootVm.state,
+                transitionSpec = {
+                    fadeIn(tween(MerchantMotion.TabCrossfadeMs, easing = MerchantMotion.navEasing)) togetherWith
+                        fadeOut(tween(MerchantMotion.TabCrossfadeMs, easing = MerchantMotion.navEasing))
+                },
+                label = "appRootState",
+                modifier = Modifier.fillMaxSize(),
+            ) { state ->
+            when (state) {
                 RootUiState.Loading -> {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         CircularProgressIndicator()
                     }
                 }
-                RootUiState.MerchantEstablishment -> {
-                    val merchantVm: MerchantOnboardingViewModel = viewModel(factory = factory)
-                    MerchantEstablishmentScreen(
-                        viewModel = merchantVm,
-                        showTopBarBack = false,
-                        onBack = null,
-                        onContinue = { p, d, r ->
-                            rootVm.onMerchantEstablishmentFinished(p, d, r)
-                        },
-                        onAlreadyHaveAccount = { rootVm.onMerchantSkipToAuth() },
-                    )
-                }
-                RootUiState.AuthLanding -> {
-                    Box(Modifier.fillMaxSize()) {
-                        AuthLandingScreen(
-                            onContinueWithGoogle = {
+                RootUiState.AuthLanding, RootUiState.MerchantEstablishment -> {
+                    androidx.compose.runtime.key(container.firstLaunchPreferences.restartEpoch) {
+                        WelcomeFlowScreen(
+                            container = container,
+                            onLoggedIn = {
+                                ensureNotificationsAndRegister()
+                                rootVm.onLoggedIn()
+                                presentPendingSubscriptionThankYouIfNeeded()
+                            },
+                            onGoogleSignIn = { signUp ->
                                 scope.launch {
-                                    snackbarHostState.showSnackbar(
-                                        "Connexion Google : branchez votre Web Client ID (comme iOS) puis réessayez. En attendant, utilisez l'e-mail.",
-                                    )
+                                    runCatching {
+                                        val config = container.authRepository.authConfig()
+                                        val url = GoogleOAuthFlow.buildAuthorizationUrl(
+                                            config,
+                                            container.firstLaunchPreferences,
+                                            mode = if (signUp) "sign_up" else "sign_in",
+                                        )
+                                        openInCustomTab(context, url)
+                                    }.onFailure {
+                                        snackbarHostState.showSnackbar(it.message ?: "Connexion Google impossible")
+                                    }
                                 }
                             },
-                            onContinueWithEmail = { showEmailSheet = true },
-                            onCreateAccountChooseEstablishment = {
-                                showMerchantOverlay = true
+                            onAuthError = { msg ->
+                                scope.launch { snackbarHostState.showSnackbar(msg) }
                             },
                         )
-                        if (showMerchantOverlay) {
-                            val overlayVm: MerchantOnboardingViewModel = viewModel(
-                                key = "merchant_overlay",
-                                factory = factory,
-                            )
-                            LaunchedEffect(showMerchantOverlay) {
-                                if (showMerchantOverlay) overlayVm.resetForNewFlow()
-                            }
-                            Box(
-                                Modifier
-                                    .fillMaxSize()
-                                    .background(BackgroundLight),
-                            ) {
-                                MerchantEstablishmentScreen(
-                                    viewModel = overlayVm,
-                                    showTopBarBack = true,
-                                    onBack = { showMerchantOverlay = false },
-                                    onContinue = { p, d, r ->
-                                        container.firstLaunchPreferences.persistPendingEstablishment(p, d, r)
-                                        showMerchantOverlay = false
-                                    },
-                                    onAlreadyHaveAccount = { showMerchantOverlay = false },
-                                )
-                            }
-                        }
                     }
+                }
+                RootUiState.Admin -> {
+                    PlatformAdminRootScreen(
+                        repository = container.dashboardRepository,
+                        sessionStore = container.sessionStore,
+                        onOpenMerchantApp = { rootVm.onOpenMerchantFromAdmin() },
+                    )
                 }
                 RootUiState.Main -> {
                     val dashVm: DashboardViewModel = viewModel(factory = factory)
+                    LaunchedEffect(Unit) {
+                        ensureNotificationsAndRegister()
+                    }
                     MainTabsScreen(
                         container = container,
                         dashboardViewModel = dashVm,
                         snackbarHostState = snackbarHostState,
                         appScope = scope,
                         onLogout = { rootVm.onLogout() },
+                        pendingScanRequest = pendingScanRequest,
+                        onScanRequestConsumed = onScanRequestConsumed,
                     )
+                    PaymentThankYouOverlay(visible = showPaymentThankYou)
                 }
             }
+            }
         }
-    }
-
-    if (showEmailSheet) {
-        val emailVm: EmailAuthViewModel = viewModel(factory = factory)
-        LaunchedEffect(Unit) {
-            emailVm.resetForSheet()
-        }
-        EmailAuthModalSheet(
-            viewModel = emailVm,
-            onDismiss = { showEmailSheet = false },
-            onSuccess = {
-                showEmailSheet = false
-                rootVm.onLoggedIn()
-            },
-        )
     }
 }

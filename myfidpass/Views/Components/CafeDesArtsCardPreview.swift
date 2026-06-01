@@ -63,7 +63,6 @@ struct CafeDesArtsCardPreview: View {
     var onEditZoneTap: ((CardPreviewEditZone) -> Void)? = nil
     /// URL encodée dans le QR (page carte fidélité). Si `nil`, QR de démonstration.
     var fidelityQRPayloadURL: String? = nil
-    /// Pastilles « Configurer » (complétion Ma carte).
     var completionHighlightZones: Set<CardPreviewEditZone> = []
     /// Mode scanner: n'affiche que la grille de tampons.
     var stampsOnly: Bool = false
@@ -181,47 +180,42 @@ struct CafeDesArtsCardPreview: View {
     }
 
     var body: some View {
-        GeometryReader { geo in
-            let w = max(1, geo.size.width.isFinite ? geo.size.width : 1)
-            let corner: CGFloat = compact ? 9 : 14
-            let h: CGFloat = {
-                if stampsOnly {
-                    return Self.stampsOnlyDisplayHeight(cardWidth: w, requiredStamps: requiredStamps, compact: compact)
-                }
-                return max(1, w / walletCardAspectRatio)
-            }()
+        let corner: CGFloat = compact ? 9 : 14
+        let layoutAspect = stampsOnly ? stampsOnlyLayoutAspect : walletCardAspectRatio
 
-            cardContent(cardWidth: w)
-                .frame(width: w, height: h)
-                .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
-                .overlay {
-                    if !completionHighlightZones.isEmpty, let onTap = onEditZoneTap {
-                        CardPreviewCompletionPillsOverlay(
-                            cardWidth: w,
-                            totalHeight: h,
-                            compact: compact,
-                            zones: completionHighlightZones,
-                            layoutStyle: .stampsBannerMetrics,
-                            onTapZone: onTap
+        Color.clear
+            .aspectRatio(layoutAspect, contentMode: .fit)
+            .overlay {
+                GeometryReader { geo in
+                    let w = max(1, geo.size.width.isFinite ? geo.size.width : 1)
+                    let h = max(1, geo.size.height.isFinite ? geo.size.height : 1)
+
+                    cardContent(cardWidth: w)
+                        .transaction { $0.disablesAnimations = true }
+                        .frame(width: w, height: h)
+                        .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
+                        .overlay {
+                            if !completionHighlightZones.isEmpty, let onTap = onEditZoneTap {
+                                CardPreviewCompletionPillsOverlay(
+                                    cardWidth: w,
+                                    totalHeight: h,
+                                    compact: compact,
+                                    zones: completionHighlightZones,
+                                    layoutStyle: hasCardBackground ? .walletPoints : .stampGridInBanner,
+                                    onTapZone: onTap
+                                )
+                                .allowsHitTesting(true)
+                            }
+                        }
+                        .overlay(
+                            RoundedRectangle(cornerRadius: corner, style: .continuous)
+                                .strokeBorder(.white.opacity(0.35), lineWidth: 1)
                         )
-                    }
+                        .shadow(color: .black.opacity(0.32), radius: compact ? 12 : 20, x: 0, y: compact ? 6 : 10)
+                        .frame(width: w, height: h, alignment: .topLeading)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 }
-                .overlay(
-                    RoundedRectangle(cornerRadius: corner, style: .continuous)
-                        .strokeBorder(.white.opacity(0.35), lineWidth: 1)
-                )
-                .shadow(color: .black.opacity(0.25), radius: compact ? 10 : 14, x: 0, y: 6)
-                .frame(maxWidth: .infinity)
-        }
-        .aspectRatio(stampsOnly ? stampsOnlyLayoutAspect : walletCardAspectRatio, contentMode: .fit)
-        .animation(.easeOut(duration: 0.25), value: primaryColorHex)
-        .animation(.easeOut(duration: 0.2), value: stampsCount)
-        .animation(.easeOut(duration: 0.2), value: requiredStamps)
-        .animation(.easeOut(duration: 0.2), value: stampMidRewardLabel)
-        .animation(.easeOut(duration: 0.2), value: stampRewardLabel)
-        .animation(.easeOut(duration: 0.2), value: logoURL)
-        .animation(.easeOut(duration: 0.2), value: stampEmoji)
-        .animation(.easeOut(duration: 0.25), value: cardBackgroundRemoteURL)
+            }
     }
 
     @ViewBuilder
@@ -482,17 +476,8 @@ struct CafeDesArtsCardPreview: View {
 
     @ViewBuilder
     private func logoInStrip(maxWidth: CGFloat, maxHeight: CGFloat, cardWidth: CGFloat) -> some View {
-        let textPrimary = AppTheme.CardPreviewLayout.scaledFont(base: compact ? 18 : 26, cardWidth: cardWidth)
         Group {
-            if stripDisplayMode == "text" {
-                Text(stripText?.trimmingCharacters(in: .whitespaces).isEmpty == false ? (stripText ?? displayName) : (displayName.isEmpty ? "Ma Carte" : displayName))
-                    .font(.system(size: textPrimary, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.leading)
-                    .minimumScaleFactor(0.72)
-                    .frame(maxWidth: maxWidth, maxHeight: maxHeight, alignment: .topLeading)
-            } else if let urlString = logoURL?.trimmingCharacters(in: .whitespaces), !urlString.isEmpty {
+            if let urlString = logoURL?.trimmingCharacters(in: .whitespaces), !urlString.isEmpty {
                 stampLogoImage(from: urlString)
                     .frame(maxWidth: maxWidth, maxHeight: maxHeight, alignment: .topLeading)
                     .clipped()

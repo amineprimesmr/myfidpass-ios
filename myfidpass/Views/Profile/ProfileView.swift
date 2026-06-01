@@ -2,16 +2,11 @@
 //  ProfileView.swift
 //  myfidpass
 //
-//  Onglet Commerce : identité commerçant, formulaire établissement, accès Réglages.
+//  Onglet Commerce : statistiques (menu latéral = Accueil uniquement).
 //
 
 import SwiftUI
 import CoreData
-
-/// Stats : zoom fluide depuis la **barre** (icône graphique) et la **rangée « Statistiques »** (carte).
-private enum CommerceZoomCanvasOverscan {
-    static let inset: CGFloat = 88
-}
 
 struct ProfileView: View {
     @Environment(\.managedObjectContext) private var viewContext
@@ -19,8 +14,9 @@ struct ProfileView: View {
     @EnvironmentObject var authService: AuthService
     @EnvironmentObject var syncService: SyncService
     @EnvironmentObject private var tabRouter: MainTabRouter
+    @Environment(\.merchantTabIsActive) private var merchantTabIsActive
     @Environment(\.isSoftwareKeyboardVisible) private var isSoftwareKeyboardVisible
-    @StateObject private var dataService: DataService
+    @EnvironmentObject private var dataService: DataService
     @State private var organizationName: String = ""
     @State private var settingsSnapshot: BusinessSettingsResponse?
     @State private var flyerLooksCustomized = false
@@ -38,8 +34,7 @@ struct ProfileView: View {
     @State private var didRunInitialCommerceServerLoad = false
     @State private var passiveProfileReloadTask: Task<Void, Never>?
 
-    init(context: NSManagedObjectContext) {
-        _dataService = StateObject(wrappedValue: DataService(context: context))
+    init() {
         /// Premier frame aligné sur le cache disque (évite le passage animé « Créer le flyer » → « Flyer prêt » à chaque arrivée sur Commerce).
         _flyerLooksCustomized = State(initialValue: Self.flyerLooksCustomizedFromDiskCacheIfAvailable())
     }
@@ -53,8 +48,12 @@ struct ProfileView: View {
         return cached.flyerRegistered || hasBootstrap || hasCustomBgFile
     }
 
+    private var profilePalette: DashboardRevolutPalette {
+        DashboardRevolutPalette(colorScheme: colorScheme)
+    }
+
     private var profileCanvas: Color {
-        DashboardRevolutPalette(colorScheme: colorScheme).canvas
+        profilePalette.canvas
     }
 
     private var activeCommerceSlugForRender: String {
@@ -67,68 +66,29 @@ struct ProfileView: View {
 
     private var commerceNavigationStack: some View {
         NavigationStack {
-                ZStack(alignment: .top) {
-                    profileCanvas
-                        .padding(-CommerceZoomCanvasOverscan.inset)
-                        .ignoresSafeArea()
-                    Color.black
-                        .ignoresSafeArea(edges: .top)
-                        .allowsHitTesting(false)
-
-                    ZStack(alignment: .top) {
-                        if mountCommerceStats,
-                           !authService.isBusinessSwitching,
-                           preparedCommerceSlugForRender == activeCommerceSlugForRender {
-                            MerchantStatisticsDashboardScreen(
-                                glassOverlayPresentation: false,
-                                onOverlayDismiss: {},
-                                showsInlineCloseButton: false,
-                                showsTopTitle: false,
-                                hidesTabBar: false
-                            )
-                            .id("commerce-stats-\(activeCommerceSlugForRender)")
-                            .padding(.top, DashboardHomeMinimalTopBarLayout.scrollContentTopInset)
-                            .environment(\.managedObjectContext, viewContext)
-                        } else {
-                            VStack(spacing: 10) {
-                                ProgressView()
-                                    .tint(.white)
-                                Text("Chargement des statistiques…")
-                                    .font(.system(size: 13, weight: .semibold))
-                                    .foregroundStyle(.white.opacity(0.75))
-                            }
-                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                            .padding(.top, 96)
-                        }
-
-                        VStack(spacing: 0) {
-                            commerceTopBar
-                            Color.clear
-                                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                                .allowsHitTesting(false)
-                        }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            MerchantTabScaffold(
+                panelBackground: profileCanvas,
+                topBar: { commerceTopBar },
+                panel: { commerceStatsPanel }
+            )
+            .overlay {
+                if syncService.isSyncing && organizationName.isEmpty {
+                    VStack {
+                        ProgressView()
+                            .scaleEffect(1.2)
+                            .tint(AppTheme.Colors.primary)
+                        Spacer()
                     }
-
-                    if syncService.isSyncing && organizationName.isEmpty {
-                        VStack {
-                            ProgressView()
-                                .scaleEffect(1.2)
-                                .tint(AppTheme.Colors.primary)
-                            Spacer()
-                        }
-                        .padding(.top, 120)
-                    }
+                    .padding(.top, DashboardHomeMinimalTopBarLayout.scrollPanelTopOffset + 40)
+                    .allowsHitTesting(false)
                 }
             }
+        }
             .toolbar(.hidden, for: .navigationBar)
             .onAppear {
                 loadProfile()
                 hydrateCommerceFromDiskCache()
-                // Ne pas monter `MerchantStatisticsDashboardScreen` tant que l’onglet Commerce n’est pas choisi :
-                // sinon le TabView précharge souvent cet onglet au cold start → GPU/WebKit + navigation SwiftUI se battent
-                // avec l’accueil (« NavigationRequestObserver… », gel au lancement).
-                if tabRouter.selectedTab == 2 {
+                if merchantTabIsActive {
                     if !mountCommerceStats {
                         preparedCommerceSlugForRender = activeCommerceSlugForRender
                         mountCommerceStats = true
@@ -147,26 +107,27 @@ struct ProfileView: View {
             .onChange(of: flyerLooksCustomized) { _, _ in
                 Task { await NotificationsService.shared.refreshMerchantCardSetupReminder() }
             }
-            .onChange(of: tabRouter.selectedTab) { _, newTab in
-                if newTab == 2 {
+            .onChange(of: merchantTabIsActive) { _, active in
+                if active {
                     if !mountCommerceStats {
                         preparedCommerceSlugForRender = activeCommerceSlugForRender
                         mountCommerceStats = true
                     }
                     schedulePassiveProfileReload()
+                } else {
+                    passiveProfileReloadTask?.cancel()
+                    passiveProfileReloadTask = nil
                 }
             }
             .onChange(of: activeCommerceSlugForRender) { oldSlug, newSlug in
                 guard oldSlug != newSlug else { return }
-                // Changement commerce: purge des états visuels transitoires pour éviter le mélange d'UI.
                 settingsSnapshot = nil
                 mountCommerceStats = false
                 preparedCommerceSlugForRender = ""
                 Task { @MainActor in
                     await Task.yield()
                     preparedCommerceSlugForRender = newSlug
-                    // Ne remonter les stats que si l’utilisateur est sur l’onglet Commerce (évite arbre lourd en arrière-plan).
-                    if tabRouter.selectedTab == 2 {
+                    if merchantTabIsActive {
                         mountCommerceStats = true
                     }
                     schedulePassiveProfileReload()
@@ -183,16 +144,48 @@ struct ProfileView: View {
             }
     }
 
+    @ViewBuilder
+    private var commerceStatsPanel: some View {
+        if mountCommerceStats,
+           !authService.isBusinessSwitching,
+           preparedCommerceSlugForRender == activeCommerceSlugForRender {
+            MerchantStatisticsDashboardScreen(
+                glassOverlayPresentation: false,
+                onOverlayDismiss: {},
+                showsInlineCloseButton: false,
+                showsTopTitle: false,
+                hidesTabBar: false
+            )
+            .id("commerce-stats-\(activeCommerceSlugForRender)")
+            .environment(\.managedObjectContext, viewContext)
+        } else {
+            VStack(spacing: 10) {
+                ProgressView()
+                    .tint(AppTheme.Colors.primary)
+                Text("Chargement des statistiques…")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(profilePalette.onCanvasSecondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .padding(.top, 24)
+        }
+    }
+
     private var commerceTopBar: some View {
         DashboardHomeMinimalTopBar(
-            title: "Votre commerce",
-            merchantName: organizationName,
+            title: "Statistiques",
+            merchantName: organizationName.isEmpty ? "Mon commerce" : organizationName,
             accountEmail: authService.currentUserEmail ?? AuthStorage.userEmail,
             notificationIconURL: settingsSnapshot?.notificationIconUrl,
             hasNotificationIcon: hasCommerceNotificationIconConfigured,
-            businesses: authService.businesses,
+            businesses: authService.businessesForMerchantSwitcher,
             activeBusinessSlug: AuthStorage.currentBusinessSlug,
-            canCreateBusiness: authService.canCreateBusiness,
+            canCreateBusiness: authService.isPlatformAdmin ? false : authService.canCreateBusiness,
+            isPlatformAdminAllCommercesMode: authService.isPlatformAdmin,
+            onOpenAdministration: authService.isPlatformAdmin ? { authService.returnToPlatformAdministrationHub() } : nil,
+            onBusinessSwitcherWillOpen: authService.isPlatformAdmin ? {
+                Task { await authService.refreshPlatformAdminBusinesses(force: true) }
+            } : nil,
             onSelectBusiness: { slug in
                 settingsSnapshot = nil
                 mountCommerceStats = false
@@ -212,7 +205,11 @@ struct ProfileView: View {
                 NotificationCenter.default.post(name: .myfidpassOpenAddCommerceSheet, object: nil)
             },
             onUpgradeCommerceQuota: {
-                NotificationCenter.default.post(name: .myfidpassOpenMerchantSubscriptionSheet, object: nil)
+                NotificationCenter.default.postOpenMerchantSubscription(
+                    usedBusinesses: authService.usedBusinesses,
+                    allowedBusinesses: authService.allowedBusinesses,
+                    addingAnotherCommerce: true
+                )
             }
         )
     }
@@ -304,7 +301,6 @@ struct ProfileView: View {
         isLoadingProfileFromServer = true
         defer { isLoadingProfileFromServer = false }
         do {
-            // Parallélise les deux GET (settings + flyer) — économise 1-3 s de latence séquentielle.
             async let settingsTask: BusinessSettingsResponse = APIClient.shared.request(APIEndpoint.businessSettings(slug: slug))
             async let flyerTask: DashboardFlyerGetResponse = APIClient.shared.request(APIEndpoint.dashboardFlyerGet(slug: slug))
             let (settings, flyer) = try await (settingsTask, flyerTask)
@@ -312,9 +308,6 @@ struct ProfileView: View {
                 settingsSnapshot = settings
                 ScanFlowSettingsCache.store(settings, for: slug)
                 prewarmCommerceNotificationIconIfPossible(for: settings)
-                // Le GET peut retourner des données stale juste après un PUT réussi.
-                // On prend le max (OR) avec le cache local pour ne pas rétrograder un état
-                // flyerRegistered=true qu'on vient de persister.
                 let cacheRegistered = CommerceFlyerStore.shared.snapshot(for: slug)?.flyerRegistered ?? false
                 flyerLooksCustomized = flyer.commerceIndicatesFlyerRegistered || cacheRegistered
                 let trimmedShare = (flyer.shareUrl ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -337,6 +330,16 @@ struct ProfileView: View {
                 )
                 if newBootstrapB64 == nil, !priorBootstrap.isEmpty {
                     newBootstrapB64 = priorBootstrap
+                }
+                if let built = newBootstrapB64?.trimmingCharacters(in: .whitespacesAndNewlines), !built.isEmpty,
+                   let fb = fallbackState ?? FlyerBootstrapPreviewPayloadBuilder.flyerStateFromBootstrapBase64(built)
+                {
+                    let repaired = FlyerBootstrapPreviewPayloadBuilder.repairBootstrapBase64IfSparseFlyerState(
+                        built,
+                        resolvedState: fb,
+                        businessSlug: slug
+                    )
+                    newBootstrapB64 = repaired
                 }
                 commerceFlyerBootstrapPreviewB64 = newBootstrapB64
                 let engagement = engagementStepDone(from: settings)
@@ -421,8 +424,10 @@ private extension View {
 }
 
 #Preview {
-    ProfileView(context: PersistenceController.preview.container.viewContext)
+    let container = PersistenceController.preview.container
+    ProfileView()
+        .environmentObject(DataService(context: container.viewContext))
         .environmentObject(AuthService())
-        .environmentObject(SyncService(container: PersistenceController.preview.container))
+        .environmentObject(SyncService(container: container))
         .environmentObject(MainTabRouter())
 }

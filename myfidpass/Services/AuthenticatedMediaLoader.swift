@@ -199,4 +199,23 @@ enum AuthenticatedMediaLoader {
         let cap: CGFloat = isBackground ? 1800 : 1000
         _ = try? await loadAuthenticatedImage(from: url, maxPixelDimension: cap)
     }
+
+    /// Logo bandeau, fond carte et icône tampon (URLs API authentifiées).
+    static func prefetchCardAssets(logoURLString: String, backgroundURLString: String?, stampIconURLString: String? = nil) async {
+        let logo = logoURLString.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !logo.isEmpty, let u = APIResourceURL.resolved(from: logo),
+           APIResourceURL.isOurAPIHost(u), u.path.hasSuffix("/logo") {
+            await prefetch(url: MerchantLogoAssetCache.stripeLogoDisplayURL(u))
+        }
+        if let bg = backgroundURLString?.trimmingCharacters(in: .whitespacesAndNewlines), !bg.isEmpty,
+           let u = APIResourceURL.resolved(from: bg),
+           APIResourceURL.isOurAPIHost(u), u.path.contains("card-background") {
+            await prefetch(url: u)
+        }
+        if let st = stampIconURLString?.trimmingCharacters(in: .whitespacesAndNewlines), !st.isEmpty,
+           let u = APIResourceURL.resolved(from: st),
+           APIResourceURL.isOurAPIHost(u) {
+            await prefetch(url: u)
+        }
+    }
 }

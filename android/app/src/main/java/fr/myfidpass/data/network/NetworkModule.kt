@@ -1,32 +1,25 @@
 package fr.myfidpass.data.network
 
-import retrofit2.converter.kotlinx.serialization.asConverterFactory
 import fr.myfidpass.BuildConfig
-import fr.myfidpass.data.dto.AuthRefreshResponse
-import fr.myfidpass.data.dto.RefreshRequest
+import fr.myfidpass.core.auth.RefreshTokenCoordinator
+import fr.myfidpass.core.auth.RefreshTokenOutcome
 import fr.myfidpass.data.local.SessionStore
-import kotlinx.serialization.encodeToString
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Interceptor
-import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
-import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
+import retrofit2.converter.kotlinx.serialization.asConverterFactory
+import okhttp3.MediaType.Companion.toMediaType
 import java.util.concurrent.TimeUnit
 
 class NetworkModule(
     baseUrl: String,
     private val sessionStore: SessionStore,
+    refreshCoordinator: RefreshTokenCoordinator,
 ) {
-    private val refreshLock = Any()
     private val httpUrl = baseUrl.toHttpUrl()
-
-    private val refreshClient: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(60, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
-        .writeTimeout(60, TimeUnit.SECONDS)
-        .build()
+    private val refreshCoordinator = refreshCoordinator
 
     private val logging = HttpLoggingInterceptor().apply {
         level = if (BuildConfig.DEBUG) HttpLoggingInterceptor.Level.BODY else HttpLoggingInterceptor.Level.NONE
@@ -42,10 +35,11 @@ class NetworkModule(
         if (token.isNullOrEmpty()) {
             return@Interceptor chain.proceed(req)
         }
-        val next = req.newBuilder()
-            .header("Authorization", "Bearer $token")
-            .build()
-        chain.proceed(next)
+        chain.proceed(
+            req.newBuilder()
+                .header("Authorization", "Bearer $token")
+                .build(),
+        )
     }
 
     private val dashboardInterceptor = Interceptor { chain ->
@@ -61,67 +55,66 @@ class NetworkModule(
         chain.proceed(req.newBuilder().header("X-Dashboard-Token", dash).build())
     }
 
+    /** Refresh proactif avant requête — aligné iOS `ensureValidAccessToken()`. */
+    private val proactiveRefreshInterceptor = Interceptor { chain ->
+        val path = chain.request().url.encodedPath
+        if (path !in NoAuthPaths && path !in AuthPathsExemptFrom401Refresh) {
+            refreshCoordinator.ensureValidAccessTokenSync()
+        }
+        chain.proceed(chain.request())
+    }
+
     private val refreshInterceptor = Interceptor { chain ->
         val request = chain.request()
+        val path = request.url.encodedPath
         var response = chain.proceed(request)
         if (response.code != 401) return@Interceptor response
-        val path = request.url.encodedPath
-        if (path.startsWith("/api/auth/")) {
+        if (path in AuthPathsExemptFrom401Refresh) {
             return@Interceptor response
         }
         if (request.header("X-Retry") == "1") {
             return@Interceptor response
         }
         response.close()
-        synchronized(refreshLock) {
-            val rt = sessionStore.refreshToken
-            if (rt.isNullOrEmpty()) {
-                sessionStore.clearSession()
-                return@Interceptor chain.proceed(
-                    request.newBuilder().header("X-Retry", "1").build(),
-                )
+
+        val outcome = refreshCoordinator.refreshSync(force = true)
+        when (outcome) {
+            RefreshTokenOutcome.Success -> {
+                val newToken = sessionStore.accessToken
+                if (newToken.isNullOrEmpty()) {
+                    return@Interceptor chain.proceed(request.newBuilder().header("X-Retry", "1").build())
+                }
+                val retry = request.newBuilder()
+                    .header("Authorization", "Bearer $newToken")
+                    .removeHeader("X-Retry")
+                    .build()
+                return@Interceptor chain.proceed(retry)
             }
-            val bodyStr = jsonNet.encodeToString(RefreshRequest(refreshToken = rt))
-            val refreshUrl = httpUrl.resolve("/api/auth/refresh")!!
-            val refreshReq = okhttp3.Request.Builder()
-                .url(refreshUrl)
-                .post(bodyStr.toRequestBody("application/json".toMediaType()))
-                .header("Content-Type", "application/json")
-                .header("Accept", "application/json")
-                .build()
-            val r = refreshClient.newCall(refreshReq).execute()
-            if (!r.isSuccessful) {
-                r.close()
-                sessionStore.clearSession()
+            RefreshTokenOutcome.TransientFailure -> {
+                if (fr.myfidpass.core.auth.JwtAccessExpiry.stillWithinValidityWindow(sessionStore.accessToken)) {
+                    val token = sessionStore.accessToken
+                    if (!token.isNullOrEmpty()) {
+                        val retry = request.newBuilder()
+                            .header("Authorization", "Bearer $token")
+                            .header("X-Retry", "1")
+                            .build()
+                        return@Interceptor chain.proceed(retry)
+                    }
+                }
                 return@Interceptor chain.proceed(request.newBuilder().header("X-Retry", "1").build())
             }
-            val respBody = r.body?.string()
-            r.close()
-            if (respBody.isNullOrEmpty()) {
-                sessionStore.clearSession()
+            RefreshTokenOutcome.InvalidToken,
+            RefreshTokenOutcome.MissingRefreshToken,
+            -> {
+                refreshCoordinator.terminateSessionIfAppropriate(outcome)
                 return@Interceptor chain.proceed(request.newBuilder().header("X-Retry", "1").build())
             }
-            val refreshed = try {
-                jsonNet.decodeFromString<AuthRefreshResponse>(respBody)
-            } catch (_: Exception) {
-                sessionStore.clearSession()
-                return@Interceptor chain.proceed(request.newBuilder().header("X-Retry", "1").build())
-            }
-            sessionStore.applyRefreshResponse(refreshed)
-            val newToken = sessionStore.accessToken
-            if (newToken.isNullOrEmpty()) {
-                return@Interceptor chain.proceed(request.newBuilder().header("X-Retry", "1").build())
-            }
-            val retry = request.newBuilder()
-                .header("Authorization", "Bearer $newToken")
-                .removeHeader("X-Retry")
-                .build()
-            return@Interceptor chain.proceed(retry)
         }
     }
 
     private val okHttp: OkHttpClient = OkHttpClient.Builder()
         .addInterceptor(logging)
+        .addInterceptor(proactiveRefreshInterceptor)
         .addInterceptor(authInterceptor)
         .addInterceptor(dashboardInterceptor)
         .addInterceptor(refreshInterceptor)
@@ -150,6 +143,24 @@ class NetworkModule(
             "/api/places/details",
             "/api/auth/google",
             "/api/auth/apple",
+            "/api/auth/check-identifier",
+            "/api/auth/email/send-code",
+            "/api/auth/email/verify",
+        )
+
+        /** 401 sur ces routes ne déclenche pas de refresh (login, refresh lui-même…). `/api/auth/me` est refreshable. */
+        private val AuthPathsExemptFrom401Refresh = setOf(
+            "/api/auth/login",
+            "/api/auth/register",
+            "/api/auth/refresh",
+            "/api/auth/config",
+            "/api/auth/forgot-password",
+            "/api/auth/reset-password",
+            "/api/auth/google",
+            "/api/auth/apple",
+            "/api/auth/check-identifier",
+            "/api/auth/email/send-code",
+            "/api/auth/email/verify",
         )
 
         private fun extractBusinessSlug(path: String): String? {

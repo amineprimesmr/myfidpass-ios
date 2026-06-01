@@ -64,20 +64,16 @@ struct CommerceStatsCategoryListCard: View {
                 if raw.hasPrefix("+") { return String(raw.dropFirst()) }
                 return raw
             }()
-            Button {
-                onRowTap?(row.id)
-            } label: {
-                CommerceStatsLargeMetricCard(
-                    title: row.title,
-                    value: sanitizedValue,
-                    valueCaption: nil,
-                    subtitle: row.subtitle,
-                    membersWeeklySparkline: detail.sparkline,
-                    segments: [],
-                    onTap: nil,
-                    chartLineColor: CommerceStatisticsTheme.accentBlue
-                )
-            }
+            CommerceStatsLargeMetricCard(
+                title: row.title,
+                value: sanitizedValue,
+                valueCaption: nil,
+                subtitle: row.subtitle,
+                membersWeeklySparkline: detail.sparkline,
+                segments: [],
+                onTap: nil,
+                chartLineColor: CommerceStatisticsTheme.accentBlue
+            )
         } else if let detail = row.rewardsUsedDetail, row.id == "rewards" {
             CommerceStatsRewardsUsedListButtonRow(
                 row: row,
@@ -90,12 +86,15 @@ struct CommerceStatsCategoryListCard: View {
                 detail: detail,
                 onRowTap: { onRowTap?(row.id) }
             )
-        } else {
+        } else if onRowTap != nil {
             Button {
                 onRowTap?(row.id)
             } label: {
                 categoryRowContent(row: row)
             }
+            .buttonStyle(.plain)
+        } else {
+            categoryRowContent(row: row)
         }
     }
 
@@ -222,18 +221,12 @@ private struct CommerceStatsDataTileModifier: ViewModifier {
 
     @ViewBuilder
     func body(content: Content) -> some View {
-        if #available(iOS 26.0, *) {
-            content
-                .glassEffect(.clear, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-                .controlSize(controlSize)
-        } else {
-            content
-                .commerceStatsLiquidGlassTileButton(
-                    cornerRadius: cornerRadius,
-                    controlSize: controlSize,
-                    useStatic3DSurface: useStatic3DSurface
-                )
-        }
+        content
+            .commerceStatsLiquidGlassTileButton(
+                cornerRadius: cornerRadius,
+                controlSize: controlSize,
+                useStatic3DSurface: useStatic3DSurface
+            )
     }
 }
 
@@ -279,7 +272,7 @@ private struct CommerceStatsGoogleReviewsCard: View {
                 Text(row.title)
                     .font(CommerceStatisticsTheme.kpiTileTitleFont())
                     .foregroundStyle(CommerceStatisticsTheme.kpiTileTitleGradient(forGlassOverlay: g))
-                Text("Suivi mensuel des nouveaux avis")
+                Text("Missions avis validées sur la période")
                     .font(CommerceStatisticsTheme.statsText(size: 12, weight: .medium))
                     .foregroundStyle(CommerceStatisticsTheme.onCardSecondary(forGlassOverlay: g))
             }
@@ -333,7 +326,7 @@ private struct CommerceStatsGoogleReviewsCard: View {
 
         return VStack(alignment: .leading, spacing: 10) {
             impactMetricRow(
-                label: "Nouveaux ce mois",
+                label: "Validations ce mois",
                 valueText: "+\(StatsFR.formatInt(monthValue))",
                 ratio: CGFloat(Double(monthValue) / Double(maxMonth)),
                 reveal: 1,
@@ -672,5 +665,65 @@ struct CommerceStatsSectionHeader: View {
             }
         }
         .padding(.horizontal, 4)
+    }
+}
+
+// MARK: - Connecter les réseaux (liquid glass)
+
+struct CommerceStatsConnectNetworksButton: View {
+    @Environment(\.commerceStatsGlassOverlay) private var commerceStatsGlassOverlay
+
+    let subtitle: String
+    var glassOverlayMode: Bool = false
+    let action: () -> Void
+
+    private var g: Bool { commerceStatsGlassOverlay || glassOverlayMode }
+    private let cornerRadius = CommerceStatsIndicatorLiquidGlass.kpiCornerRadius
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 14) {
+            networkIconBadge
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Connecter mes réseaux")
+                    .font(CommerceStatisticsTheme.statsText(size: 16, weight: .semibold))
+                    .foregroundStyle(CommerceStatisticsTheme.onCardPrimary(forGlassOverlay: g))
+                Text(subtitle)
+                    .font(CommerceStatisticsTheme.statsText(size: 13, weight: .medium))
+                    .foregroundStyle(CommerceStatisticsTheme.onCardSecondary(forGlassOverlay: g))
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+            }
+            Spacer(minLength: 8)
+            Image(systemName: "chevron.right")
+                .font(CommerceStatisticsTheme.statsText(size: 13, weight: .bold))
+                .foregroundStyle(CommerceStatisticsTheme.onCardSecondary(forGlassOverlay: g).opacity(0.85))
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .commerceStatsKpiLiquidGlassButton(action: action, cornerRadius: cornerRadius, controlSize: .large)
+        .accessibilityLabel("Connecter mes réseaux")
+        .accessibilityHint(subtitle)
+    }
+
+    private var networkIconBadge: some View {
+        ZStack {
+            Circle()
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            CommerceStatisticsTheme.accentBlue.opacity(g ? 0.35 : 0.22),
+                            CommerceStatisticsTheme.accentBlue.opacity(g ? 0.12 : 0.08),
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+            Image(systemName: "link.circle.fill")
+                .font(.system(size: 22, weight: .semibold))
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(CommerceStatisticsTheme.accentBlue)
+        }
+        .frame(width: 44, height: 44)
     }
 }
