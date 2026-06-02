@@ -1,8 +1,27 @@
-MyFidpass aide les commerçants à fidéliser leurs clients avec des cartes de fidélité digitales (Apple Wallet et Google Wallet) : création de carte, scans QR, membres, notifications et statistiques.
+MyFidpass est l’application mobile pour commerçants qui veulent lancer ou gérer un programme de fidélité moderne — sans carte papier.
 
-Fonctionnalités : tableau de bord, scanner, campagnes, multi-commerces (forfaits 1 à 5 établissements), carte personnalisable, intégration Google Business.
+Créez une carte personnalisée (logo, couleurs, récompenses), vos clients l’ajoutent dans Google Wallet ou Apple Wallet, et vous gérez tout depuis votre téléphone.
 
-Abonnement MyFidpass Pro via paiement sécurisé (Stripe). Essai promotionnel 1 € le premier mois, puis tarif affiché sur le paywall avant souscription.
+FONCTIONNALITÉS PRINCIPALES
 
-Conditions d'utilisation : https://www.myfidpass.fr/cgu
+• Carte fidélité digitale — mode points ou tampons, entièrement personnalisable
+• Scanner QR — créditez des points ou des tampons en boutique en quelques secondes
+• Membres — liste, recherche, historique et segmentation
+• Tableau de bord — statistiques et activité de votre programme
+• Campagnes — notifications push pour relancer vos clients
+• Multi-commerces — gérez plusieurs établissements selon votre forfait
+• Google Wallet — testez et partagez la carte fidélité de votre commerce
+
+POUR QUI ?
+
+Restaurants, cafés, salons, boutiques et commerces de proximité qui veulent fidéliser simplement, sans matériel coûteux.
+
+ABONNEMENT
+
+L’application est gratuite à télécharger. L’abonnement MyFidpass Pro (fonctionnalités avancées) est souscrit via un paiement sécuré sur myfidpass.fr (Stripe). Le tarif et la durée sont affichés avant tout paiement. Pas d’achat via Google Play Billing.
+
+LÉGAL
+
+Conditions d’utilisation : https://www.myfidpass.fr/cgu
 Politique de confidentialité : https://www.myfidpass.fr/politique-confidentialite
+Support : support@myfidpass.fr

@@ -11,7 +11,7 @@ enum MyCardProgramDefaults {
     static let pointsTierCount = MyCardPointsRewardTiers.slotCount
     static let signupRewardPoints = 10
 
-    /// Sépare le palier 10 pts (début du jeu) des 5 paliers éditables affichés dans Ma carte.
+    /// Sépare les paliers API : le palier 10 pts va dans la 1ʳᵉ ligne éditable (plus de ligne « Début du jeu » séparée).
     static func splitPointsTiersFromAPI(
         _ tiers: [PointsRewardTierDTO]?,
         apiStartGameLabel: String?
@@ -28,7 +28,17 @@ enum MyCardProgramDefaults {
             guard !lab.isEmpty else { continue }
             if t.points == signupRewardPoints {
                 if startGame.isEmpty { startGame = lab }
+                if ptsOut[0].trimmingCharacters(in: .whitespaces).isEmpty {
+                    ptsOut[0] = String(signupRewardPoints)
+                    labsOut[0] = lab
+                }
                 continue
+            }
+            if slot == 0, !ptsOut[0].trimmingCharacters(in: .whitespaces).isEmpty {
+                slot = 1
+            }
+            while slot < pointsTierCount, !ptsOut[slot].trimmingCharacters(in: .whitespaces).isEmpty {
+                slot += 1
             }
             guard slot < pointsTierCount else { continue }
             ptsOut[slot] = String(t.points)
@@ -38,18 +48,43 @@ enum MyCardProgramDefaults {
         if startGame.isEmpty {
             startGame = "Boisson offerte"
         }
+        if ptsOut[0].trimmingCharacters(in: .whitespaces).isEmpty {
+            ptsOut[0] = String(signupRewardPoints)
+            labsOut[0] = startGame
+        }
         sanitizeEditableTierSlots(tierPoints: &ptsOut, tierLabels: &labsOut)
+        syncStartGameLabelFromFirstTier(
+            startGameRewardLabel: &startGame,
+            tierPoints: ptsOut,
+            tierLabels: labsOut
+        )
         return (startGame, ptsOut, labsOut)
     }
 
-    /// Retire tout palier 10 pts des cases éditables (réservé à « Début du jeu »).
+    /// Retire les doublons 10 pts hors 1ʳᵉ ligne.
     static func sanitizeEditableTierSlots(tierPoints: inout [String], tierLabels: inout [String]) {
-        for i in 0..<min(pointsTierCount, tierPoints.count) {
+        for i in 1..<min(pointsTierCount, tierPoints.count) {
             if Int(tierPoints[i].trimmingCharacters(in: .whitespaces)) == signupRewardPoints {
                 tierPoints[i] = ""
                 if i < tierLabels.count { tierLabels[i] = "" }
             }
         }
+    }
+
+    /// Aligne `startGameRewardLabel` sur la 1ʳᵉ ligne si elle vaut 10 pts (champ API legacy).
+    static func syncStartGameLabelFromFirstTier(
+        startGameRewardLabel: inout String,
+        tierPoints: [String],
+        tierLabels: [String]
+    ) {
+        let ptsStr = tierPoints.first?.trimmingCharacters(in: .whitespaces) ?? ""
+        if Int(ptsStr) == signupRewardPoints {
+            let lab = tierLabels.first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !lab.isEmpty {
+                startGameRewardLabel = lab
+            }
+        }
+        ensureStartGameRewardLabel(&startGameRewardLabel)
     }
 
     /// Valeur par défaut si le commerçant n’a pas saisi le libellé (placeholder UI ≠ valeur enregistrée).
@@ -59,21 +94,41 @@ enum MyCardProgramDefaults {
         }
     }
 
-    /// Payload API : palier 10 pts + paliers saisis (sans doublon 10 pts).
+    private static func resolvedSignupRewardLabel(
+        startGameRewardLabel: String,
+        tierPoints: [String],
+        tierLabels: [String]
+    ) -> String {
+        let ptsStr = tierPoints.first?.trimmingCharacters(in: .whitespaces) ?? ""
+        if Int(ptsStr) == signupRewardPoints {
+            let lab = tierLabels.first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !lab.isEmpty {
+                return String(lab.prefix(120))
+            }
+        }
+        var startLab = startGameRewardLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+        if startLab.isEmpty { startLab = "Boisson offerte" }
+        return String(startLab.prefix(120))
+    }
+
+    /// Payload API : palier 10 pts (1ʳᵉ ligne) + paliers saisis (sans doublon 10 pts).
     static func buildPointsRewardTiersForAPI(
         startGameRewardLabel: String,
         tierPoints: [String],
         tierLabels: [String]
     ) -> [PointsRewardTierPayload] {
         var tiers: [PointsRewardTierPayload] = []
-        var startLab = startGameRewardLabel.trimmingCharacters(in: .whitespacesAndNewlines)
-        if startLab.isEmpty { startLab = "Boisson offerte" }
-        tiers.append(PointsRewardTierPayload(points: signupRewardPoints, label: String(startLab.prefix(120))))
+        let signupLabel = resolvedSignupRewardLabel(
+            startGameRewardLabel: startGameRewardLabel,
+            tierPoints: tierPoints,
+            tierLabels: tierLabels
+        )
+        tiers.append(PointsRewardTierPayload(points: signupRewardPoints, label: signupLabel))
         for i in 0..<pointsTierCount {
             let ptsStr = tierPoints.indices.contains(i) ? tierPoints[i].trimmingCharacters(in: .whitespaces) : ""
             let lab = tierLabels.indices.contains(i) ? tierLabels[i].trimmingCharacters(in: .whitespaces) : ""
             guard let pts = Int(ptsStr), pts >= 0, !lab.isEmpty else { continue }
-            if pts == signupRewardPoints, !startLab.isEmpty { continue }
+            if pts == signupRewardPoints { continue }
             tiers.append(PointsRewardTierPayload(points: pts, label: String(lab.prefix(120))))
         }
         tiers.sort { $0.points < $1.points }
@@ -87,7 +142,8 @@ enum MyCardProgramDefaults {
         while pts.count < pointsTierCount { pts.append("") }
         while labs.count < pointsTierCount { labs.append("") }
 
-        let complete = (0..<pointsTierCount).allSatisfy { i in
+        let minRequired = MyCardPointsRewardTiers.minVisibleCount
+        let complete = (0..<minRequired).allSatisfy { i in
             let p = pts[i].trimmingCharacters(in: .whitespaces)
             let lab = labs[i].trimmingCharacters(in: .whitespaces)
             return Int(p) != nil && !lab.isEmpty
@@ -98,14 +154,16 @@ enum MyCardProgramDefaults {
             return
         }
 
-        tierPoints = ["50", "100", "150", "200", "250"]
-        tierLabels = [
+        let defaultsPts = ["10", "50", "100", "150", "200"]
+        let defaultsLabs = [
+            "Boisson offerte",
             "Un café offert",
             "Un dessert offert",
             "10 % de réduction",
             "15 % de réduction",
-            "Un repas offert",
         ]
+        tierPoints = defaultsPts + Array(repeating: "", count: max(0, pointsTierCount - defaultsPts.count))
+        tierLabels = defaultsLabs + Array(repeating: "", count: max(0, pointsTierCount - defaultsLabs.count))
     }
 
     /// Remplit les récompenses tampons si vides (ex. passage Points → Tampons).

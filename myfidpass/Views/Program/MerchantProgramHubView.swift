@@ -205,6 +205,13 @@ private struct ProgramFlyerTabRoot: View {
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
             model.persistUnsavedFlyerSessionDraftIfNeeded()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .myfidpassMatchPredictionsConfigDidSave)) { note in
+            guard let s = note.userInfo?["slug"] as? String, s == slug else { return }
+            if let on = note.userInfo?["enabled"] as? Bool {
+                model.applyMatchPredictionsEnabledForPreview(on)
+            }
+            Task { await model.load(showProgress: false) }
+        }
         .task(id: slug) {
             if seedRecreateFlyer {
                 CommerceFlyerEditorDraftStore.clear(slug: slug)
@@ -375,6 +382,8 @@ private final class ProgramFlyerEditorModel: ObservableObject {
     @Published var flyerAiGenerationsRemaining: Int = 3
     /// Créations flyer illimitées si renvoyé ainsi par l’API (offre / compte).
     @Published var flyerAiUnlimited: Bool = false
+    /// Challenge pronostics activé — bandeau flyer « Pronostiquez et gagnez » (fond stade).
+    @Published private(set) var matchPredictionsEnabled: Bool = false
 
     private var isUndoRedoOrLoad = false
     private var undoStack: [FlyerEditSnapshot] = []
@@ -467,6 +476,9 @@ private final class ProgramFlyerEditorModel: ObservableObject {
         var st = stateFromPayload
         st.normalizeClamps()
         st = FlyerWheelWebEmbedPreviewMigration.normalizedStateForPreview(st, businessSlug: slug)
+        let draftHasBg = !(meta.customBgDataURL?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+            || !(jsonBg?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+        st.repairLegacyNativeBgFlattenedGradientIfNeeded(hasNativeBackground: draftHasBg)
         isUndoRedoOrLoad = true
         state = st
         shareUrl = share
@@ -501,6 +513,7 @@ private final class ProgramFlyerEditorModel: ObservableObject {
             serverUpdatedAt = (root["updated_at"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? nil
         }
         refreshPreviewBootstrap()
+        persistRepairedCommerceFlyerCacheIfNeeded()
         undoStack.removeAll()
         redoStack.removeAll()
         return true
@@ -574,6 +587,9 @@ private final class ProgramFlyerEditorModel: ObservableObject {
         var st = stateFromPayload
         st.normalizeClamps()
         st = FlyerWheelWebEmbedPreviewMigration.normalizedStateForPreview(st, businessSlug: slug)
+        st.repairLegacyNativeBgFlattenedGradientIfNeeded(
+            hasNativeBackground: !(snapBg.isEmpty) || !(bg?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+        )
         isUndoRedoOrLoad = true
         state = st
         shareUrl = share
@@ -588,6 +604,7 @@ private final class ProgramFlyerEditorModel: ObservableObject {
         isUndoRedoOrLoad = false
         suppressDashboardCustomLogoForPreview = logo?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
         refreshPreviewBootstrap()
+        persistRepairedCommerceFlyerCacheIfNeeded()
         return true
     }
 
@@ -617,6 +634,10 @@ private final class ProgramFlyerEditorModel: ObservableObject {
         var st = stateFromDisk
         st.normalizeClamps()
         st = FlyerWheelWebEmbedPreviewMigration.normalizedStateForPreview(st, businessSlug: slug)
+        st.repairLegacyNativeBgFlattenedGradientIfNeeded(
+            hasNativeBackground: !(loaded.customBgDataURL?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+                || !(bg?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+        )
         isUndoRedoOrLoad = true
         state = st
         shareUrl = share
@@ -631,6 +652,7 @@ private final class ProgramFlyerEditorModel: ObservableObject {
         isUndoRedoOrLoad = false
         suppressDashboardCustomLogoForPreview = logo?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
         refreshPreviewBootstrap()
+        persistRepairedCommerceFlyerCacheIfNeeded()
         return true
     }
 
@@ -940,6 +962,12 @@ private final class ProgramFlyerEditorModel: ObservableObject {
         )
     }
 
+    /// Mise à jour immédiate du bandeau flyer après activation/désactivation des pronostics (sans attendre le GET).
+    func applyMatchPredictionsEnabledForPreview(_ enabled: Bool) {
+        matchPredictionsEnabled = enabled
+        refreshPreviewBootstrap()
+    }
+
     func refreshPreviewBootstrap() {
         let st = FlyerWheelWebEmbedPreviewMigration.normalizedStateForPreview(state, businessSlug: slug)
         let logoB64 = customLogoDataUrlForBootstrap()
@@ -954,23 +982,21 @@ private final class ProgramFlyerEditorModel: ObservableObject {
         /// `nativeBgActive: true` quand un fond natif est présent : change le base64 du bootstrap dès que le fond
         /// passe de absent → présent, ce qui force une ré-injection complète du canvas JS (clear + redraw sans
         /// dégradé de fond) et permet à `FlyerNativeUnderlayStack` d’être visible sous la WebView transparente.
+        /// Toujours encoder le `state` complet (teintes roue / bandeau / dégradé) — ne jamais l’aplatir dans le JSON
+        /// pour le mode fond natif : ce raccourci polluait le cache Commerce et, à la réouverture, l’embed web
+        /// + `FlyerNativeUnderlayStack` perdaient les vraies couleurs. Le calque photo est géré par
+        /// `nativeBgActive`, `flyerWebSkipCanvasSolidBackground` et l’underlay UIImage, pas par des faux `colorBgTop`.
         let hasBg = effectiveBgPreview() != nil
-        // Quand un fond image est actif, neutralise le dégradé dans le JSON canvas : si le JS ignore
-        // nativeBgActive ou __FIDPASS_SKIP_CANVAS_BG_FILL, il ne dessinera pas de couleur par-dessus l'image.
-        var stForCanvas = st
-        if hasBg {
-            stForCanvas.colorBgTop = state.colorPrimary
-            stForCanvas.colorBgBottom = state.colorPrimary
-        }
         let payload = FlyerBootstrapPreviewPayload(
             flyerPrefs: .init(
-                state: stForCanvas,
+                state: st,
                 customLogoDataUrl: logoB64,
                 customBgDataUrl: nil,
                 businessSlug: slug
             ),
             updatedAt: serverUpdatedAt,
             shareUrl: shareUrl,
+            matchPredictionsEnabled: matchPredictionsEnabled ? true : nil,
             nativeBgActive: hasBg ? true : nil
         )
         /// Aucun repli partiel (état tronqué) : l’ancien repli omettait `colorBgTop` / `colorBgBottom` et d’autres champs
@@ -982,23 +1008,22 @@ private final class ProgramFlyerEditorModel: ObservableObject {
 
     /// Même `bootstrap` pour WK (pas d’JSON « strip » vs plein) : on évite 2 `APPLY` successifs (flash) quand le underlay se décode.
     private func recomputeFlyerWebCanvasDisplayLayers() {
-        if let s = effectiveBgPreview()?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty {
-            // Règle stricte: dès qu'un fond image existe, on coupe le fond canvas.
-            // Sinon la couleur peut repasser au-dessus de l'image selon l'ordre des updates.
-            flyerWebSkipCanvasSolidBackground = true
-            if let u = FlyerDataURLImageDecode.uiImage(fromDataURLString: s) {
-                flyerWebUnderlayUIImage = u
-            } else {
-                // Bascule couleur -> image: si le décodage dataURL échoue ponctuellement,
-                // on conserve l'underlay déjà présent (posé au moment du choix image)
-                // pour éviter de réafficher le fond couleur par-dessus.
-                if flyerWebUnderlayUIImage == nil {
-                    // Pas d'underlay décodable pour l'instant: on garde skip=true,
-                    // la prochaine frame/selection posera l'image, mais la couleur ne recouvrira plus.
-                }
-            }
-        } else {
+        let s = effectiveBgPreview()?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !s.isEmpty else {
             flyerWebUnderlayUIImage = nil
+            flyerWebSkipCanvasSolidBackground = false
+            return
+        }
+        if let u = FlyerDataURLImageDecode.uiImage(fromDataURLString: s) {
+            flyerWebUnderlayUIImage = u
+            flyerWebSkipCanvasSolidBackground = true
+            return
+        }
+        /// Data URL connu mais UIImage pas encore décodable : ne pas activer le mode transparent WK
+        /// (sinon canvas vide + fond UI sombre = flyer « tout noir » à la réouverture).
+        if flyerWebUnderlayUIImage != nil {
+            flyerWebSkipCanvasSolidBackground = true
+        } else {
             flyerWebSkipCanvasSolidBackground = false
         }
     }
@@ -1040,7 +1065,8 @@ private final class ProgramFlyerEditorModel: ObservableObject {
                 businessSlug: slug
             ),
             updatedAt: serverUpdatedAt,
-            shareUrl: shareUrl
+            shareUrl: shareUrl,
+            matchPredictionsEnabled: matchPredictionsEnabled ? true : nil
         )
         guard let data = try? enc.encode(payload) else { return nil }
         return data.base64EncodedString()
@@ -1138,6 +1164,7 @@ private final class ProgramFlyerEditorModel: ObservableObject {
                 flyerAiGenerationsRemaining = 3
             }
             serverUpdatedAt = res.updatedAt
+            matchPredictionsEnabled = res.matchPredictionsEnabled == true
 
             let skipHeavyPrefsMerge =
                 !forceFullFlyerPrefsMerge
@@ -1146,9 +1173,27 @@ private final class ProgramFlyerEditorModel: ObservableObject {
                 && (state.hasExplicitFlyerColorFields || serverSnapshotStateWasNonDefault)
 
             if skipHeavyPrefsMerge {
+                matchPredictionsEnabled = res.matchPredictionsEnabled == true
                 loadError = nil
+                /// Sync légère : réinjecter les teintes serveur si le GET en porte (sans écraser logo/fond locaux).
+                if let fp = res.flyerPrefs, let serverSt = fp.state {
+                    let cachedFallback = FlyerBootstrapPreviewPayloadBuilder.flyerStateFromCommerceCache(slug: slug)
+                    let resolved = FlyerBootstrapPreviewPayloadBuilder.resolvedStateForBootstrap(
+                        serverState: serverSt,
+                        fallback: cachedFallback ?? state,
+                        businessSlug: slug
+                    )
+                    if resolved.hasExplicitFlyerColorFields || resolved.isCustomizedComparedToAppDefault {
+                        isUndoRedoOrLoad = true
+                        state = FlyerWheelWebEmbedPreviewMigration.normalizedStateForPreview(resolved, businessSlug: slug)
+                        recomputeServerSnapshotStateFlag(using: state)
+                        isUndoRedoOrLoad = false
+                    }
+                }
                 let hasSavedLogo = !(serverLogoDataUrl?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "").isEmpty
                 suppressDashboardCustomLogoForPreview = !hasSavedLogo
+                refreshPreviewBootstrap()
+                persistRepairedCommerceFlyerCacheIfNeeded()
                 Task { @MainActor in
                     await withTaskGroup(of: Void.self) { group in
                         if hasSavedLogo {
@@ -1157,6 +1202,7 @@ private final class ProgramFlyerEditorModel: ObservableObject {
                         group.addTask { await self.hydrateCustomBgFromPublicEndpointIfNeeded() }
                     }
                     self.refreshPreviewBootstrap()
+                    self.persistRepairedCommerceFlyerCacheIfNeeded()
                 }
                 return
             }
@@ -1183,6 +1229,9 @@ private final class ProgramFlyerEditorModel: ObservableObject {
                     if beforeMode == "segments", merged.wheelRenderMode == "png" {
                         shouldPersistFlyerWheelPngMigration = true
                     }
+                    merged.repairLegacyNativeBgFlattenedGradientIfNeeded(
+                        hasNativeBackground: !(serverBgDataUrl?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+                    )
                     state = merged
                 } else {
                     /// Réponse partielle : `flyer_prefs` sans `state` — ne **pas** écraser roue / bandeau / CADEAU déjà hydratés (cache ou session).
@@ -2775,11 +2824,16 @@ private struct FlyerAIGeneratorSheet: View {
                 /// d’après **une** teinte. À l’ouverture « Modifier le flyer » (ou dès qu’un chargement a réussi), l’état
                 /// `flyerModel.state` vient du serveur / cache : ne pas l’écraser — sinon l’aperçu WebView « perd » les couleurs
                 /// et le rendu (logo, bandeau, roue) semble « vidé » ou uniforme.
+                let cachedBootstrap = CommerceFlyerStateCache.load(slug: slug)?.bootstrapPreviewB64?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 let skipStompFromParentAccent =
                     (flyerModel.hasCompletedSuccessfulFlyerLoad
                         && (flyerModel.state.hasExplicitFlyerColorFields
                             || flyerModel.state.isCustomizedComparedToAppDefault))
                     || (seedOpenFlyerForEdit && !seedRecreateFlyerSession)
+                    || flyerModel.state.isCustomizedComparedToAppDefault
+                    || !cachedBootstrap.isEmpty
+                    || flyerModel.restoredFromSessionDraft
                 if skipStompFromParentAccent {
                     isUpdatingAccentFromEngine = true
                     let accent = Self.normalizeHex(flyerModel.state.ctaBannerBgColor)

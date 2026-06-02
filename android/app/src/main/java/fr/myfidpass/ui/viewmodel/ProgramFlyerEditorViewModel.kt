@@ -91,6 +91,8 @@ class ProgramFlyerEditorViewModel(
 
     var flyerAiGenerationsRemaining by mutableStateOf(3)
     var flyerAiUnlimited by mutableStateOf(false)
+    var matchPredictionsEnabled by mutableStateOf(false)
+        private set
     var serverSnapshotWasNonDefault by mutableStateOf(false)
         private set
     var hasCompletedLoad by mutableStateOf(false)
@@ -191,6 +193,7 @@ class ProgramFlyerEditorViewModel(
                 response["flyer_ai_unlimited"]?.jsonPrimitive?.content?.toBooleanStrictOrNull()?.let {
                     flyerAiUnlimited = it
                 }
+                matchPredictionsEnabled = FlyerBootstrapPreviewPayloadBuilder.matchPredictionsEnabledFromDashboard(response)
                 serverSnapshotWasNonDefault = FlyerBootstrapPreviewPayloadBuilder.commerceIndicatesFlyerRegistered(response) ||
                     state.isCustomizedComparedToAppDefault
                 bootstrapPreviewBase64 = b64
@@ -334,6 +337,7 @@ class ProgramFlyerEditorViewModel(
             customBgDataUrl = bg,
             stripCustomBgForNativeUnderlay = hasNativeBg,
             nativeBgActive = hasNativeBg,
+            matchPredictionsEnabled = matchPredictionsEnabled,
         )
         persistDraftIfNeeded()
     }

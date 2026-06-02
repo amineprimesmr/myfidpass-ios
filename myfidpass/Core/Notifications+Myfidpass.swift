@@ -28,6 +28,8 @@ extension Notification.Name {
     static let myfidpassEngagementOAuthDidComplete = Notification.Name("myfidpass.engagementOAuthDidComplete")
     /// PATCH social-missions enregistré — rafraîchir les @ sur les boutons réseaux (Commerce / stats).
     static let myfidpassSocialMissionsDidSave = Notification.Name("myfidpass.socialMissionsDidSave")
+    /// Challenge pronostics activé/désactivé — rafraîchir l’aperçu flyer (bandeau Coupe du monde).
+    static let myfidpassMatchPredictionsConfigDidSave = Notification.Name("myfidpass.matchPredictionsConfigDidSave")
     /// Universal Link https://myfidpass.fr/oauth/… relayé en myfidpass:// (object : URL).
     static let myfidpassOAuthUniversalLinkRelay = Notification.Name("myfidpass.oauthUniversalLinkRelay")
     /// Fichier image carte réécrit sous `Documents/CardLogos/…` (même chemin relatif) — recharger les `AsyncLocalFileImage`.

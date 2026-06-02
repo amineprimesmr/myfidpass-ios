@@ -1189,6 +1189,8 @@ struct DashboardFlyerGetResponse: Decodable {
     let flyerPrefs: FlyerPrefsStored?
     let updatedAt: String?
     let shareUrl: String?
+    /// Challenge pronostics activé — bandeau flyer Coupe du monde côté canvas.
+    let matchPredictionsEnabled: Bool?
     /// Générations flyer IA déjà consommées sur le mois UTC courant.
     let flyerAiGenerationsUsed: Int?
     /// `nil` si créations illimitées côté API.
@@ -1200,6 +1202,7 @@ struct DashboardFlyerGetResponse: Decodable {
         flyerPrefs: FlyerPrefsStored?,
         updatedAt: String?,
         shareUrl: String?,
+        matchPredictionsEnabled: Bool?,
         flyerAiGenerationsUsed: Int?,
         flyerAiGenerationsRemaining: Int?,
         flyerAiUnlimited: Bool?,
@@ -1208,6 +1211,7 @@ struct DashboardFlyerGetResponse: Decodable {
         self.flyerPrefs = flyerPrefs
         self.updatedAt = updatedAt
         self.shareUrl = shareUrl
+        self.matchPredictionsEnabled = matchPredictionsEnabled
         self.flyerAiGenerationsUsed = flyerAiGenerationsUsed
         self.flyerAiGenerationsRemaining = flyerAiGenerationsRemaining
         self.flyerAiUnlimited = flyerAiUnlimited
@@ -1270,6 +1274,7 @@ struct DashboardFlyerGetResponse: Decodable {
             flyerPrefs: flyerPrefs,
             updatedAt: root["updated_at"] as? String,
             shareUrl: root["share_url"] as? String,
+            matchPredictionsEnabled: boolVal("match_predictions_enabled"),
             flyerAiGenerationsUsed: intVal("flyer_ai_generations_used"),
             flyerAiGenerationsRemaining: intVal("flyer_ai_generations_remaining"),
             flyerAiUnlimited: boolVal("flyer_ai_unlimited"),
@@ -1661,6 +1666,54 @@ struct FlyerStateDTO: Codable, Equatable {
         var rhs = Self.default
         rhs.normalizeClamps()
         return lhs != rhs
+    }
+
+    /// Ancien bootstrap iOS : `colorBgTop` / `colorBgBottom` avaient été écrasés par `colorPrimary` pour le mode fond natif.
+    /// Rétablit un dégradé lisible pour l’underlay Swift et l’embed web après réouverture depuis le cache.
+    mutating func repairLegacyNativeBgFlattenedGradientIfNeeded(hasNativeBackground: Bool) {
+        guard hasNativeBackground else { return }
+        normalizeClamps()
+        let primary = colorPrimary.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !primary.isEmpty else { return }
+        let top = colorBgTop.trimmingCharacters(in: .whitespacesAndNewlines)
+        let bottom = colorBgBottom.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard top.uppercased() == primary.uppercased(),
+              bottom.uppercased() == primary.uppercased()
+        else { return }
+        let secondary = colorSecondary.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sec = secondary.isEmpty ? Self.default.colorSecondary : secondary
+        colorBgTop = Self.lightenHexTowardWhite(primary, mix: 0.36)
+        colorBgBottom = Self.darkenHex(sec, amount: 0.17)
+    }
+
+    private static func lightenHexTowardWhite(_ hex: String, mix: Double) -> String {
+        guard let (r, g, b) = rgbFractions(fromHex: hex) else { return hex }
+        let t = min(1, max(0, mix))
+        return rgbHex(
+            r: r * t + (1 - t),
+            g: g * t + (1 - t),
+            b: b * t + (1 - t)
+        )
+    }
+
+    private static func darkenHex(_ hex: String, amount: Double) -> String {
+        guard let (r, g, b) = rgbFractions(fromHex: hex) else { return hex }
+        let d = min(1, max(0, amount))
+        return rgbHex(r: r * (1 - d), g: g * (1 - d), b: b * (1 - d))
+    }
+
+    private static func rgbFractions(fromHex raw: String) -> (Double, Double, Double)? {
+        let h = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard h.range(of: #"^#[0-9A-Fa-f]{6}$"#, options: .regularExpression) != nil else { return nil }
+        let r = Double(Int(h.dropFirst().prefix(2), radix: 16) ?? 0) / 255
+        let g = Double(Int(h.dropFirst(3).prefix(2), radix: 16) ?? 0) / 255
+        let b = Double(Int(h.dropFirst(5).prefix(2), radix: 16) ?? 0) / 255
+        return (r, g, b)
+    }
+
+    private static func rgbHex(r: Double, g: Double, b: Double) -> String {
+        func c(_ x: Double) -> Int { min(255, max(0, Int((x * 255).rounded()))) }
+        return String(format: "#%02X%02X%02X", c(r), c(g), c(b))
     }
 
     private enum CodingKeys: String, CodingKey {

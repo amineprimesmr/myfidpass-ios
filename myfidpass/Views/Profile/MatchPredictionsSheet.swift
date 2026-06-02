@@ -37,7 +37,7 @@ struct MatchPredictionsSheet: View {
                 .padding(16)
             }
             .background(AppTheme.Colors.background)
-            .navigationTitle("Pronostics foot")
+            .navigationTitle("Coupe du monde 2026")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -214,7 +214,14 @@ struct MatchPredictionsSheet: View {
             )
             _ = try await APIClient.shared.request(.dashboardMatchPredictionsConfig(slug: slug, body: body)) as EmptyResponse
             await load()
-            await MainActor.run { message = "Configuration enregistrée." }
+            await MainActor.run {
+                message = "Configuration enregistrée."
+                NotificationCenter.default.post(
+                    name: .myfidpassMatchPredictionsConfigDidSave,
+                    object: nil,
+                    userInfo: ["slug": slug, "enabled": enabled]
+                )
+            }
         } catch {
             await MainActor.run { errorMessage = "Enregistrement impossible." }
         }

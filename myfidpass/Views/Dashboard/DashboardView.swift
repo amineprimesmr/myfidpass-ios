@@ -297,32 +297,8 @@ struct DashboardView: View {
     }
 
     private var homeCardConfigured: Bool {
-        guard let slug = currentBusinessSlug,
-              let snap = CardPreviewDisplaySnapshotStore.load(slug: slug) else { return false }
-        let missing = MyCardCompletionRequirements.missingRequirements(
-            primaryHex: snap.primaryHex,
-            accentHex: snap.accentHex,
-            labelHex: snap.labelHex,
-            stripDisplayMode: snap.stripDisplayMode,
-            stripText: snap.stripText,
-            displayName: snap.displayName,
-            logoURL: snap.logoURL,
-            programType: snap.programType,
-            cardBackgroundImagePath: snap.hasLocalCardBackground == true ? CardLogoStorage.relativeCardBackgroundPath : nil,
-            cardBackgroundRemoteURL: snap.cardBackgroundRemoteURL,
-            cardBackgroundWasRemoved: false,
-            stampEmoji: snap.stampEmoji,
-            stampIconPendingBase64: snap.stampIconPendingBase64,
-            stampIconWasRemoved: snap.stampIconWasRemoved ?? false,
-            serverHasStampIcon: snap.hasServerStampIcon ?? false,
-            tierPoints: snap.tierPoints ?? [],
-            tierLabels: snap.tierLabels ?? [],
-            requiredStamps: snap.requiredStamps,
-            stampRewardLabel: snap.stampRewardLabel,
-            stampMidRewardLabel: snap.stampMidRewardLabel ?? "",
-            startGameRewardLabel: snap.startGameRewardLabel ?? ""
-        )
-        return missing.isEmpty
+        guard let slug = currentBusinessSlug else { return false }
+        return CardPreviewDisplaySnapshotStore.isMerchantCardConfigured(slug: slug)
     }
 
     /// Détection "mission carte faite" plus tolérante : si un snapshot carte existe déjà,
@@ -670,6 +646,12 @@ struct DashboardView: View {
                 scheduleMerchantFlyerPromoSheetIfEligible()
                 Task { await prefetchHomeCardMediaIfNeeded() }
             }
+            .onReceive(NotificationCenter.default.publisher(for: .myfidpassMerchantCoreDataDidMergeFromSync)) { _ in
+                if let slug = currentBusinessSlug {
+                    CardPreviewDisplaySnapshotStore.reconcileFromSettingsCacheIfNeeded(slug: slug)
+                }
+                cardPreviewDisplayRefresh += 1
+            }
             .onReceive(NotificationCenter.default.publisher(for: .myfidpassOpenMerchantFlyerHub)) { note in
                 handleOpenMerchantFlyerHubNotification(note)
             }
@@ -968,6 +950,9 @@ struct DashboardView: View {
 
     @MainActor
     private func prefetchHomeCardMediaIfNeeded() async {
+        if let slug = currentBusinessSlug {
+            CardPreviewDisplaySnapshotStore.reconcileFromSettingsCacheIfNeeded(slug: slug)
+        }
         guard let model = DashboardHomeCardModel.resolve(dataService: dataService) else { return }
         await AuthenticatedMediaLoader.prefetchCardAssets(
             logoURLString: model.logoURL ?? "",

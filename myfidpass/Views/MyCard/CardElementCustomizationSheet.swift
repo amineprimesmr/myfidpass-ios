@@ -75,6 +75,8 @@ struct CardElementCustomizationSheet: View {
     var rewardsSaveInFlight: Bool = false
     /// État local pour la feuille de cadrage (évite les problèmes de présentation avec un `Binding` parent).
     @State private var cropEditorPayload: ImageCropPayload?
+    /// Nombre de lignes paliers points visibles dans « Récompenses » (5 par défaut, jusqu’à 8).
+    @State private var visiblePointsTierRows = MyCardPointsRewardTiers.minVisibleCount
     /// Logo sans fond persisté côté serveur (remove.bg) — proposé comme raccourci dans le sheet logo.
     @State private var flyerNobgImage: UIImage?
     @State private var flyerNobgLoading = false
@@ -109,7 +111,7 @@ struct CardElementCustomizationSheet: View {
             return [.height(430), .large]
         }
         if zone == .headerRight {
-            /// Récompenses : 5 paliers points + début de jeu ; `.large` conseillé.
+            /// Récompenses : paliers points unifiés (10 pts en 1ʳᵉ ligne) ; `.large` conseillé.
             return [.large]
         }
         return [.medium, .large]
@@ -393,15 +395,24 @@ struct CardElementCustomizationSheet: View {
         }
         .onAppear {
             enforceWelcomeBonusDefaults()
-            var startLabel = pack.startGameRewardLabel.wrappedValue
-            MyCardProgramDefaults.ensureStartGameRewardLabel(&startLabel)
-            pack.startGameRewardLabel.wrappedValue = startLabel
             if pack.programType.wrappedValue == "points" {
                 var pts = pack.tierPoints.wrappedValue
                 var labs = pack.tierLabels.wrappedValue
                 MyCardProgramDefaults.sanitizeEditableTierSlots(tierPoints: &pts, tierLabels: &labs)
                 pack.tierPoints.wrappedValue = pts
                 pack.tierLabels.wrappedValue = labs
+                visiblePointsTierRows = Self.resolvedVisibleTierRows(points: pts)
+                var startLabel = pack.startGameRewardLabel.wrappedValue
+                MyCardProgramDefaults.syncStartGameLabelFromFirstTier(
+                    startGameRewardLabel: &startLabel,
+                    tierPoints: pts,
+                    tierLabels: labs
+                )
+                pack.startGameRewardLabel.wrappedValue = startLabel
+            } else {
+                var startLabel = pack.startGameRewardLabel.wrappedValue
+                MyCardProgramDefaults.ensureStartGameRewardLabel(&startLabel)
+                pack.startGameRewardLabel.wrappedValue = startLabel
             }
         }
         .onChange(of: pack.programType.wrappedValue) { _, _ in
@@ -465,15 +476,19 @@ struct CardElementCustomizationSheet: View {
             pack.stampRewardLabel.wrappedValue = "Menu offert"
             return
         }
-        let n = Self.pointsTierRowCount
-        pack.startGameRewardLabel.wrappedValue = "Boisson offerte"
-        let examplePoints = (0..<n).map { String(50 * ($0 + 1)) }
+        let n = visiblePointsTierRows
+        let examplePoints = (0..<n).map { i in
+            i == 0 ? "10" : String(50 * i)
+        }
         let exampleLabels = [
+            "Boisson offerte",
             "Dessert offert",
             "Cheese offert",
             "Menu offert",
             "Formule du jour offerte",
             "-20 % sur l'addition",
+            "Réduction sur l'addition",
+            "Cadeau surprise",
         ]
         var pts = examplePoints
         var labels = exampleLabels
@@ -481,6 +496,26 @@ struct CardElementCustomizationSheet: View {
         while labels.count < n { labels.append("") }
         pack.tierPoints.wrappedValue = Array(pts.prefix(n))
         pack.tierLabels.wrappedValue = Array(labels.prefix(n))
+        pack.startGameRewardLabel.wrappedValue = "Boisson offerte"
+    }
+
+    private static func resolvedVisibleTierRows(points: [String]) -> Int {
+        let lastFilled = points.indices.reversed().first { index in
+            !points[index].trimmingCharacters(in: .whitespaces).isEmpty
+        } ?? -1
+        return min(
+            max(MyCardPointsRewardTiers.minVisibleCount, lastFilled + 2),
+            MyCardPointsRewardTiers.slotCount
+        )
+    }
+
+    private func ensureTierArrayCapacity(for index: Int) {
+        var pts = pack.tierPoints.wrappedValue
+        var labs = pack.tierLabels.wrappedValue
+        while pts.count <= index { pts.append("") }
+        while labs.count <= index { labs.append("") }
+        pack.tierPoints.wrappedValue = pts
+        pack.tierLabels.wrappedValue = labs
     }
 
     // MARK: - Bonus d'inscription (affichage minimal : tampons uniquement ; points sans réglage — fixe 10 côté modèle)
@@ -712,22 +747,32 @@ struct CardElementCustomizationSheet: View {
 
     private var pointsRulesContent: some View {
         VStack(alignment: .leading, spacing: 12) {
-            startGameRewardRow
-            /// 5 paliers modifiables (hors « 10 pts » alignés sur le bonus d’inscription).
-            ForEach(0..<Self.pointsTierRowCount, id: \.self) { i in
+            ForEach(0..<visiblePointsTierRows, id: \.self) { i in
                 pointsTierRow(index: i)
+            }
+            if visiblePointsTierRows < MyCardPointsRewardTiers.slotCount {
+                Button {
+                    ensureTierArrayCapacity(for: visiblePointsTierRows)
+                    visiblePointsTierRows += 1
+                } label: {
+                    Label("Ajouter une récompense", systemImage: "plus.circle.fill")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(AppTheme.Colors.primary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 2)
             }
         }
     }
 
-    /// Palier « Début du jeu » (1ʳᵉ récompense) : seuil verrouillé à 10 pts (bonus d’inscription fixe), libellé modifiable.
+    /// Palier « Début du jeu » (mode tampons uniquement).
     private var startGameRewardRow: some View {
-        let isPoints = pack.programType.wrappedValue == "points"
-        let seuil = isPoints ? "10 pts" : "Début du jeu"
+        let seuil = "Début du jeu"
         return HStack(alignment: .top, spacing: 10) {
             Text(seuil)
                 .font(.subheadline.weight(.semibold))
-                .foregroundStyle(isPoints ? AppTheme.Colors.primary : AppTheme.Colors.textPrimary)
+                .foregroundStyle(AppTheme.Colors.textPrimary)
                 .multilineTextAlignment(.center)
                 .lineLimit(2)
                 .minimumScaleFactor(0.75)
@@ -745,7 +790,7 @@ struct CardElementCustomizationSheet: View {
             TextField(
                 "",
                 text: pack.startGameRewardLabel,
-                prompt: Text(Self.startGameRewardPlaceholder).foregroundStyle(AppTheme.Colors.textSecondary.opacity(0.85))
+                prompt: Text("Boisson offerte").foregroundStyle(AppTheme.Colors.textSecondary.opacity(0.85))
             )
             .textFieldStyle(.plain)
             .padding(.vertical, 12)
@@ -761,23 +806,24 @@ struct CardElementCustomizationSheet: View {
         }
     }
 
-    private static let startGameRewardPlaceholder = "Boisson offerte"
-    private static let pointsTierRowCount = 5
-    private static let tierSeuilExamples = ["50", "100", "150", "200", "250"]
+    private static let tierSeuilExamples = ["10", "50", "100", "150", "200", "250", "300", "350"]
     private static let tierRewardExamples = [
+        "Boisson offerte",
         "Dessert offert",
         "Cheese offert",
         "Menu offert",
         "Formule du jour",
         "Réduction sur l'addition",
+        "Cadeau surprise",
+        "Offre spéciale",
     ]
 
     private static let stamp5PassageRewardPlaceholder = "-50% sur l’addition"
     private static let stamp10PassageRewardPlaceholder = "Menu offert"
 
     private func pointsTierRow(index: Int) -> some View {
-        let seuilPrompt = Self.tierSeuilExamples[index]
-        let rewardPrompt = Self.tierRewardExamples[index]
+        let seuilPrompt = Self.tierSeuilExamples[min(index, Self.tierSeuilExamples.count - 1)]
+        let rewardPrompt = Self.tierRewardExamples[min(index, Self.tierRewardExamples.count - 1)]
         return VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top, spacing: 10) {
                 TextField("", text: Binding(
@@ -790,6 +836,15 @@ struct CardElementCustomizationSheet: View {
                         while arr.count <= index { arr.append("") }
                         arr[index] = newVal
                         pack.tierPoints.wrappedValue = arr
+                        if index == 0 {
+                            var start = pack.startGameRewardLabel.wrappedValue
+                            MyCardProgramDefaults.syncStartGameLabelFromFirstTier(
+                                startGameRewardLabel: &start,
+                                tierPoints: arr,
+                                tierLabels: pack.tierLabels.wrappedValue
+                            )
+                            pack.startGameRewardLabel.wrappedValue = start
+                        }
                     }
                 ), prompt: Text(seuilPrompt).foregroundStyle(AppTheme.Colors.textSecondary.opacity(0.85)))
                 .keyboardType(.numberPad)
@@ -814,6 +869,15 @@ struct CardElementCustomizationSheet: View {
                         while arr.count <= index { arr.append("") }
                         arr[index] = newVal
                         pack.tierLabels.wrappedValue = arr
+                        if index == 0 {
+                            var start = pack.startGameRewardLabel.wrappedValue
+                            MyCardProgramDefaults.syncStartGameLabelFromFirstTier(
+                                startGameRewardLabel: &start,
+                                tierPoints: pack.tierPoints.wrappedValue,
+                                tierLabels: arr
+                            )
+                            pack.startGameRewardLabel.wrappedValue = start
+                        }
                     }
                 ), prompt: Text(rewardPrompt).foregroundStyle(AppTheme.Colors.textSecondary.opacity(0.85)))
                 .textFieldStyle(.plain)

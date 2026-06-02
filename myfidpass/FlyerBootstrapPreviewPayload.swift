@@ -26,6 +26,8 @@ struct FlyerBootstrapPreviewPayload: Encodable {
     let flyerPrefs: Inner
     let updatedAt: String?
     let shareUrl: String
+    /// Challenge pronostics (Coupe du monde) activé → bandeau flyer « Pronostiquez et gagnez » + fond stade.
+    let matchPredictionsEnabled: Bool?
     /// Marqueur local uniquement : présent (`true`) quand le fond est affiché en `UIImage` natif sous la WebView.
     /// Ignoré par le JS (`_nbg` n’est pas lu par `app-flyer-qr-draw`), mais change le base64 du bootstrap
     /// quand le fond passe de absent → présent, forçant une ré-injection complète du canvas (canvas cleared + redrawn).
@@ -45,10 +47,17 @@ struct FlyerBootstrapPreviewPayload: Encodable {
         }
     }
 
-    init(flyerPrefs: Inner, updatedAt: String?, shareUrl: String, nativeBgActive: Bool? = nil) {
+    init(
+        flyerPrefs: Inner,
+        updatedAt: String?,
+        shareUrl: String,
+        matchPredictionsEnabled: Bool? = nil,
+        nativeBgActive: Bool? = nil
+    ) {
         self.flyerPrefs = flyerPrefs
         self.updatedAt = updatedAt
         self.shareUrl = shareUrl
+        self.matchPredictionsEnabled = matchPredictionsEnabled
         self.nativeBgActive = nativeBgActive
     }
 
@@ -56,6 +65,7 @@ struct FlyerBootstrapPreviewPayload: Encodable {
         case flyerPrefs = "flyer_prefs"
         case updatedAt = "updated_at"
         case shareUrl = "share_url"
+        case matchPredictionsEnabled = "match_predictions_enabled"
         case nativeBgActive = "_nbg"
     }
 
@@ -64,6 +74,9 @@ struct FlyerBootstrapPreviewPayload: Encodable {
         try c.encode(flyerPrefs, forKey: .flyerPrefs)
         try c.encodeIfPresent(updatedAt, forKey: .updatedAt)
         try c.encode(shareUrl, forKey: .shareUrl)
+        if matchPredictionsEnabled == true {
+            try c.encode(true, forKey: .matchPredictionsEnabled)
+        }
         try c.encodeIfPresent(nativeBgActive, forKey: .nativeBgActive)
     }
 }
@@ -252,7 +265,8 @@ enum FlyerBootstrapPreviewPayloadBuilder {
                 businessSlug: slug
             ),
             updatedAt: nil,
-            shareUrl: share
+            shareUrl: share,
+            matchPredictionsEnabled: response.matchPredictionsEnabled == true ? true : nil
         )
         let enc = JSONEncoder()
         /// Même règle que l’injection `WKWebView` : l’objet `state` doit rester en camelCase pour

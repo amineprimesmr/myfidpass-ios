@@ -59,7 +59,7 @@ enum CardMissingRequirement: Identifiable, Equatable {
         case .couleursCarte:
             return "Définissez le fond, les titres (POINTS, MEMBRE…) et les textes secondaires."
         case .recompenses:
-            return "Renseignez toutes les récompenses, y compris « Début du jeu »."
+            return "Renseignez tous les paliers de récompenses (10 pts inclus)."
         case .imageDeFondPoints:
             return "Choisissez une image pour la zone sous l’en-tête."
         case .iconeTampons:
@@ -140,7 +140,8 @@ enum MyCardCompletionRequirements {
         return serverHasStampIcon
     }
 
-    private static let pointsRewardTierCount = 5
+    private static let pointsMinTierCount = MyCardPointsRewardTiers.minVisibleCount
+    private static let pointsMaxTierCount = MyCardPointsRewardTiers.slotCount
 
     static func hasStartGameRewardLabel(_ startGameRewardLabel: String) -> Bool {
         var label = startGameRewardLabel
@@ -148,7 +149,7 @@ enum MyCardCompletionRequirements {
         return !label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    /// Tous les paliers points (5 + « Début du jeu »), ou toutes les récompenses tampons requises.
+    /// Tous les paliers points (min. 5, + lignes ajoutées), ou toutes les récompenses tampons requises.
     static func hasRecompensesCompletes(
         programType: String,
         tierPoints: [String],
@@ -158,17 +159,25 @@ enum MyCardCompletionRequirements {
         stampMidRewardLabel: String,
         startGameRewardLabel: String
     ) -> Bool {
-        guard hasStartGameRewardLabel(startGameRewardLabel) else { return false }
         if programType == "points" {
-            let ptsArr = tierPoints + Array(repeating: "", count: max(0, pointsRewardTierCount - tierPoints.count))
-            let labArr = tierLabels + Array(repeating: "", count: max(0, pointsRewardTierCount - tierLabels.count))
-            for i in 0..<pointsRewardTierCount {
+            let ptsArr = tierPoints + Array(repeating: "", count: max(0, pointsMaxTierCount - tierPoints.count))
+            let labArr = tierLabels + Array(repeating: "", count: max(0, pointsMaxTierCount - tierLabels.count))
+            var requiredRows = pointsMinTierCount
+            for i in pointsMinTierCount..<pointsMaxTierCount {
+                let ptsStr = ptsArr[i].trimmingCharacters(in: .whitespaces)
+                let lab = labArr[i].trimmingCharacters(in: .whitespaces)
+                if !ptsStr.isEmpty || !lab.isEmpty {
+                    requiredRows = i + 1
+                }
+            }
+            for i in 0..<requiredRows {
                 let ptsStr = ptsArr[i].trimmingCharacters(in: .whitespaces)
                 let lab = labArr[i].trimmingCharacters(in: .whitespaces)
                 guard let pts = Int(ptsStr), pts >= 0, !lab.isEmpty else { return false }
             }
             return true
         }
+        guard hasStartGameRewardLabel(startGameRewardLabel) else { return false }
         if programType == "stamps" {
             let fin = stampRewardLabel.trimmingCharacters(in: .whitespacesAndNewlines)
             if fin.isEmpty { return false }

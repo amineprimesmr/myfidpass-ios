@@ -1,1 +1,1 @@
-Digital loyalty cards for merchants: QR scans, members, campaigns, stats.
+Wallet loyalty cards for merchants: QR scans, members, campaigns, stats.

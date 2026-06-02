@@ -172,7 +172,10 @@ fun MyCardScreen(
         }
     }
     val rewardsConfigurationComplete = !missing.contains(CardMissingRequirement.Recompenses)
-    val shouldShowCompletionPills = missing.isNotEmpty()
+    val cardConfiguredHint = slug.isNotBlank() &&
+        MyCardCompletionRequirements.isConfigured(viewModel.settings, snapshot)
+    val shouldShowCompletionPills = missing.isNotEmpty() &&
+        !(cardConfiguredHint && viewModel.settings == null)
 
     fun testWallet() {
         if (slug.isBlank()) return

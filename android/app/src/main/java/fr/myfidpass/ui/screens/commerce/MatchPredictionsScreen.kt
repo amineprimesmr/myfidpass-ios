@@ -125,7 +125,7 @@ fun MatchPredictionsScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Pronostics foot") },
+                title = { Text("Coupe du monde 2026") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Retour")

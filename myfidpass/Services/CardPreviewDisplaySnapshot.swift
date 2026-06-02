@@ -55,10 +55,8 @@ enum CardPreviewDisplaySnapshotStore {
         return try? JSONDecoder().decode(CardPreviewDisplaySnapshot.self, from: data)
     }
 
-    /// Carte commerçant enregistrée et complète (mêmes critères que l’accueil / notifications).
-    static func isMerchantCardConfigured(slug: String) -> Bool {
-        guard let snap = load(slug: slug) else { return false }
-        return MyCardCompletionRequirements.missingRequirements(
+    private static func missingRequirements(for snap: CardPreviewDisplaySnapshot) -> [CardMissingRequirement] {
+        MyCardCompletionRequirements.missingRequirements(
             primaryHex: snap.primaryHex,
             accentHex: snap.accentHex,
             labelHex: snap.labelHex,
@@ -80,7 +78,39 @@ enum CardPreviewDisplaySnapshotStore {
             stampRewardLabel: snap.stampRewardLabel,
             stampMidRewardLabel: snap.stampMidRewardLabel ?? "",
             startGameRewardLabel: snap.startGameRewardLabel ?? ""
-        ).isEmpty
+        )
+    }
+
+    /// Carte commerçant enregistrée et complète (mêmes critères que l’accueil / notifications).
+    static func isMerchantCardConfigured(slug: String) -> Bool {
+        missingRequirements(forSlug: slug).isEmpty
+    }
+
+    static func missingRequirements(forSlug slug: String) -> [CardMissingRequirement] {
+        if let snap = load(slug: slug) {
+            let missing = missingRequirements(for: snap)
+            if missing.isEmpty { return [] }
+            if missing == [.recompenses], let settings = ScanFlowSettingsCache.cached(for: slug) {
+                let repaired = CardPreviewSnapshotBuilder.fromSettings(settings, slug: slug, preserving: snap)
+                if missingRequirements(for: repaired).isEmpty { return [] }
+            }
+            return missing
+        }
+        if let settings = ScanFlowSettingsCache.cached(for: slug) {
+            let snap = CardPreviewSnapshotBuilder.fromSettings(settings, slug: slug)
+            return missingRequirements(for: snap)
+        }
+        return [.recompenses]
+    }
+
+    /// Répare un snapshot obsolète (paliers vides) dès que le cache settings est disponible.
+    static func reconcileFromSettingsCacheIfNeeded(slug: String) {
+        guard !slug.isEmpty, let settings = ScanFlowSettingsCache.cached(for: slug) else { return }
+        let existing = load(slug: slug)
+        let repaired = CardPreviewSnapshotBuilder.fromSettings(settings, slug: slug, preserving: existing)
+        guard missingRequirements(for: repaired).isEmpty else { return }
+        guard existing != repaired else { return }
+        save(repaired, slug: slug)
     }
 
     static func save(_ snapshot: CardPreviewDisplaySnapshot, slug: String) {

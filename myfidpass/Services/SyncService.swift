@@ -305,12 +305,7 @@ final class SyncService: ObservableObject {
     /// Préserve uniquement l'état brouillon local (fond photo, icône tampon en cours d'édition).
     private func updateSnapshotRemoteBackground(settings: BusinessSettingsResponse, slug: String) {
         let existing = CardPreviewDisplaySnapshotStore.load(slug: slug)
-        var merged = Self.minimalDisplaySnapshotFromSettings(settings, slug: slug)
-        if let existing {
-            merged.hasLocalCardBackground = existing.hasLocalCardBackground
-            merged.stampIconPendingBase64 = existing.stampIconPendingBase64
-            merged.stampIconWasRemoved = existing.stampIconWasRemoved
-        }
+        var merged = Self.minimalDisplaySnapshotFromSettings(settings, slug: slug, preserving: existing)
         guard existing != merged else { return }
         CardPreviewDisplaySnapshotStore.save(merged, slug: slug)
     }
@@ -328,76 +323,12 @@ final class SyncService: ObservableObject {
     }
 
     /// Snapshot minimal depuis GET settings quand UserDefaults n’a encore rien (pas encore ouvert « Ma carte »).
-    private static func minimalDisplaySnapshotFromSettings(_ settings: BusinessSettingsResponse, slug: String) -> CardPreviewDisplaySnapshot {
-        var programType = (settings.programType ?? "points").lowercased()
-        if programType != "points" && programType != "stamps" { programType = "points" }
-        let primary = (settings.backgroundColor ?? "#\(AppTheme.WalletCardAppearanceDefaults.backgroundHex)")
-            .replacingOccurrences(of: "#", with: "")
-        let accent = (settings.foregroundColor ?? "#\(AppTheme.WalletCardAppearanceDefaults.bodyTextHex)")
-            .replacingOccurrences(of: "#", with: "")
-        let label = (settings.labelColor ?? "#\(AppTheme.WalletCardAppearanceDefaults.labelTitlesHex)")
-            .replacingOccurrences(of: "#", with: "")
-        var stripMode = (settings.stripDisplayMode ?? "logo").lowercased()
-        if stripMode != "text" { stripMode = "logo" }
-        let req = max(1, settings.requiredStamps ?? 10)
-        let logoStrip = settings.logoUrl?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let logoIcon = settings.logoIconUrl?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let logoCombined = logoStrip.isEmpty ? logoIcon : logoStrip
-
-        var hasRemote = false
-        var bgURL: String?
-        if settings.hasCardBackground == true {
-            hasRemote = true
-            bgURL = cardBackgroundRemoteURLString(slug: slug, updatedAt: settings.cardBackgroundUpdatedAt)
-        }
-
-        var tierPoints: [String] = []
-        var tierLabels: [String] = []
-        var startGame = settings.startGameRewardLabel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if let tiers = settings.pointsRewardTiers {
-            for t in tiers.filter({ $0.points > 0 }).sorted(by: { $0.points < $1.points }).prefix(5) {
-                let lab = t.label.trimmingCharacters(in: .whitespacesAndNewlines)
-                if lab.isEmpty { continue }
-                if t.points == 10 {
-                    if startGame.isEmpty { startGame = lab }
-                    continue
-                }
-                tierPoints.append(String(t.points))
-                tierLabels.append(lab.isEmpty ? "Récompense" : lab)
-            }
-        }
-        if startGame.isEmpty {
-            startGame = "Boisson offerte"
-        }
-
-        return CardPreviewDisplaySnapshot(
-            programType: programType,
-            displayName: settings.organizationName ?? "Ma Carte",
-            primaryHex: primary,
-            accentHex: accent,
-            labelHex: label,
-            stripHex: "",
-            stripDisplayMode: stripMode,
-            stripText: settings.stripText ?? "",
-            logoURL: logoCombined,
-            stampEmoji: settings.stampEmoji ?? "",
-            requiredStamps: req,
-            headerRightText: CardRewardsHeaderLink.displayText,
-            labelMember: settings.labelMember ?? "",
-            hasRemoteCardBackground: hasRemote,
-            cardBackgroundRemoteURL: bgURL,
-            // Fond local = brouillon « Ma carte » pour **ce** slug uniquement, pas la présence d’un PNG global.
-            hasLocalCardBackground: false,
-            stampRewardLabel: settings.stampRewardLabel ?? "",
-            stampMidRewardLabel: settings.stampMidRewardLabel,
-            startGameRewardLabel: startGame,
-            labelRestants: settings.labelRestants,
-            tierPoints: tierPoints.isEmpty ? nil : tierPoints,
-            tierLabels: tierLabels.isEmpty ? nil : tierLabels,
-            stampIconPendingBase64: nil,
-            stampIconWasRemoved: nil,
-            hasServerStampIcon: settings.hasStampIcon == true
-        )
+    private static func minimalDisplaySnapshotFromSettings(
+        _ settings: BusinessSettingsResponse,
+        slug: String,
+        preserving existing: CardPreviewDisplaySnapshot? = nil
+    ) -> CardPreviewDisplaySnapshot {
+        CardPreviewSnapshotBuilder.fromSettings(settings, slug: slug, preserving: existing)
     }
 
     private func fetchAllMembers(slug: String) async throws -> BusinessMembersResponse {

@@ -65,7 +65,7 @@ struct MerchantStatisticsDashboardScreen: View {
         )
         .environment(\.managedObjectContext, viewContext)
         .background(Color.clear)
-        .environment(\.commerceStatsGlassOverlay, glassOverlayMode)
+        .environment(\.commerceStatsGlassOverlay, glassOverlayPresentation)
         .toolbar(.hidden, for: .navigationBar)
         .toolbarBackground(.hidden, for: .navigationBar)
         .modifier(MerchantStatsTabBarVisibilityModifier(hidesTabBar: hidesTabBar))

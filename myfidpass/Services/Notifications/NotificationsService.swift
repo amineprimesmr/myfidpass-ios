@@ -285,31 +285,7 @@ final class NotificationsService: NSObject, ObservableObject {
     }
 
     private func isMerchantCardConfigured(slug: String) -> Bool {
-        guard let snapshot = CardPreviewDisplaySnapshotStore.load(slug: slug) else { return false }
-        let missing = MyCardCompletionRequirements.missingRequirements(
-            primaryHex: snapshot.primaryHex,
-            accentHex: snapshot.accentHex,
-            labelHex: snapshot.labelHex,
-            stripDisplayMode: snapshot.stripDisplayMode,
-            stripText: snapshot.stripText,
-            displayName: snapshot.displayName,
-            logoURL: snapshot.logoURL,
-            programType: snapshot.programType,
-            cardBackgroundImagePath: snapshot.hasLocalCardBackground == true ? CardLogoStorage.relativeCardBackgroundPath : nil,
-            cardBackgroundRemoteURL: snapshot.cardBackgroundRemoteURL,
-            cardBackgroundWasRemoved: false,
-            stampEmoji: snapshot.stampEmoji,
-            stampIconPendingBase64: snapshot.stampIconPendingBase64,
-            stampIconWasRemoved: snapshot.stampIconWasRemoved ?? false,
-            serverHasStampIcon: snapshot.hasServerStampIcon ?? false,
-            tierPoints: snapshot.tierPoints ?? [],
-            tierLabels: snapshot.tierLabels ?? [],
-            requiredStamps: snapshot.requiredStamps,
-            stampRewardLabel: snapshot.stampRewardLabel,
-            stampMidRewardLabel: snapshot.stampMidRewardLabel ?? "",
-            startGameRewardLabel: snapshot.startGameRewardLabel ?? ""
-        )
-        return missing.isEmpty
+        CardPreviewDisplaySnapshotStore.isMerchantCardConfigured(slug: slug)
     }
 
     private func isMerchantFlyerConfigured(slug: String) -> Bool {

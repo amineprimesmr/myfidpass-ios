@@ -115,9 +115,10 @@ private struct LocalImagePreviewView: View {
     }
 }
 
-/// Nombre de paliers points **éditables** dans « Récompenses » (ex. 30 € / 60 € / 100 €), hors « Début du jeu ».
+/// Paliers points éditables dans « Récompenses » (10 pts inclus en 1ʳᵉ ligne).
 enum MyCardPointsRewardTiers {
-    static let slotCount = 5
+    static let slotCount = 8
+    static let minVisibleCount = 5
 }
 
 /// État comparé pour savoir si « Enregistrer » doit apparaître (aligné sur ce que `saveTemplate` envoie).
@@ -206,7 +207,7 @@ struct MyCardView: View {
     @State private var pointsPerEuro: Int = 1
     @State private var pointsPerVisit: Int = 0
     @State private var pointsMinAmountEur: String = ""
-    /// Paliers points (5, hors ligne « 10 pts » / début de jeu), alignés sur le SaaS web.
+    /// Paliers points (10 pts en 1ʳᵉ ligne + paliers suivants), alignés sur le SaaS web.
     @State private var tierPoints: [String] = Array(repeating: "", count: MyCardPointsRewardTiers.slotCount)
     @State private var tierLabels: [String] = Array(repeating: "", count: MyCardPointsRewardTiers.slotCount)
     @State private var stampRewardLabel: String = ""
@@ -329,7 +330,12 @@ struct MyCardView: View {
     }
 
     private var shouldShowCompletionPills: Bool {
-        !cardMissingRequirements.isEmpty
+        if let slug = AuthStorage.currentBusinessSlug,
+           CardPreviewDisplaySnapshotStore.isMerchantCardConfigured(slug: slug),
+           !dashboardSettingsHydrated {
+            return false
+        }
+        return !cardMissingRequirements.isEmpty
     }
 
     var body: some View {
@@ -377,6 +383,10 @@ struct MyCardView: View {
                 loadCurrentTemplate()
                 restoreLocalBackgroundFromSnapshot()
                 mergeStampIconFromDisplaySnapshotIfNeeded()
+                if let slug = AuthStorage.currentBusinessSlug,
+                   let snap = CardPreviewDisplaySnapshotStore.load(slug: slug) {
+                    applyDisplaySnapshot(snap, restoreLogoFromSnapshot: true)
+                }
                 Task {
                     await loadCardSettingsFromAPI()
                     await MainActor.run {
@@ -621,6 +631,11 @@ struct MyCardView: View {
             MyCardProgramDefaults.fillDefaultPointsTiersIfNeeded(
                 tierPoints: &tierPoints,
                 tierLabels: &tierLabels
+            )
+            MyCardProgramDefaults.syncStartGameLabelFromFirstTier(
+                startGameRewardLabel: &startGameRewardLabel,
+                tierPoints: tierPoints,
+                tierLabels: tierLabels
             )
             if pointsPerEuro < 1 { pointsPerEuro = 1 }
         } else if new == "stamps" {
@@ -1356,7 +1371,11 @@ struct MyCardView: View {
                     tierLabels = split.tierLabels
                     if programType == "points" {
                         MyCardProgramDefaults.sanitizeEditableTierSlots(tierPoints: &tierPoints, tierLabels: &tierLabels)
-                        MyCardProgramDefaults.ensureStartGameRewardLabel(&startGameRewardLabel)
+                        MyCardProgramDefaults.syncStartGameLabelFromFirstTier(
+                            startGameRewardLabel: &startGameRewardLabel,
+                            tierPoints: tierPoints,
+                            tierLabels: tierLabels
+                        )
                     }
                 } else {
                     tierPoints = Array(repeating: "", count: MyCardPointsRewardTiers.slotCount)
@@ -1596,6 +1615,11 @@ struct MyCardView: View {
                 tierPoints: &tierPoints,
                 tierLabels: &tierLabels
             )
+            MyCardProgramDefaults.syncStartGameLabelFromFirstTier(
+                startGameRewardLabel: &startGameRewardLabel,
+                tierPoints: tierPoints,
+                tierLabels: tierLabels
+            )
             patch.pointsRewardTiers = MyCardProgramDefaults.buildPointsRewardTiersForAPI(
                 startGameRewardLabel: startGameRewardLabel,
                 tierPoints: tierPoints,
@@ -1676,7 +1700,11 @@ struct MyCardView: View {
                 tierPoints: &tierPoints,
                 tierLabels: &tierLabels
             )
-            MyCardProgramDefaults.ensureStartGameRewardLabel(&startGameRewardLabel)
+            MyCardProgramDefaults.syncStartGameLabelFromFirstTier(
+                startGameRewardLabel: &startGameRewardLabel,
+                tierPoints: tierPoints,
+                tierLabels: tierLabels
+            )
             rewardTiers = MyCardProgramDefaults.buildPointsRewardTiersForAPI(
                 startGameRewardLabel: startGameRewardLabel,
                 tierPoints: tierPoints,

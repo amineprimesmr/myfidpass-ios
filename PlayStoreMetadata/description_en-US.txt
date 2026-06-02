@@ -1,8 +1,27 @@
-MyFidpass helps merchants build customer loyalty with digital wallet loyalty cards: card design, QR scanning, members, push notifications, and analytics.
+MyFidpass is the mobile app for merchants who want to launch or run a modern loyalty program — no paper cards required.
 
-Features: dashboard, scanner, campaigns, multi-location plans (1–5 stores), customizable card, Google Business integration.
+Design a branded card (logo, colors, rewards). Customers add it to Google Wallet or Apple Wallet. You manage everything from your phone.
 
-MyFidpass Pro subscription via secure payment (Stripe). Promotional €1 first month, then pricing shown on the paywall before purchase.
+KEY FEATURES
 
-Terms of use: https://www.myfidpass.fr/cgu
-Privacy policy: https://www.myfidpass.fr/politique-confidentialite
+• Digital loyalty card — points or stamp mode, fully customizable
+• QR scanner — credit points or stamps in-store in seconds
+• Members — list, search, history and segmentation
+• Dashboard — stats and program activity at a glance
+• Campaigns — push notifications to re-engage customers
+• Multi-location — manage several businesses on one account
+• Google Wallet — preview and share your store’s loyalty card
+
+WHO IS IT FOR?
+
+Restaurants, cafés, salons, shops and local retailers who want simple loyalty without expensive hardware.
+
+SUBSCRIPTION
+
+Free to download. MyFidpass Pro (advanced features) is purchased via secure checkout on myfidpass.fr (Stripe). Price and billing period are shown before payment. Not sold through Google Play Billing.
+
+LEGAL
+
+Terms: https://www.myfidpass.fr/cgu
+Privacy: https://www.myfidpass.fr/politique-confidentialite
+Support: support@myfidpass.fr

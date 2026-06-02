@@ -22,6 +22,7 @@ object FlyerBootstrapPreviewPayloadBuilder {
     private data class BootstrapPayload(
         @SerialName("flyer_prefs") val flyerPrefs: FlyerPrefsInner,
         @SerialName("share_url") val shareUrl: String = "",
+        @SerialName("match_predictions_enabled") val matchPredictionsEnabled: Boolean? = null,
         @SerialName("_nbg") val nativeBgActive: Boolean? = null,
     )
 
@@ -55,6 +56,7 @@ object FlyerBootstrapPreviewPayloadBuilder {
         customBgDataUrl: String?,
         stripCustomBgForNativeUnderlay: Boolean = false,
         nativeBgActive: Boolean = false,
+        matchPredictionsEnabled: Boolean = false,
     ): String {
         val st = state.normalizeClamps()
         val payload = BootstrapPayload(
@@ -66,10 +68,16 @@ object FlyerBootstrapPreviewPayloadBuilder {
                 businessSlug = businessSlug.trim(),
             ),
             shareUrl = shareUrl.trim(),
+            matchPredictionsEnabled = if (matchPredictionsEnabled) true else null,
             nativeBgActive = if (nativeBgActive) true else null,
         )
         val bytes = json.encodeToString(payload).toByteArray(Charsets.UTF_8)
         return Base64.encodeToString(bytes, Base64.NO_WRAP)
+    }
+
+    fun matchPredictionsEnabledFromDashboard(response: JsonObject): Boolean {
+        val v = response["match_predictions_enabled"]?.jsonPrimitive?.content?.trim()?.lowercase().orEmpty()
+        return v == "true" || v == "1"
     }
 
     fun base64FromDashboardResponse(
@@ -94,6 +102,7 @@ object FlyerBootstrapPreviewPayloadBuilder {
             customBgDataUrl = bg,
             stripCustomBgForNativeUnderlay = hasNativeBg,
             nativeBgActive = hasNativeBg,
+            matchPredictionsEnabled = matchPredictionsEnabledFromDashboard(response),
         )
     }
 
