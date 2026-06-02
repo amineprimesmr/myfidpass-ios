@@ -182,10 +182,10 @@ struct MatchPredictionsSheet: View {
         .padding(.vertical, 4)
     }
 
-    private func load() async {
+    private func load(clearErrors: Bool = true) async {
         await MainActor.run {
             isLoading = true
-            errorMessage = nil
+            if clearErrors { errorMessage = nil }
         }
         do {
             let response: MatchPredictionsDashboardResponse = try await APIClient.shared.request(.dashboardMatchPredictions(slug: slug))
@@ -212,16 +212,23 @@ struct MatchPredictionsSheet: View {
                 enabled: enabled,
                 pointsPerCorrectPrediction: pointsPerCorrectPrediction
             )
-            _ = try await APIClient.shared.request(.dashboardMatchPredictionsConfig(slug: slug, body: body)) as EmptyResponse
-            await load()
+            let patch: MatchPredictionsConfigPatchResponse = try await APIClient.shared.request(.dashboardMatchPredictionsConfig(slug: slug, body: body))
             await MainActor.run {
+                if let cfg = patch.config {
+                    enabled = cfg.enabled ?? enabled
+                    if let pts = cfg.pointsPerCorrectPrediction {
+                        pointsPerCorrectPrediction = max(1, min(500, pts))
+                    }
+                }
                 message = "Configuration enregistrée."
+                errorMessage = nil
                 NotificationCenter.default.post(
                     name: .myfidpassMatchPredictionsConfigDidSave,
                     object: nil,
                     userInfo: ["slug": slug, "enabled": enabled]
                 )
             }
+            await load(clearErrors: false)
         } catch {
             await MainActor.run {
                 errorMessage = APIError.merchantFacingMessage(from: error) ?? "Enregistrement impossible."

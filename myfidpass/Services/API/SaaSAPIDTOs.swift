@@ -112,6 +112,16 @@ struct PatchGameBody: Encodable {
 struct MatchPredictionsDashboardResponse: Decodable {
     let config: MatchPredictionConfigDTO?
     let matches: [MatchPredictionMatchDTO]
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        config = try c.decodeIfPresent(MatchPredictionConfigDTO.self, forKey: .config)
+        matches = try c.decodeIfPresent([MatchPredictionMatchDTO].self, forKey: .matches) ?? []
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case config, matches
+    }
 }
 
 struct MatchPredictionConfigDTO: Decodable {
@@ -121,6 +131,30 @@ struct MatchPredictionConfigDTO: Decodable {
     enum CodingKeys: String, CodingKey {
         case enabled
         case pointsPerCorrectPrediction = "points_per_correct_prediction"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = Self.decodeBoolish(c, forKey: .enabled)
+        pointsPerCorrectPrediction = Self.decodeLosslessInt(c, forKey: .pointsPerCorrectPrediction)
+    }
+
+    private static func decodeBoolish(_ c: KeyedDecodingContainer<CodingKeys>, forKey key: CodingKeys) -> Bool? {
+        if let b = try? c.decode(Bool.self, forKey: key) { return b }
+        if let n = try? c.decode(Int.self, forKey: key) { return n != 0 }
+        if let s = try? c.decode(String.self, forKey: key) {
+            let t = s.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if t == "true" || t == "1" { return true }
+            if t == "false" || t == "0" { return false }
+        }
+        return nil
+    }
+
+    private static func decodeLosslessInt(_ c: KeyedDecodingContainer<CodingKeys>, forKey key: CodingKeys) -> Int? {
+        if let n = try? c.decode(Int.self, forKey: key) { return n }
+        if let d = try? c.decode(Double.self, forKey: key) { return Int(d) }
+        if let s = try? c.decode(String.self, forKey: key), let n = Int(s) { return n }
+        return nil
     }
 }
 
@@ -149,6 +183,40 @@ struct MatchPredictionMatchDTO: Decodable, Identifiable {
         case correctCount = "correct_count"
         case pointsDistributed = "points_distributed"
     }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        title = try c.decodeIfPresent(String.self, forKey: .title)
+        teamHome = try c.decodeIfPresent(String.self, forKey: .teamHome) ?? "—"
+        teamAway = try c.decodeIfPresent(String.self, forKey: .teamAway) ?? "—"
+        startsAt = try c.decodeIfPresent(String.self, forKey: .startsAt) ?? ""
+        cutoffAt = try c.decodeIfPresent(String.self, forKey: .cutoffAt)
+        status = try c.decodeIfPresent(String.self, forKey: .status)
+        resultChoice = try c.decodeIfPresent(String.self, forKey: .resultChoice)
+        locked = Self.decodeBoolish(c, forKey: .locked)
+        entriesCount = Self.decodeLosslessInt(c, forKey: .entriesCount)
+        correctCount = Self.decodeLosslessInt(c, forKey: .correctCount)
+        pointsDistributed = Self.decodeLosslessInt(c, forKey: .pointsDistributed)
+    }
+
+    private static func decodeBoolish(_ c: KeyedDecodingContainer<CodingKeys>, forKey key: CodingKeys) -> Bool? {
+        if let b = try? c.decode(Bool.self, forKey: key) { return b }
+        if let n = try? c.decode(Int.self, forKey: key) { return n != 0 }
+        return nil
+    }
+
+    private static func decodeLosslessInt(_ c: KeyedDecodingContainer<CodingKeys>, forKey key: CodingKeys) -> Int? {
+        if let n = try? c.decode(Int.self, forKey: key) { return n }
+        if let d = try? c.decode(Double.self, forKey: key) { return Int(d) }
+        if let s = try? c.decode(String.self, forKey: key), let n = Int(s) { return n }
+        return nil
+    }
+}
+
+struct MatchPredictionsConfigPatchResponse: Decodable {
+    let ok: Bool?
+    let config: MatchPredictionConfigDTO?
 }
 
 struct MatchPredictionsConfigPatchBody: Encodable {

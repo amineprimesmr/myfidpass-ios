@@ -43,6 +43,7 @@ import androidx.compose.ui.unit.dp
 import fr.myfidpass.data.repo.DashboardRepository
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
@@ -86,7 +87,9 @@ fun MatchPredictionsScreen(
 
     fun apply(json: JsonObject) {
         val cfg = json["config"]?.jsonObject
-        enabled = cfg?.get("enabled")?.jsonPrimitive?.content == "true"
+        enabled = cfg?.get("enabled")?.jsonPrimitive?.booleanOrNull
+            ?: (cfg?.get("enabled")?.jsonPrimitive?.intOrNull?.let { it != 0 })
+            ?: false
         pointsPerCorrect = cfg?.get("points_per_correct_prediction")?.jsonPrimitive?.intOrNull
             ?.coerceIn(1, 500) ?: 10
         matches = json["matches"]?.jsonArray?.mapNotNull { el ->
