@@ -195,7 +195,7 @@ struct MatchPredictionsSheet: View {
             }
         } catch {
             await MainActor.run {
-                errorMessage = "Impossible de charger les pronostics."
+                errorMessage = APIError.merchantFacingMessage(from: error) ?? "Impossible de charger les pronostics."
                 isLoading = false
             }
         }
@@ -223,7 +223,9 @@ struct MatchPredictionsSheet: View {
                 )
             }
         } catch {
-            await MainActor.run { errorMessage = "Enregistrement impossible." }
+            await MainActor.run {
+                errorMessage = APIError.merchantFacingMessage(from: error) ?? "Enregistrement impossible."
+            }
         }
         await MainActor.run { isSavingConfig = false }
     }
@@ -241,7 +243,9 @@ struct MatchPredictionsSheet: View {
             await load()
             await MainActor.run { message = "Résultat validé : \(winners) gagnant(s)." }
         } catch {
-            await MainActor.run { errorMessage = "Validation du résultat impossible." }
+            await MainActor.run {
+                errorMessage = APIError.merchantFacingMessage(from: error) ?? "Validation du résultat impossible."
+            }
         }
         await MainActor.run { scoringMatchId = nil }
     }
