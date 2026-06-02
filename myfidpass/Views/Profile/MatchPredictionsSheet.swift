@@ -96,10 +96,18 @@ struct MatchPredictionsSheet: View {
 
     private var matchesCard: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Matchs sélectionnés")
-                .font(.headline)
+            HStack {
+                Text("Phase de groupes")
+                    .font(.headline)
+                Spacer()
+                if !matches.isEmpty {
+                    Text("\(matches.count) matchs")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(AppTheme.Colors.textSecondary)
+                }
+            }
             if matches.isEmpty {
-                Text("Aucun match disponible pour le moment.")
+                Text("Chargement du calendrier… Réessayez dans quelques secondes.")
                     .font(.subheadline)
                     .foregroundStyle(AppTheme.Colors.textSecondary)
             } else {
