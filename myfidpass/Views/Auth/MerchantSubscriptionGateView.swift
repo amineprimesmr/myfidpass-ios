@@ -29,7 +29,8 @@ struct MerchantSubscriptionGateView: View {
         CustomMerchantProPaywallView(
                 allowsCloseButton: showsPaywallCloseButton,
                 onCloseRequested: showsPaywallCloseButton ? { finishMerchantSubscriptionGate() } : nil,
-                headerExtraTopPadding: isMandatory ? 10 : 28,
+                isSheetPresentation: !isMandatory,
+                headerExtraTopPadding: isMandatory ? 10 : 4,
                 closeButtonRevealDelay: (isMandatory && showsPaywallCloseButton) ? 0 : 5,
                 requiredCommerceSlots: requiredCommerceSlots,
                 signupCommerceDisplayName: signupCommerceDisplayName

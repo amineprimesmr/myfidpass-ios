@@ -15,6 +15,8 @@ struct CustomMerchantProPaywallView: View {
 
     var allowsCloseButton: Bool = true
     var onCloseRequested: (() -> Void)? = nil
+    /// Feuille modale (pastille essai, quota) — titre plus haut, zone features un peu plus haute.
+    var isSheetPresentation: Bool = false
     var headerExtraTopPadding: CGFloat = 4
     var closeButtonRevealDelay: TimeInterval = 5
     var requiredCommerceSlots: Int? = nil
@@ -59,6 +61,18 @@ struct CustomMerchantProPaywallView: View {
         appleStore.isProductAvailable(slots: effectiveCommerceSlots, annual: selectedPlanIsAnnual)
     }
 
+    private var paywallRootTopPadding: CGFloat {
+        if isSheetPresentation {
+            return max(0, measuredTopSafeInset * 0.2) + headerExtraTopPadding
+        }
+        return measuredTopSafeInset + headerExtraTopPadding
+    }
+
+    private var titleBlockTopPadding: CGFloat { isSheetPresentation ? 2 : 10 }
+    private var titleBlockBottomPadding: CGFloat { isSheetPresentation ? 12 : 22 }
+    private var featuresScrollMinHeight: CGFloat { isSheetPresentation ? 272 : 0 }
+    private var bottomSectionTopPadding: CGFloat { isSheetPresentation ? 8 : 14 }
+
     var body: some View {
         ZStack {
             PaywallBevelBackdrop()
@@ -68,21 +82,22 @@ struct CustomMerchantProPaywallView: View {
 
                 titleBlock
                     .padding(.horizontal, 28)
-                    .padding(.top, 10)
-                    .padding(.bottom, 22)
+                    .padding(.top, titleBlockTopPadding)
+                    .padding(.bottom, titleBlockBottomPadding)
 
                 PaywallBevelAutoScrollingFeatures(
                     primary: PaywallBevelFeatureCatalog.primary,
                     alsoIncluded: PaywallBevelFeatureCatalog.alsoIncluded
                 )
-                .padding(.top, 4)
-                .padding(.bottom, 12)
+                .padding(.top, isSheetPresentation ? 0 : 4)
+                .padding(.bottom, isSheetPresentation ? 6 : 12)
+                .frame(minHeight: featuresScrollMinHeight)
                 .frame(maxHeight: .infinity)
-                .layoutPriority(1)
+                .layoutPriority(isSheetPresentation ? 2 : 1)
 
                 bottomSection
             }
-            .padding(.top, measuredTopSafeInset + headerExtraTopPadding)
+            .padding(.top, paywallRootTopPadding)
         }
         .preferredColorScheme(.light)
         .alert("Achat", isPresented: Binding(
@@ -265,8 +280,8 @@ struct CustomMerchantProPaywallView: View {
             }
         }
         .padding(.horizontal, 22)
-        .padding(.bottom, 28)
-        .padding(.top, 14)
+        .padding(.bottom, isSheetPresentation ? 22 : 28)
+        .padding(.top, bottomSectionTopPadding)
     }
 
     // MARK: - Prix

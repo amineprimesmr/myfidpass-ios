@@ -112,15 +112,28 @@ struct MainTabView: View {
     private func refreshSubscribePillClearance() {
         subscribePillClearanceRefreshTask?.cancel()
         subscribePillClearanceRefreshTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 380_000_000)
-            guard !Task.isCancelled else { return }
-            let measured = TabBarBottomClearance.remeasureFromKeyWindow()
-            guard abs(tabBarBottomClearance - measured) > 0.5 else { return }
-            var tx = Transaction()
-            tx.disablesAnimations = true
-            withTransaction(tx) {
-                tabBarBottomClearance = measured
+            // Mesures rapides (sans pause 380 ms) : la UITabBar surestime souvent la marge au 1er layout.
+            let delays: [UInt64] = [0, 80_000_000, 200_000_000]
+            for delay in delays {
+                if delay > 0 {
+                    try? await Task.sleep(nanoseconds: delay)
+                }
+                guard !Task.isCancelled else { return }
+                applySubscribePillClearanceIfNeeded(TabBarBottomClearance.remeasureFromKeyWindow())
             }
+        }
+    }
+
+    /// N’applique que si la pastille peut descendre ou bouger légèrement — jamais un gros saut vers le haut.
+    private func applySubscribePillClearanceIfNeeded(_ measured: CGFloat) {
+        guard abs(tabBarBottomClearance - measured) > 0.5 else { return }
+        let mayMoveDown = measured < tabBarBottomClearance - 0.5
+        let smallNudge = abs(measured - tabBarBottomClearance) <= 4
+        guard mayMoveDown || smallNudge else { return }
+        var tx = Transaction()
+        tx.disablesAnimations = true
+        withTransaction(tx) {
+            tabBarBottomClearance = measured
         }
     }
 

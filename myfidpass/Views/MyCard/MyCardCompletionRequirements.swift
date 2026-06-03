@@ -94,18 +94,33 @@ enum MyCardCompletionRequirements {
         return t.allSatisfy(\.isHexDigit)
     }
 
-    /// True si le bandeau haut est correctement renseigné (logo image ou placeholder par défaut).
+    /// Bandeau haut : texte personnalisé **ou** logo réel (fichier local ou URL serveur) — pas le placeholder « Votre logo ».
     static func hasBandeauComplet(
         stripDisplayMode: String,
         stripText: String,
         displayName: String,
         logoURL: String
     ) -> Bool {
-        _ = stripDisplayMode
-        _ = stripText
-        _ = displayName
-        _ = logoURL
-        return true
+        let mode = stripDisplayMode.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if mode == "text" {
+            let text = stripText.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !text.isEmpty { return true }
+            return !displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        return hasMerchantLogoConfigured(logoURL: logoURL)
+    }
+
+    /// Logo commerce enregistré (pas seulement l’asset placeholder de l’aperçu).
+    static func hasMerchantLogoConfigured(logoURL: String) -> Bool {
+        let logo = logoURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !logo.isEmpty else { return false }
+        if logo.lowercased().hasPrefix("http://") || logo.lowercased().hasPrefix("https://") {
+            return true
+        }
+        if let path = CardLogoStorage.resolvedDisplayPath(forStoredPath: logo) {
+            return FileManager.default.fileExists(atPath: path)
+        }
+        return false
     }
 
     static func hasCardBackgroundPoints(

@@ -107,9 +107,18 @@ struct MatchPredictionsSheet: View {
                 }
             }
             if matches.isEmpty {
-                Text("Chargement du calendrier… Réessayez dans quelques secondes.")
-                    .font(.subheadline)
-                    .foregroundStyle(AppTheme.Colors.textSecondary)
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Aucun match affiché pour l’instant.")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(AppTheme.Colors.textPrimary)
+                    Text("Le calendrier (72 matchs de groupes) est chargé depuis le serveur. Vérifiez votre connexion ou réessayez.")
+                        .font(.subheadline)
+                        .foregroundStyle(AppTheme.Colors.textSecondary)
+                    Button("Réessayer") {
+                        Task { await load(retryIfEmpty: false) }
+                    }
+                    .font(.subheadline.weight(.semibold))
+                }
             } else {
                 ForEach(matches) { match in
                     matchRow(match)
@@ -190,13 +199,17 @@ struct MatchPredictionsSheet: View {
         .padding(.vertical, 4)
     }
 
-    private func load(clearErrors: Bool = true) async {
+    private func load(clearErrors: Bool = true, retryIfEmpty: Bool = true) async {
         await MainActor.run {
             isLoading = true
             if clearErrors { errorMessage = nil }
         }
         do {
-            let response: MatchPredictionsDashboardResponse = try await APIClient.shared.request(.dashboardMatchPredictions(slug: slug))
+            var response: MatchPredictionsDashboardResponse = try await APIClient.shared.request(.dashboardMatchPredictions(slug: slug))
+            if retryIfEmpty, response.matches.isEmpty {
+                try? await Task.sleep(nanoseconds: 900_000_000)
+                response = try await APIClient.shared.request(.dashboardMatchPredictions(slug: slug))
+            }
             await MainActor.run {
                 apply(response)
                 isLoading = false

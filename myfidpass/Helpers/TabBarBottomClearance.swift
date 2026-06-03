@@ -12,7 +12,7 @@ enum TabBarBottomClearance {
     /// Marge confortable entre la pastille et le haut de la tab bar.
     static let gapAboveTabBar: CGFloat = 12
 
-    /// Valeur par défaut (iPhone avec tab bar flottante) — évite un saut au 1er frame.
+    /// Valeur par défaut au lancement — alignée visuellement au-dessus de la tab bar flottante (évite le saut vers le haut).
     static let stableFallback: CGFloat = 58
 
     private static let minClearance: CGFloat = 50
