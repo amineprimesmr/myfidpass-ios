@@ -71,12 +71,23 @@ final class MerchantAppleSubscriptionStore: ObservableObject {
             .displayPrice
     }
 
-    /// Éligibilité offre introductive — une seule par **groupe** d’abonnements et par Apple ID.
+    /// Offre découverte configurée sur le produit App Store Connect (payAsYouGo 1 €, etc.).
+    func hasIntroductoryOfferConfigured(slots: Int, annual: Bool) -> Bool {
+        product(slots: slots, annual: annual)?.subscription?.introductoryOffer != nil
+    }
+
+    /// Éligibilité offre introductive — une seule par **groupe** d’abonnements et par Apple ID (règle Apple).
     func isEligibleForIntroOffer(slots: Int, annual: Bool) async -> Bool {
-        guard let product = product(slots: slots, annual: annual),
-              let subscription = product.subscription
+        guard hasIntroductoryOfferConfigured(slots: slots, annual: annual),
+              let subscription = product(slots: slots, annual: annual)?.subscription
         else { return false }
         return await subscription.isEligibleForIntroOffer
+    }
+
+    /// Achat in-app avec 1 € au 1er mois possible sur ce produit et ce compte Apple.
+    func canPurchaseWithAppleIntroOffer(slots: Int, annual: Bool) async -> Bool {
+        guard hasIntroductoryOfferConfigured(slots: slots, annual: annual) else { return false }
+        return await isEligibleForIntroOffer(slots: slots, annual: annual)
     }
 
     /// Achat in-app + validation serveur. Retourne la réponse API (statut abonnement côté MyFidpass).

@@ -39,9 +39,30 @@ enum LegalURLs {
     /// Page web d’abonnement (essai → paiement Stripe). Même origine que la redirection canonique Vercel (www).
     static let merchantSubscriptionCheckout = URL(string: "https://www.myfidpass.fr/abonnement")!
 
-    /// Payment Link Stripe (1er mois 1 €, code MYFID1EURO) — SaaS web + WebView iOS.
+    /// Payment Link Stripe (1er mois 1 €, code MYFID1EURO) — ouverture externe / fallback.
     static func merchantSaasProPaymentPage(prefilledEmail: String? = nil) -> URL {
         merchantStripeSubscriptionPaymentLinkWithPromo(prefilledEmail: prefilledEmail)
+    }
+
+    /// Checkout intégré myfidpass.fr (`app_embed=1`) — 1 € 1er mois via coupons Stripe (tous comptes, hors limite Apple).
+    static func merchantEmbeddedSaasPaymentPage(
+        prefilledEmail: String? = nil,
+        planAnnual: Bool = false,
+        commerceSlots: Int = 1
+    ) -> URL {
+        var components = URLComponents(string: "https://www.myfidpass.fr/paiement")!
+        let slots = min(5, max(1, commerceSlots))
+        var items: [URLQueryItem] = [
+            URLQueryItem(name: "app_embed", value: "1"),
+            URLQueryItem(name: "plan", value: planAnnual ? "annual" : "monthly"),
+            URLQueryItem(name: "commerce_slots", value: String(slots)),
+        ]
+        let e = prefilledEmail?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !e.isEmpty {
+            items.append(URLQueryItem(name: "prefilled_email", value: e))
+        }
+        components.queryItems = items
+        return components.url ?? URL(string: "https://www.myfidpass.fr/paiement?app_embed=1")!
     }
 
     /// Payment Link abonnement (fallback) — code **MYFID1EURO** aligné 1er mois à 1 € sur le mensuel.

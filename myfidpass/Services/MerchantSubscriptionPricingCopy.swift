@@ -17,11 +17,9 @@ enum MerchantSubscriptionPricingCopy {
     /// Au-dessus des cartes Mensuel / Annuel.
     static let paywallPricingIntroLine = "Premier mois à 1€, puis…"
 
-    /// Paywall quand le compte Apple a déjà consommé l’offre découverte du groupe d’abonnements.
-    static let paywallStandardPricingIntroLine = "Abonnement MyFidpass Pro"
-
-    static let paywallIntroOfferUnavailableNote =
-        "L’offre à 1 € n’est pas disponible sur ce compte Apple (déjà utilisée ou abonnement passé dans le groupe MyFidpass Pro). Le tarif standard s’appliquera."
+    /// Sous le CTA quand le 1 € passe par Stripe (compte Apple déjà éligible à l’intro IAP ou forfait sans intro StoreKit).
+    static let paywallStripeFirstMonthNote =
+        "Premier mois à 1 € via paiement sécurisé Stripe (carte ou Apple Pay), puis le tarif choisi."
 
     /// Sous le bouton Continuer (mis en avant).
     static let paywallNoCommitmentHighlight = "Sans engagement"

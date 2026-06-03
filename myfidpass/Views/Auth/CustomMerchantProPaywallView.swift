@@ -29,7 +29,8 @@ struct CustomMerchantProPaywallView: View {
     @State private var isCloseButtonRevealed = false
     @State private var showsPaywallLegalMenu = false
     @State private var measuredTopSafeInset: CGFloat = 0
-    @State private var introOfferEligible: Bool?
+    @State private var appleIntroOfferAvailable: Bool?
+    @State private var showStripeCheckoutSheet = false
     @ObservedObject private var appleStore = MerchantAppleSubscriptionStore.shared
 
     private var effectiveCommerceSlots: Int {
@@ -49,6 +50,12 @@ struct CustomMerchantProPaywallView: View {
 
     private var introOfferEligibilityTaskKey: String {
         "\(effectiveCommerceSlots)-\(selectedPlanIsAnnual)-\(appleStore.isLoadingProducts)"
+    }
+
+    /// Stripe : 1 € 1er mois pour tous (coupons). App Store : uniquement si intro IAP encore éligible sur ce Apple ID.
+    private var usesStripeFirstMonthCheckout: Bool {
+        if appleIntroOfferAvailable == true { return false }
+        return true
     }
 
     private var selectedPlanIsAnnual: Bool {
@@ -102,12 +109,26 @@ struct CustomMerchantProPaywallView: View {
                     .ignoresSafeArea()
             }
         }
+        .sheet(isPresented: $showStripeCheckoutSheet) {
+            MerchantSaasPaymentWebView(
+                useEmbeddedStripeCheckout: true,
+                embeddedPlanAnnual: selectedPlanIsAnnual,
+                embeddedCommerceSlots: effectiveCommerceSlots,
+                allowsCloseButton: true,
+                onCloseRequested: { showStripeCheckoutSheet = false }
+            )
+            .environmentObject(authService)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .myfidpassSubscriptionPaymentCompleted)) { _ in
+            showStripeCheckoutSheet = false
+            completePaywallAfterSuccessfulPayment()
+        }
         .task {
             await appleStore.loadProductsIfNeeded(force: true)
-            await refreshIntroOfferEligibility()
+            await refreshAppleIntroOfferAvailability()
         }
         .task(id: introOfferEligibilityTaskKey) {
-            await refreshIntroOfferEligibility()
+            await refreshAppleIntroOfferAvailability()
         }
         .onAppear {
             refreshMeasuredTopSafeInset()
@@ -215,8 +236,8 @@ struct CustomMerchantProPaywallView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.bottom, 2)
 
-            if introOfferEligible == false {
-                Text(MerchantSubscriptionPricingCopy.paywallIntroOfferUnavailableNote)
+            if appleIntroOfferAvailable == false {
+                Text(MerchantSubscriptionPricingCopy.paywallStripeFirstMonthNote)
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(Color.black.opacity(0.52))
                     .multilineTextAlignment(.center)
@@ -253,11 +274,11 @@ struct CustomMerchantProPaywallView: View {
             }
 
             PaywallBevelContinueButton(
-                title: MerchantSubscriptionPricingCopy.paywallContinueCta,
+                title: paywallContinueButtonTitle,
                 isLoading: isPurchasing,
-                isEnabled: selectedPlanAvailableOnStore && !appleStore.isLoadingProducts
+                isEnabled: paywallContinueButtonEnabled
             ) {
-                Task { await purchaseWithAppStore() }
+                Task { await startSubscriptionPurchase() }
             }
 
             Text(MerchantSubscriptionPricingCopy.paywallNoCommitmentHighlight)
@@ -280,28 +301,31 @@ struct CustomMerchantProPaywallView: View {
     // MARK: - Prix
 
     private var paywallPricingIntroText: String {
-        if introOfferEligible == true {
-            if let intro = appleStore.introductoryOfferDisplayPrice(
-                slots: effectiveCommerceSlots,
-                annual: selectedPlanIsAnnual
-            ), !intro.isEmpty {
-                return "Premier mois à \(normalizePrice(intro)), puis…"
-            }
-            return MerchantSubscriptionPricingCopy.paywallPricingIntroLine
-        }
-        if introOfferEligible == false {
-            return MerchantSubscriptionPricingCopy.paywallStandardPricingIntroLine
+        if let intro = appleStore.introductoryOfferDisplayPrice(
+            slots: effectiveCommerceSlots,
+            annual: selectedPlanIsAnnual
+        ), !intro.isEmpty, appleIntroOfferAvailable == true {
+            return "Premier mois à \(normalizePrice(intro)), puis…"
         }
         return MerchantSubscriptionPricingCopy.paywallPricingIntroLine
     }
 
+    private var paywallContinueButtonTitle: String {
+        MerchantSubscriptionPricingCopy.purchaseCta
+    }
+
+    private var paywallContinueButtonEnabled: Bool {
+        if usesStripeFirstMonthCheckout { return !isPurchasing }
+        return selectedPlanAvailableOnStore && !appleStore.isLoadingProducts && !isPurchasing
+    }
+
     @MainActor
-    private func refreshIntroOfferEligibility() async {
+    private func refreshAppleIntroOfferAvailability() async {
         guard selectedPlanAvailableOnStore else {
-            introOfferEligible = nil
+            appleIntroOfferAvailable = nil
             return
         }
-        introOfferEligible = await appleStore.isEligibleForIntroOffer(
+        appleIntroOfferAvailable = await appleStore.canPurchaseWithAppleIntroOffer(
             slots: effectiveCommerceSlots,
             annual: selectedPlanIsAnnual
         )
@@ -415,6 +439,20 @@ struct CustomMerchantProPaywallView: View {
         } else {
             NotificationCenter.default.post(name: .myfidpassSubscriptionPaymentCompleted, object: nil)
         }
+    }
+
+    @MainActor
+    private func startSubscriptionPurchase() async {
+        purchaseError = nil
+        if appleIntroOfferAvailable == nil {
+            await refreshAppleIntroOfferAvailability()
+        }
+        if usesStripeFirstMonthCheckout {
+            await APIClient.shared.ensureValidAccessTokenWithRetry(maxAttempts: 2)
+            showStripeCheckoutSheet = true
+            return
+        }
+        await purchaseWithAppStore()
     }
 
     @MainActor

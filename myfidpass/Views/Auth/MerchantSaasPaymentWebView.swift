@@ -118,6 +118,11 @@ struct MerchantSaasPaymentWebView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var authService: AuthService
 
+    /// `true` : `/paiement?app_embed=1` (1 € Stripe). `false` : Payment Link hébergé.
+    var useEmbeddedStripeCheckout: Bool = false
+    var embeddedPlanAnnual: Bool = false
+    var embeddedCommerceSlots: Int = 1
+
     /// Paywall bloquant : pas de bouton fermer.
     var allowsCloseButton: Bool = true
     var onCloseRequested: (() -> Void)? = nil
@@ -129,9 +134,16 @@ struct MerchantSaasPaymentWebView: View {
     @State private var isCloseButtonRevealed = false
     @State private var paymentWebViewRef: WKWebView?
 
-    /// URL stable : Payment Link Stripe + e-mail commerçant si connu.
+    /// URL de paiement : checkout intégré (1 € garanti) ou Payment Link Stripe.
     private var paymentURL: URL {
         let email = authService.currentUserEmail ?? AuthStorage.userEmail
+        if useEmbeddedStripeCheckout {
+            return LegalURLs.merchantEmbeddedSaasPaymentPage(
+                prefilledEmail: email,
+                planAnnual: embeddedPlanAnnual,
+                commerceSlots: embeddedCommerceSlots
+            )
+        }
         return LegalURLs.merchantSaasProPaymentPage(prefilledEmail: email)
     }
 
