@@ -338,18 +338,17 @@ struct MerchantSaasPaymentWebView: View {
         .accessibilityLabel("Abonnement pour \(displayName)")
     }
 
-    /// Écrit `fidpass_token` / `fidpass_refresh_token` dans le localStorage de la WebView (mêmes clés que le site).
+    /// Écrit uniquement `fidpass_token` dans la WebView (`?app_embed=1` ne doit pas appeler POST /auth/refresh côté web).
+    /// Injecter le refresh provoquait une rotation serveur sans mise à jour du Keychain iOS → faux « session expirée » plus tard.
     @MainActor
     private static func injectNativeAuthSession(into webView: WKWebView) {
         guard let access = AuthStorage.authToken?.trimmingCharacters(in: .whitespacesAndNewlines), !access.isEmpty else { return }
-        let refresh = AuthStorage.refreshToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let accessEsc = jsStringLiteral(access)
-        let refreshEsc = jsStringLiteral(refresh)
         let script = """
         (function() {
           try {
             localStorage.setItem('fidpass_token', '\(accessEsc)');
-            if ('\(refreshEsc)'.length) localStorage.setItem('fidpass_refresh_token', '\(refreshEsc)');
+            localStorage.removeItem('fidpass_refresh_token');
             window.dispatchEvent(new CustomEvent('fidpass-auth-restored'));
           } catch (e) {}
         })();

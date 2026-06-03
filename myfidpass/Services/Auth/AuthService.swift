@@ -167,6 +167,14 @@ final class AuthService: NSObject, ObservableObject {
                 }
             }
             .store(in: &cancellables)
+        NotificationCenter.default.publisher(for: .myfidpassSessionInvalidated)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                // Jetons effacés côté API (refresh révoqué / rotation) : sortir de l’état « connecté sans JWT ».
+                self.logout()
+            }
+            .store(in: &cancellables)
     }
 
     private func applySubscriptionGateState(active: Bool, markResolved: Bool) {
@@ -272,7 +280,10 @@ final class AuthService: NSObject, ObservableObject {
         }
 
         guard APIClient.shared.authToken != nil, !(APIClient.shared.authToken ?? "").isEmpty else {
-            applySubscriptionGateState(active: false, markResolved: true)
+            // JWT absent : ne pas afficher le paywall « non abonné » — session incohérente (souvent refresh consommé ailleurs).
+            if AuthStorage.refreshToken?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+                logout()
+            }
             finishBusinessSwitch()
             return
         }

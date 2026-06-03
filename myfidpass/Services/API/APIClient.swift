@@ -385,8 +385,11 @@ final class APIClient: @unchecked Sendable {
             guard let http = response as? HTTPURLResponse else { return .transientFailure }
             guard http.statusCode == 200 else {
                 if http.statusCode == 401 {
-                    // Refresh révoqué ou déjà consommé (rotation) : garder l’access JWT tant qu’il est encore dans sa fenêtre.
-                    AuthStorage.refreshToken = nil
+                    // Refresh révoqué ou déjà consommé (rotation, ex. WebView paiement) : ne pas effacer le refresh
+                    // tant que l’access JWT est encore utilisable — évite une fenêtre où l’app croit être connectée sans moyen de récupérer.
+                    if !Self.accessTokenStillWithinValidityWindow() {
+                        AuthStorage.refreshToken = nil
+                    }
                     return .invalidToken
                 }
                 // 5xx / 503 (Railway, timeout) : ne jamais effacer l’access — sinon faux « Session expirée » sur la requête suivante.

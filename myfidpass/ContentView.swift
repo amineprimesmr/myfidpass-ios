@@ -223,6 +223,16 @@ struct ContentView: View {
                     await syncService.syncIfNeeded(force: true)
                 }
             }
+            .task(id: authService.currentScreen) {
+                guard authService.currentScreen == .authenticated else { return }
+                // JWT ~15 min : refresh proactif pendant une session longue au premier plan (sans attendre un 401).
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(300))
+                    guard authService.currentScreen == .authenticated else { return }
+                    guard scenePhase == .active else { continue }
+                    await APIClient.shared.ensureValidAccessTokenWithRetry(maxAttempts: 2)
+                }
+            }
             .onReceive(NotificationCenter.default.publisher(for: .myfidpassCardPreviewDisplayDidChange)) { _ in
                 Task { await NotificationsService.shared.refreshMerchantCardSetupReminder() }
             }
