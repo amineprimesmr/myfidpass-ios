@@ -585,6 +585,33 @@ struct PaymentAppleReconcileResponse: Decodable {
     let message: String?
 }
 
+/// POST /api/payment/apple/introductory-offer-eligibility
+struct PaymentAppleIntroOfferEligibilityRequest: Encodable {
+    let productId: String
+    let transactionId: String
+
+    enum CodingKeys: String, CodingKey {
+        case productId = "product_id"
+        case transactionId = "transaction_id"
+    }
+}
+
+struct PaymentAppleIntroOfferEligibilityResponse: Decodable {
+    let ok: Bool?
+    let allowIntroductoryOffer: Bool?
+    let compactJws: String?
+    let offerCodeHint: String?
+    let message: String?
+
+    enum CodingKeys: String, CodingKey {
+        case ok
+        case allowIntroductoryOffer = "allow_introductory_offer"
+        case compactJws = "compact_jws"
+        case offerCodeHint = "offer_code_hint"
+        case message
+    }
+}
+
 // MARK: - Inscription / mot de passe
 
 struct AuthRegisterPayload: Encodable {

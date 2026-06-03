@@ -91,7 +91,13 @@
           "familyShareable" : false,
           "groupNumber" : 3,
           "internalID" : "slots2",
-          "introductoryOffer" : null,
+          "introductoryOffer" : {
+            "displayPrice" : "1.00",
+            "internalID" : "intro_slots2",
+            "numberOfPeriods" : 1,
+            "paymentMode" : "payAsYouGo",
+            "subscriptionPeriod" : "P1M"
+          },
           "localizations" : [
             {
               "description" : "Abonnement mensuel — 2 commerces",
@@ -116,7 +122,13 @@
           "familyShareable" : false,
           "groupNumber" : 4,
           "internalID" : "slots3",
-          "introductoryOffer" : null,
+          "introductoryOffer" : {
+            "displayPrice" : "1.00",
+            "internalID" : "intro_slots3",
+            "numberOfPeriods" : 1,
+            "paymentMode" : "payAsYouGo",
+            "subscriptionPeriod" : "P1M"
+          },
           "localizations" : [
             {
               "description" : "Abonnement mensuel — 3 commerces",
@@ -141,7 +153,13 @@
           "familyShareable" : false,
           "groupNumber" : 5,
           "internalID" : "slots4",
-          "introductoryOffer" : null,
+          "introductoryOffer" : {
+            "displayPrice" : "1.00",
+            "internalID" : "intro_slots4",
+            "numberOfPeriods" : 1,
+            "paymentMode" : "payAsYouGo",
+            "subscriptionPeriod" : "P1M"
+          },
           "localizations" : [
             {
               "description" : "Abonnement mensuel — 4 commerces",
@@ -166,7 +184,13 @@
           "familyShareable" : false,
           "groupNumber" : 6,
           "internalID" : "slots5",
-          "introductoryOffer" : null,
+          "introductoryOffer" : {
+            "displayPrice" : "1.00",
+            "internalID" : "intro_slots5",
+            "numberOfPeriods" : 1,
+            "paymentMode" : "payAsYouGo",
+            "subscriptionPeriod" : "P1M"
+          },
           "localizations" : [
             {
               "description" : "Abonnement mensuel — 5 commerces",

@@ -18,7 +18,7 @@ Enregistrement d’écran 1–3 min, en commençant par **l’icône de l’app*
 4. **Fonctions principales** : Tableau de bord, **Scanner** (autorisation **caméra**), **Ma Carte**, **Espace pro** (si abonné), **Profil**  
 5. **Périmètre / carte** (si testé) : **Profil** → carte du commerce → **Utiliser ma position** (autorisation **localisation**)  
 6. **Photos** : **Ma Carte** ou **Profil** → import logo (autorisation **bibliothèque photos** si demandée)  
-7. **Abonnement** : **Espace pro** → **Compte pro** → bouton paiement Stripe (Safari) — montrer que le **prix / durée** apparaît sur la page Stripe  
+7. **Abonnement** : paywall **StoreKit** (essai 1 € 1er mois, mensuel / annuel, **Restaurer les achats**, menu ⋯ → **Code promo Apple**) — feuille système Apple avec **prix et durée**  
 8. **Déconnexion** : Profil → Se déconnecter  
 9. **Suppression de compte** : Profil → **Supprimer mon compte** → confirmer (compte **démo uniquement**)
 
@@ -37,12 +37,11 @@ INSTRUCTIONS POUR LA REVUE
    - Mot de passe : …
 3) Parcours : Tableau de bord → Scanner (caméra) → Ma Carte → Profil (déconnexion, suppression de compte).
 4) Connexion : écran « Se connecter » propose **Sign in with Apple** (au-dessus de Google), **Continuer avec Google**, et e-mail. Même chose à l’inscription.
-5) Abonnement : facturation via **Stripe** sur myfidpass.fr/paiement (pas d’achat in-app StoreKit). Titre **MyFidpass Pro**, durée et prix (mensuel 49,99 €/mois ou annuel 399 €/an après 1 € le 1er mois) sont affichés sur la page de paiement et dans le bandeau légal sous le paywall dans l’app. CGU : https://myfidpass.fr/cgu — Confidentialité : https://myfidpass.fr/confidentialite (aussi sur Connexion / Inscription / paywall / Profil).
+5) Abonnement : **achats intégrés App Store (StoreKit 2)** dans l’app — titre **MyFidpass Pro**, durée et prix affichés sur le paywall et la feuille Apple ; offre intro **1 € le 1er mois** ; secours code offre **MYFID1EURO** (menu ⋯). Pas de checkout Stripe dans l’app iOS. CGU : https://myfidpass.fr/cgu — Confidentialité : https://myfidpass.fr/confidentialite (aussi sur Connexion / Inscription / paywall / Profil).
 
 SERVICES EXTERNES (fonctionnalité principale)
-- API backend MyFidpass (https://api.myfidpass.fr) : compte, sync commerce, membres, cartes, scans.
-- Site web myfidpass.fr : création de compte, CGU, confidentialité, paiement Stripe.
-- Stripe : traitement des paiements d’abonnement (hors IAP).
+- API backend MyFidpass (https://api.myfidpass.fr) : compte, sync commerce, membres, cartes, scans, validation abonnement App Store.
+- Site web myfidpass.fr : création de compte, CGU, confidentialité (abonnement web possible hors app iOS).
 - Sign in with Apple et Google : authentification.
 - Apple Wallet (PassKit) : distribution et mise à jour des passes ; notifications push Apple pour les mises à jour de pass (côté serveur).
 - Apple Push Notification service (APNs) : notifications vers l’app / passes selon configuration serveur.
@@ -72,10 +71,10 @@ HOW TO TEST
 1) Sign in from the welcome screen. In-app registration is available on the Login screen (segment “Inscription”) or via https://myfidpass.fr .
 2) Demo credentials (REPLACE): email … / password …
 3) Core flows: Dashboard → Scanner (camera) → My Card → Profile (logout, account deletion).
-4) Subscription: no In-App Purchase. Billing is via Stripe on the website; price/duration appear on Stripe’s checkout. Legal: https://myfidpass.fr/cgu and https://myfidpass.fr/confidentialité — also linked inside the app.
+4) Subscription: Auto-renewable **In-App Purchase** (StoreKit 2). Paywall shows title, length, price, Restore Purchases, EULA/Privacy links; introductory 1 € first month; offer code MYFID1EURO via ⋯ menu. No Stripe checkout inside the iOS app.
 
 EXTERNAL SERVICES
-MyFidpass API (api.myfidpass.fr), myfidpass.fr, Stripe, Sign in with Apple, Google Sign-In, Apple Wallet / PassKit, APNs (server-driven).
+MyFidpass API (api.myfidpass.fr), myfidpass.fr, Sign in with Apple, Google Sign-In, Apple Wallet / PassKit, App Store Server API, APNs (server-driven).
 
 UGC / REPORTING
 B2B merchant tool; no public social feed. Not applicable.
@@ -137,7 +136,8 @@ L’app iOS utilise **StoreKit 2** (achat in-app). Les produits doivent être **
 
 - Monétisation → Abonnements : statut **Prêt à soumettre**, captures d’écran, prix.
 - Fiche de version : **cocher les IAP** inclus dans cette soumission.
-- Railway : `APP_STORE_ISSUER_ID`, `APP_STORE_KEY_ID`, `APP_STORE_PRIVATE_KEY`, `APPLE_BUNDLE_ID=com.myfidpass` (validation serveur).
+- Railway : `APP_STORE_ISSUER_ID`, `APP_STORE_KEY_ID`, `APP_STORE_PRIVATE_KEY`, `APPLE_BUNDLE_ID=com.myfidpass`, `APPLE_IAP_CUSTOM_OFFER_CODE=MYFID1EURO` (sync + signature offre intro 1 € par compte MyFidpass).
+- App Store Connect : **code d’offre** custom `MYFID1EURO` (1 €, 1 mois, nouveaux + expirés) ; offres intro 1 € sur tous les produits du groupe.
 
 ### C) Notes pour la review (à ajouter)
 

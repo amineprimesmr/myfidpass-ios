@@ -17,9 +17,11 @@ enum MerchantSubscriptionPricingCopy {
     /// Au-dessus des cartes Mensuel / Annuel.
     static let paywallPricingIntroLine = "Premier mois à 1€, puis…"
 
-    /// Sous le CTA quand le 1 € passe par Stripe (compte Apple déjà éligible à l’intro IAP ou forfait sans intro StoreKit).
-    static let paywallStripeFirstMonthNote =
-        "Premier mois à 1 € via paiement sécurisé Stripe (carte ou Apple Pay), puis le tarif choisi."
+    /// Code offre App Store Connect (custom) — secours si la signature serveur est indisponible : menu ⋯ → Code promo Apple.
+    static let appleCustomOfferCode = "MYFID1EURO"
+
+    static let paywallAppleOfferCodeFallbackNote =
+        "Si l’App Store affiche le plein tarif, ouvrez le menu ⋯ → Code promo Apple et saisissez MYFID1EURO."
 
     /// Sous le bouton Continuer (mis en avant).
     static let paywallNoCommitmentHighlight = "Sans engagement"

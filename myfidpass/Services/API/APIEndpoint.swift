@@ -91,6 +91,7 @@ enum APIEndpoint {
     case paymentAppleSyncTransaction(payload: PaymentAppleSyncTransactionPayload)
     /// Restauration / réalignement abonnement App Store.
     case paymentAppleReconcileSubscription
+    case paymentAppleIntroOfferEligibility(payload: PaymentAppleIntroOfferEligibilityRequest)
     /// Active un abonnement fictif (test) — même route que le bouton « Dev » du SaaS.
     case dashboardDevSimulatePayment(slug: String)
 
@@ -254,6 +255,7 @@ enum APIEndpoint {
         case .paymentBusinessCheckoutSession: return "/api/payment/create-business-checkout-session"
         case .paymentAppleSyncTransaction: return "/api/payment/apple/sync-transaction"
         case .paymentAppleReconcileSubscription: return "/api/payment/apple/reconcile-subscription"
+        case .paymentAppleIntroOfferEligibility: return "/api/payment/apple/introductory-offer-eligibility"
         case .dashboardDevSimulatePayment(let slug):
             return "/api/businesses/\(pathSegment(slug))/dashboard/dev-simulate-payment"
         case .businessSettings(let slug): return "/api/businesses/\(pathSegment(slug))/dashboard/settings"
@@ -386,6 +388,7 @@ enum APIEndpoint {
              .dashboardReceiptChallenge,
              .removeMemberPoints, .redeemReward, .createBusiness, .createBusinessFromPlace, .paymentCheckout, .paymentReconcileSubscription, .paymentPortalSession, .dashboardNotificationSend, .dashboardRemoveTestDevice,
              .paymentBusinessCheckoutSession, .paymentAppleSyncTransaction, .paymentAppleReconcileSubscription,
+             .paymentAppleIntroOfferEligibility,
              .dashboardDevSimulatePayment,
              .membersImport, .createMember, .memberTicketsConvert, .claimMemberReward, .deleteAllDashboardMembers,
              .dashboardFlyerAIGenerate, .dashboardFlyerRemoveLogoBackground, .dashboardCampaignAutomationParse,
@@ -603,6 +606,8 @@ enum APIEndpoint {
             bodyData = try encoder.encode(payload)
         case .paymentAppleReconcileSubscription:
             bodyData = try encoder.encode(PaymentReconcileEmptyBody())
+        case .paymentAppleIntroOfferEligibility(let payload):
+            bodyData = try encoder.encode(payload)
         case .scan(_, let barcode, let visit, let points, let amountEur, let receiptValidationToken):
             bodyData = try encoder.encode(ScanPayload(barcode: barcode, visit: visit, points: points, amount_eur: amountEur, receiptValidationToken: receiptValidationToken))
         case .integrationRewardRedeem(_, let barcode):

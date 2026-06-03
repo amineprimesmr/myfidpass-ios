@@ -92,6 +92,18 @@ final class MerchantAppleSubscriptionStore: ObservableObject {
 
     /// Achat in-app + validation serveur. Retourne la réponse API (statut abonnement côté MyFidpass).
     /// Toujours passe par `product.purchase()` (comme l’annuel) — pas de « restauration silencieuse » mensuelle.
+    /// JWS serveur pour forcer l’offre intro 1 € (commerçant MyFidpass sans abo payant).
+    func fetchIntroductoryOfferEligibilityJWS(productId: String, appTransactionId: String) async throws -> PaymentAppleIntroOfferEligibilityResponse {
+        let payload = PaymentAppleIntroOfferEligibilityRequest(
+            productId: productId,
+            transactionId: appTransactionId
+        )
+        return try await APIClient.shared.request(
+            .paymentAppleIntroOfferEligibility(payload: payload),
+            responseType: PaymentAppleIntroOfferEligibilityResponse.self
+        )
+    }
+
     @discardableResult
     func purchase(slots: Int, annual: Bool, appAccountToken: UUID? = MerchantAppAccountToken.currentUserToken()) async throws -> PaymentAppleSyncResponse {
         await loadProductsIfNeeded()
@@ -108,6 +120,12 @@ final class MerchantAppleSubscriptionStore: ObservableObject {
         var options: Set<Product.PurchaseOption> = []
         if let token = appAccountToken {
             options.insert(.appAccountToken(token))
+        }
+        let storeEligible = await isEligibleForIntroOffer(slots: slots, annual: annual)
+        if !storeEligible, hasIntroductoryOfferConfigured(slots: slots, annual: annual) {
+            if let jws = await resolveIntroductoryOfferEligibilityJWS(product: product) {
+                options.insert(jws)
+            }
         }
         let result = try await product.purchase(options: options)
         switch result {
@@ -218,6 +236,24 @@ final class MerchantAppleSubscriptionStore: ObservableObject {
             throw error
         case .verified(let safe):
             return safe
+        }
+    }
+
+    /// Option d’achat : éligibilité intro 1 € signée par l’API (iOS 15+, API renforcée en 18.4).
+    private func resolveIntroductoryOfferEligibilityJWS(product: Product) async -> Product.PurchaseOption? {
+        guard let appTxId = await MerchantAppleAppTransaction.currentAppTransactionID() else { return nil }
+        do {
+            let response = try await fetchIntroductoryOfferEligibilityJWS(
+                productId: product.id,
+                appTransactionId: appTxId
+            )
+            guard response.allowIntroductoryOffer == true,
+                  let compact = response.compactJws?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !compact.isEmpty
+            else { return nil }
+            return Product.PurchaseOption.introductoryOfferEligibility(compactJWS: compact)
+        } catch {
+            return nil
         }
     }
 
