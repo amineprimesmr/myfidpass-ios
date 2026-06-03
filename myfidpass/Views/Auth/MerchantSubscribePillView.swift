@@ -19,7 +19,7 @@ struct MerchantSubscribePillView: View {
                 HStack(spacing: 9) {
                     SubscribePillBlinkingGreenDot()
                     Text(ctaLabel)
-                        .font(.system(size: 17, weight: .bold, design: .rounded))
+                        .font(AppTheme.Fonts.headline().weight(.bold))
                         .foregroundStyle(.white)
                         .lineLimit(1)
                         .minimumScaleFactor(0.68)

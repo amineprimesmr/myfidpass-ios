@@ -111,16 +111,63 @@ struct PatchGameBody: Encodable {
 
 struct MatchPredictionsDashboardResponse: Decodable {
     let config: MatchPredictionConfigDTO?
+    /// Prochain match visible par les clients (pronostic unique).
+    let nextMatch: MatchPredictionNextMatchDTO?
+    let stats: MatchPredictionStatsDTO?
+    /// Conservé pour rétrocompat — toujours vide côté serveur récent.
     let matches: [MatchPredictionMatchDTO]
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         config = try c.decodeIfPresent(MatchPredictionConfigDTO.self, forKey: .config)
+        nextMatch = try c.decodeIfPresent(MatchPredictionNextMatchDTO.self, forKey: .nextMatch)
+        stats = try c.decodeIfPresent(MatchPredictionStatsDTO.self, forKey: .stats)
         matches = try c.decodeIfPresent([MatchPredictionMatchDTO].self, forKey: .matches) ?? []
     }
 
     enum CodingKeys: String, CodingKey {
-        case config, matches
+        case config, nextMatch, stats, matches
+    }
+}
+
+struct MatchPredictionStatsDTO: Decodable {
+    let totalPredictions: Int?
+    let predictionsOnNextMatch: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case totalPredictions
+        case predictionsOnNextMatch
+    }
+}
+
+/// Aperçu commerçant du prochain match (lecture seule).
+struct MatchPredictionNextMatchDTO: Decodable, Identifiable {
+    let id: String
+    let title: String?
+    let teamHome: String
+    let teamAway: String
+    let teamHomeFlag: String?
+    let teamAwayFlag: String?
+    let startsAt: String
+    let roundLabel: String?
+    let entriesCount: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case id, title, startsAt, roundLabel, entriesCount
+        case teamHome, teamAway, teamHomeFlag, teamAwayFlag
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        title = try c.decodeIfPresent(String.self, forKey: .title)
+        teamHome = try c.decodeIfPresent(String.self, forKey: .teamHome) ?? "—"
+        teamAway = try c.decodeIfPresent(String.self, forKey: .teamAway) ?? "—"
+        teamHomeFlag = try c.decodeIfPresent(String.self, forKey: .teamHomeFlag)
+        teamAwayFlag = try c.decodeIfPresent(String.self, forKey: .teamAwayFlag)
+        startsAt = try c.decodeIfPresent(String.self, forKey: .startsAt) ?? ""
+        roundLabel = try c.decodeIfPresent(String.self, forKey: .roundLabel)
+        entriesCount = MatchPredictionMatchDTO.decodeLosslessInt(c, forKey: .entriesCount)
     }
 }
 
@@ -128,9 +175,10 @@ struct MatchPredictionConfigDTO: Decodable {
     let enabled: Bool?
     let pointsPerCorrectPrediction: Int?
 
+    /// Clés camelCase : `APIClient` applique déjà `convertFromSnakeCase` / `convertToSnakeCase`.
     enum CodingKeys: String, CodingKey {
         case enabled
-        case pointsPerCorrectPrediction = "points_per_correct_prediction"
+        case pointsPerCorrectPrediction
     }
 
     init(from decoder: Decoder) throws {
@@ -171,17 +219,13 @@ struct MatchPredictionMatchDTO: Decodable, Identifiable {
     let entriesCount: Int?
     let correctCount: Int?
     let pointsDistributed: Int?
+    let stage: String?
+    let roundLabel: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, title, status, locked
-        case teamHome = "team_home"
-        case teamAway = "team_away"
-        case startsAt = "starts_at"
-        case cutoffAt = "cutoff_at"
-        case resultChoice = "result_choice"
-        case entriesCount = "entries_count"
-        case correctCount = "correct_count"
-        case pointsDistributed = "points_distributed"
+        case id, title, status, locked, stage
+        case teamHome, teamAway, startsAt, cutoffAt, resultChoice
+        case entriesCount, correctCount, pointsDistributed, roundLabel
     }
 
     init(from decoder: Decoder) throws {
@@ -198,6 +242,12 @@ struct MatchPredictionMatchDTO: Decodable, Identifiable {
         entriesCount = Self.decodeLosslessInt(c, forKey: .entriesCount)
         correctCount = Self.decodeLosslessInt(c, forKey: .correctCount)
         pointsDistributed = Self.decodeLosslessInt(c, forKey: .pointsDistributed)
+        stage = try c.decodeIfPresent(String.self, forKey: .stage)
+        roundLabel = try c.decodeIfPresent(String.self, forKey: .roundLabel)
+    }
+
+    var isGroupStage: Bool {
+        (stage ?? "group").lowercased() == "group"
     }
 
     private static func decodeBoolish(_ c: KeyedDecodingContainer<CodingKeys>, forKey key: CodingKeys) -> Bool? {
@@ -225,16 +275,12 @@ struct MatchPredictionsConfigPatchBody: Encodable {
 
     enum CodingKeys: String, CodingKey {
         case enabled
-        case pointsPerCorrectPrediction = "points_per_correct_prediction"
+        case pointsPerCorrectPrediction
     }
 }
 
 struct MatchPredictionsResultBody: Encodable {
     let resultChoice: String
-
-    enum CodingKeys: String, CodingKey {
-        case resultChoice = "result_choice"
-    }
 }
 
 struct MatchPredictionsResultResponse: Decodable {
@@ -244,10 +290,7 @@ struct MatchPredictionsResultResponse: Decodable {
     let winnersCount: Int?
 
     enum CodingKeys: String, CodingKey {
-        case ok
-        case awardedCount = "awarded_count"
-        case correctCount = "correct_count"
-        case winnersCount = "winners_count"
+        case ok, awardedCount, correctCount, winnersCount
     }
 }
 

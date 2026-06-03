@@ -1,7 +1,9 @@
 package fr.myfidpass.ui.screens.commerce
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -11,19 +13,16 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -32,14 +31,16 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import fr.myfidpass.data.repo.DashboardRepository
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
@@ -55,15 +56,16 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
-private data class MatchRow(
+private data class NextMatchPreview(
     val id: String,
     val title: String?,
     val teamHome: String,
     val teamAway: String,
+    val teamHomeFlag: String?,
+    val teamAwayFlag: String?,
     val startsAt: String,
-    val resultChoice: String?,
+    val roundLabel: String?,
     val entriesCount: Int,
-    val pointsDistributed: Int,
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -77,13 +79,29 @@ fun MatchPredictionsScreen(
     val scope = rememberCoroutineScope()
     var loading by remember { mutableStateOf(true) }
     var savingConfig by remember { mutableStateOf(false) }
-    var scoringId by remember { mutableStateOf<String?>(null) }
     var enabled by remember { mutableStateOf(false) }
     var pointsPerCorrect by remember { mutableIntStateOf(10) }
-    var matches by remember { mutableStateOf<List<MatchRow>>(emptyList()) }
-    val selectedResults = remember { mutableStateMapOf<String, String>() }
+    var nextMatch by remember { mutableStateOf<NextMatchPreview?>(null) }
+    var totalPredictions by remember { mutableIntStateOf(0) }
+    var predictionsOnNext by remember { mutableIntStateOf(0) }
     var message by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
+
+    fun parseNextMatch(o: JsonObject?): NextMatchPreview? {
+        if (o == null) return null
+        val id = o["id"]?.jsonPrimitive?.content ?: return null
+        return NextMatchPreview(
+            id = id,
+            title = o["title"]?.jsonPrimitive?.content,
+            teamHome = o["team_home"]?.jsonPrimitive?.content ?: "—",
+            teamAway = o["team_away"]?.jsonPrimitive?.content ?: "—",
+            teamHomeFlag = o["team_home_flag"]?.jsonPrimitive?.content,
+            teamAwayFlag = o["team_away_flag"]?.jsonPrimitive?.content,
+            startsAt = o["starts_at"]?.jsonPrimitive?.content ?: "",
+            roundLabel = o["round_label"]?.jsonPrimitive?.content,
+            entriesCount = o["entries_count"]?.jsonPrimitive?.intOrNull ?: 0,
+        )
+    }
 
     fun apply(json: JsonObject) {
         val cfg = json["config"]?.jsonObject
@@ -92,23 +110,15 @@ fun MatchPredictionsScreen(
             ?: false
         pointsPerCorrect = cfg?.get("points_per_correct_prediction")?.jsonPrimitive?.intOrNull
             ?.coerceIn(1, 500) ?: 10
-        matches = json["matches"]?.jsonArray?.mapNotNull { el ->
-            val o = el.jsonObject
-            val id = o["id"]?.jsonPrimitive?.content ?: return@mapNotNull null
-            MatchRow(
-                id = id,
-                title = o["title"]?.jsonPrimitive?.content,
-                teamHome = o["team_home"]?.jsonPrimitive?.content ?: "—",
-                teamAway = o["team_away"]?.jsonPrimitive?.content ?: "—",
-                startsAt = o["starts_at"]?.jsonPrimitive?.content ?: "",
-                resultChoice = o["result_choice"]?.jsonPrimitive?.content,
-                entriesCount = o["entries_count"]?.jsonPrimitive?.intOrNull ?: 0,
-                pointsDistributed = o["points_distributed"]?.jsonPrimitive?.intOrNull ?: 0,
-            )
-        }.orEmpty()
-        matches.forEach { m ->
-            selectedResults[m.id] = m.resultChoice ?: "home"
-        }
+        nextMatch = parseNextMatch(json["next_match"]?.jsonObject)
+            ?: parseNextMatch(json["matches"]?.let { arr ->
+                arr.firstOrNull()?.jsonObject
+            })
+        val stats = json["stats"]?.jsonObject
+        totalPredictions = stats?.get("total_predictions")?.jsonPrimitive?.intOrNull ?: 0
+        predictionsOnNext = stats?.get("predictions_on_next_match")?.jsonPrimitive?.intOrNull
+            ?: nextMatch?.entriesCount
+            ?: 0
     }
 
     fun reload() {
@@ -118,7 +128,7 @@ fun MatchPredictionsScreen(
             error = null
             runCatching { repository.dashboardMatchPredictions(s) }
                 .onSuccess { apply(it) }
-                .onFailure { error = "Impossible de charger les pronostics." }
+                .onFailure { error = "Impossible de charger la configuration." }
             loading = false
         }
     }
@@ -143,11 +153,44 @@ fun MatchPredictionsScreen(
                 .padding(padding)
                 .padding(16.dp)
                 .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             if (loading) {
                 CircularProgressIndicator(Modifier.align(Alignment.CenterHorizontally))
                 return@Column
             }
+
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f),
+                ),
+            ) {
+                Row(
+                    Modifier.padding(14.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Icon(
+                        Icons.Default.Groups,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                    Column {
+                        Text(
+                            "Pronostics côté clients",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Text(
+                            "Tes clients pronostiquent le prochain match sur leur carte fidélité. " +
+                                "Tu actives le jeu et les points ici — pas depuis l’app commerçant.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
@@ -160,7 +203,7 @@ fun MatchPredictionsScreen(
                         Column(Modifier.weight(1f)) {
                             Text("Activer le challenge", style = MaterialTheme.typography.titleSmall)
                             Text(
-                                "Les clients voient les matchs dans leur espace fidélité.",
+                                "Bandeau sur le flyer + bloc sur la carte client.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -169,7 +212,7 @@ fun MatchPredictionsScreen(
                     }
                     Spacer(Modifier.height(12.dp))
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Text("Gain par bon pronostic", Modifier.weight(1f))
+                        Text("Points par bon pronostic", Modifier.weight(1f))
                         IconButton(onClick = {
                             if (pointsPerCorrect > 1) pointsPerCorrect--
                         }) { Text("−") }
@@ -210,52 +253,30 @@ fun MatchPredictionsScreen(
                     feedbackText(message, error)
                 }
             }
-            Spacer(Modifier.height(16.dp))
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-            ) {
-                Column(Modifier.padding(16.dp)) {
-                    Text("Matchs sélectionnés", style = MaterialTheme.typography.titleSmall)
-                    Spacer(Modifier.height(8.dp))
-                    if (matches.isEmpty()) {
+
+            if (enabled) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                ) {
+                    Column(Modifier.padding(16.dp)) {
                         Text(
-                            "Aucun match disponible pour le moment.",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            "Prochain match (aperçu client)",
+                            style = MaterialTheme.typography.titleSmall,
                         )
-                    } else {
-                        matches.forEachIndexed { idx, match ->
-                            MatchRowUi(
-                                match = match,
-                                choice = selectedResults[match.id] ?: "home",
-                                onChoice = { selectedResults[match.id] = it },
-                                scoring = scoringId == match.id,
-                                onScore = {
-                                    val s = slug ?: return@MatchRowUi
-                                    val choice = selectedResults[match.id] ?: "home"
-                                    scope.launch {
-                                        scoringId = match.id
-                                        message = null
-                                        error = null
-                                        runCatching {
-                                            val r = repository.dashboardMatchPredictionsSetResult(
-                                                s,
-                                                match.id,
-                                                buildJsonObject { put("result_choice", choice) },
-                                            )
-                                            val winners = r["winners_count"]?.jsonPrimitive?.intOrNull
-                                                ?: r["correct_count"]?.jsonPrimitive?.intOrNull
-                                                ?: 0
-                                            reload()
-                                            message = "Résultat validé : $winners gagnant(s)."
-                                        }.onFailure {
-                                            error = "Validation du résultat impossible."
-                                        }
-                                        scoringId = null
-                                    }
-                                },
+                        Spacer(Modifier.height(12.dp))
+                        val match = nextMatch
+                        if (match == null) {
+                            Text(
+                                "Aucun match ouvert pour l’instant. Le calendrier se met à jour automatiquement.",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
-                            if (idx < matches.lastIndex) HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                        } else {
+                            NextMatchPreviewCard(
+                                match = match,
+                                predictionsCount = predictionsOnNext,
+                                totalPredictions = totalPredictions,
+                            )
                         }
                     }
                 }
@@ -264,57 +285,72 @@ fun MatchPredictionsScreen(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun MatchRowUi(
-    match: MatchRow,
-    choice: String,
-    onChoice: (String) -> Unit,
-    scoring: Boolean,
-    onScore: () -> Unit,
+private fun NextMatchPreviewCard(
+    match: NextMatchPreview,
+    predictionsCount: Int,
+    totalPredictions: Int,
 ) {
-    Column(Modifier.fillMaxWidth()) {
+    Column(
+        Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
         Text(
-            match.title ?: "Match sélectionné",
+            match.roundLabel ?: match.title ?: "Phase de groupes",
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.primary,
+            fontWeight = FontWeight.SemiBold,
         )
-        Text("${match.teamHome} vs ${match.teamAway}", style = MaterialTheme.typography.titleSmall)
+        Spacer(Modifier.height(12.dp))
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            TeamColumn(
+                flag = match.teamHomeFlag,
+                name = match.teamHome,
+                modifier = Modifier.weight(1f),
+            )
+            Text("VS", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Black)
+            TeamColumn(
+                flag = match.teamAwayFlag,
+                name = match.teamAway,
+                modifier = Modifier.weight(1f),
+            )
+        }
+        Spacer(Modifier.height(8.dp))
         Text(
             formatMatchDate(match.startsAt),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        Spacer(Modifier.height(8.dp))
         Text(
-            "${match.entriesCount} pronostics" +
-                if (match.pointsDistributed > 0) " · ${match.pointsDistributed} pts distribués" else "",
+            buildString {
+                append("$predictionsCount pronostics")
+                if (totalPredictions > 0) append(" · $totalPredictions au total")
+            },
             style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.SemiBold,
         )
-        Spacer(Modifier.height(8.dp))
-        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-            listOf("home" to match.teamHome, "draw" to "Nul", "away" to match.teamAway).forEach { (tag, label) ->
-                SegmentedButton(
-                    selected = choice == tag,
-                    onClick = { onChoice(tag) },
-                    shape = SegmentedButtonDefaults.itemShape(index = when (tag) {
-                        "home" -> 0
-                        "draw" -> 1
-                        else -> 2
-                    }, count = 3),
-                ) { Text(label.take(12), maxLines = 1) }
-            }
-        }
-        Spacer(Modifier.height(8.dp))
-        Button(
-            onClick = onScore,
-            enabled = !scoring,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            if (scoring) CircularProgressIndicator(Modifier.height(18.dp))
-            Text(
-                if (match.resultChoice == null) "Valider le résultat" else "Recalculer / confirmer",
-            )
-        }
+    }
+}
+
+@Composable
+private fun RowScope.TeamColumn(flag: String?, name: String, modifier: Modifier = Modifier) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = modifier,
+    ) {
+        Text(flag ?: "🏳️", fontSize = 36.sp)
+        Text(
+            name,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center,
+            maxLines = 2,
+        )
     }
 }
 
@@ -334,7 +370,7 @@ private fun formatMatchDate(raw: String): String {
     if (raw.isBlank()) return "—"
     return runCatching {
         val instant = Instant.parse(raw)
-        DateTimeFormatter.ofPattern("EEE d MMM HH:mm", Locale.FRANCE)
+        DateTimeFormatter.ofPattern("EEEE d MMMM HH:mm", Locale.FRANCE)
             .withZone(ZoneId.systemDefault())
             .format(instant)
     }.getOrDefault(raw)
