@@ -10,7 +10,7 @@ import SwiftUI
 
 struct AppUpdateView: View {
     var appInfo: VersionCheckManager.ReturnResult
-    @Binding var forcedUpdate: Bool
+    private var forcedUpdate: Bool { appInfo.isMandatoryUpdate }
     @Environment(\.dismiss) var dismiss
     @Environment(\.openURL) var openURL
     /// « Mettre à jour » ouvre l’App Store : ne pas mémoriser « Plus tard » dans ce cas.

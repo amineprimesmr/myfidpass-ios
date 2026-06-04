@@ -19,20 +19,33 @@ object PlayStoreVersionChecker {
         val currentVersion: String,
         val storeVersion: String,
         val playStoreUrl: String,
+        val isMandatoryUpdate: Boolean = false,
     )
 
-    suspend fun check(context: Context, packageName: String = context.packageName.removeSuffix(".debug")): UpdateInfo? =
+    suspend fun check(
+        context: Context,
+        packageName: String = context.packageName.removeSuffix(".debug"),
+        ignoreThrottle: Boolean = false,
+    ): UpdateInfo? =
         withContext(Dispatchers.IO) {
+            if (!ignoreThrottle && !AppVersionUpdatePolicy.shouldRunStoreLookup(context)) {
+                return@withContext null
+            }
+            AppVersionUpdatePolicy.recordStoreLookupAttempt(context)
+
             val installed = BuildConfig.VERSION_NAME.trim()
-            val storeVersion = fetchPlayStoreVersion(packageName) ?: return@withContext null
+            val page = fetchPlayStorePage(packageName) ?: return@withContext null
+            val storeVersion = parseStoreVersion(page) ?: return@withContext null
             if (!isStoreVersionStrictlyNewer(storeVersion, installed)) return@withContext null
             val dismissed = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .getString(KEY_DISMISSED, null)
             if (dismissed == storeVersion) return@withContext null
+            val releaseNotes = parseReleaseNotes(page)
             UpdateInfo(
                 currentVersion = installed,
                 storeVersion = storeVersion,
                 playStoreUrl = "https://play.google.com/store/apps/details?id=$packageName",
+                isMandatoryUpdate = AppVersionUpdatePolicy.isMandatoryUpdate(releaseNotes),
             )
         }
 
@@ -43,10 +56,13 @@ object PlayStoreVersionChecker {
             .apply()
     }
 
-    private fun fetchPlayStoreVersion(packageName: String): String? {
+    private fun fetchPlayStorePage(packageName: String): String? {
         val url = "https://play.google.com/store/apps/details?id=$packageName&hl=fr"
         val request = Request.Builder().url(url).header("User-Agent", "Mozilla/5.0").build()
-        val html = runCatching { client.newCall(request).execute().body?.string() }.getOrNull() ?: return null
+        return runCatching { client.newCall(request).execute().body?.string() }.getOrNull()
+    }
+
+    private fun parseStoreVersion(html: String): String? {
         val patterns = listOf(
             Pattern.compile("\\[\\[\\[\"([0-9.]+?)\"\\]\\],"),
             Pattern.compile("Current Version</div><span[^>]*><div[^>]*><span[^>]*>([0-9.]+?)<"),
@@ -55,6 +71,24 @@ object PlayStoreVersionChecker {
         for (p in patterns) {
             val m = p.matcher(html)
             if (m.find()) return m.group(1)?.trim()?.takeIf { it.isNotEmpty() }
+        }
+        return null
+    }
+
+    private fun parseReleaseNotes(html: String): String? {
+        val patterns = listOf(
+            Pattern.compile("\"releaseNotes\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)\"", Pattern.DOTALL),
+            Pattern.compile("\\\\\"releaseNotes\\\\\"\\s*:\\s*\\\\\"((?:\\\\.|[^\"\\\\])*)\\\\\"", Pattern.DOTALL),
+        )
+        for (p in patterns) {
+            val m = p.matcher(html)
+            if (m.find()) {
+                return m.group(1)
+                    ?.replace("\\\\n", "\n")
+                    ?.replace("\\n", "\n")
+                    ?.trim()
+                    ?.takeIf { it.isNotEmpty() }
+            }
         }
         return null
     }

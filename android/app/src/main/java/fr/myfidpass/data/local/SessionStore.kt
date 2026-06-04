@@ -121,8 +121,16 @@ class SessionStore(context: Context) {
         return !userStaffLogin.isNullOrBlank()
     }
 
+    /** Bench scan (plafonds 2 / 2) — aligné iOS `merchantScanBenchAccessActive`. */
+    var merchantScanBenchAccessActive: Boolean
+        get() = prefs.getBoolean(KEY_SCAN_BENCH_ACTIVE, false)
+        set(value) = prefs.edit().putBoolean(KEY_SCAN_BENCH_ACTIVE, value).apply()
+
     /** Abonnement Stripe / App Store encaissé — aligné iOS `hasEncashedMerchantSubscription`. */
-    fun hasPaidMerchantSubscription(): Boolean = serverReportsPaidMerchantSubscription == true
+    fun hasPaidMerchantSubscription(): Boolean {
+        if (merchantScanBenchAccessActive) return true
+        return serverReportsPaidMerchantSubscription == true
+    }
 
     /** Paywall obligatoire post-inscription (mémoire — aligné iOS `isCompletingSignupPaywallPhase`). */
     var isCompletingSignupPaywallPhase: Boolean = false
@@ -341,5 +349,6 @@ class SessionStore(context: Context) {
         private const val KEY_WORKSPACE_ROLE = "workspace_role"
         private const val KEY_STAFF_LOGIN = "user_staff_login"
         private const val KEY_AUTH_PROVIDER = "auth_provider"
+        private const val KEY_SCAN_BENCH_ACTIVE = "merchant_scan_bench_access_active"
     }
 }

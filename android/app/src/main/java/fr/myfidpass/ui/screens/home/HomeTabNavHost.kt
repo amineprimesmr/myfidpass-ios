@@ -173,6 +173,7 @@ fun HomeTabNavHost(
                                                     pointsRequired = cost,
                                                     pointsBalance = balance,
                                                     eligible = effectiveRewardRedeemEligible(
+                                                        redeem.eligible,
                                                         redeem.pointsRequired,
                                                         balance,
                                                         code,

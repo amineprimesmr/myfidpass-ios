@@ -168,6 +168,7 @@ fun StaffAccountScreen(
     MerchantAnimatedFullScreenOverlay(visible = showScanSecurity) {
         ScanSecuritySettingsScreen(
             repository = container.dashboardRepository,
+            sessionStore = container.sessionStore,
             snackbar = snackbar,
             onBack = { showScanSecurity = false },
         )

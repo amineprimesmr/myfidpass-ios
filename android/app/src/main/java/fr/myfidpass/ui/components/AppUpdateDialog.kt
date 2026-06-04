@@ -13,19 +13,25 @@ fun AppUpdateDialog(
     onOpenStore: () -> Unit,
 ) {
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = if (info.isMandatoryUpdate) { {} } else onDismiss,
         title = { Text("Mise à jour disponible") },
         text = {
             Text(
-                "Version ${info.storeVersion} disponible sur le Play Store.\n" +
-                    "Vous utilisez la version ${info.currentVersion}.",
+                if (info.isMandatoryUpdate) {
+                    "Une mise à jour obligatoire est disponible : ${info.currentVersion} → ${info.storeVersion}."
+                } else {
+                    "Version ${info.storeVersion} disponible sur le Play Store.\n" +
+                        "Vous utilisez la version ${info.currentVersion}."
+                },
             )
         },
         confirmButton = {
             TextButton(onClick = onOpenStore) { Text("Mettre à jour") }
         },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Plus tard") }
+        dismissButton = if (info.isMandatoryUpdate) {
+            null
+        } else {
+            { TextButton(onClick = onDismiss) { Text("Plus tard") } }
         },
     )
 }

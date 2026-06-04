@@ -799,8 +799,57 @@ struct DashboardView: View {
             },
             onConfirm: {
                 await submitStampVisit(slug: data.slug, barcode: data.barcode)
+            },
+            onGrantReward: {
+                await grantStampRewardFromMerchantScan(data: data)
             }
         )
+    }
+
+    /// Carte tampons pleine après scan Wallet : ouvre la validation récompense ou valide directement.
+    private func grantStampRewardFromMerchantScan(data: ScanStampSheetData) async -> String? {
+        let slug = data.slug
+        let memberId = data.barcode.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !memberId.isEmpty else { return "Identifiant client manquant." }
+        let redeemBarcode = RewardRedeemQRPayload.fullCardBarcode(memberId: memberId)
+        do {
+            let lookup: ScanLookupResponse = try await APIClient.shared.request(
+                .scanLookup(slug: slug, barcode: redeemBarcode)
+            )
+            let memberName = lookup.member.name ?? data.memberName
+            if let sheetData = ScanRewardRedeemSheetDataBuilder.make(
+                slug: slug,
+                barcode: redeemBarcode,
+                memberName: memberName,
+                memberId: lookup.member.id?.trimmingCharacters(in: .whitespacesAndNewlines) ?? memberId,
+                lookup: lookup
+            ) {
+                await MainActor.run {
+                    scanStampSheet = nil
+                    scanRewardRedeemSheet = sheetData
+                }
+                return nil
+            }
+            let response: IntegrationRewardRedeemResponse = try await APIClient.shared.request(
+                .integrationRewardRedeem(slug: slug, barcode: redeemBarcode)
+            )
+            let label = response.rewardLabel ?? data.cardModel.stampRewardLabel
+            let newP = response.newPoints ?? 0
+            await MainActor.run {
+                successToast = Toast(
+                    symbol: "gift.fill",
+                    symbolFont: .system(size: 32, weight: .semibold),
+                    symbolForegroundStyle: (.white, Color(red: 1, green: 0.55, blue: 0.2)),
+                    title: "Récompense validée",
+                    message: "\(memberName) — \(label). Nouveau solde : \(newP) tampon\(newP > 1 ? "s" : "")."
+                )
+                showToast = true
+            }
+            scheduleDebouncedPostScanSync()
+            return nil
+        } catch {
+            return (error as? APIError)?.errorDescription ?? "Impossible d’accorder la récompense."
+        }
     }
 
     @ViewBuilder

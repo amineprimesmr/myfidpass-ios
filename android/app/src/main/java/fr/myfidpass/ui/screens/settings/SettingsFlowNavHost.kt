@@ -95,6 +95,7 @@ fun SettingsFlowNavHost(
         composable(CommerceRoutes.SCAN_SECURITY) {
             ScanSecuritySettingsScreen(
                 repository = container.dashboardRepository,
+                sessionStore = container.sessionStore,
                 snackbar = snackbarHostState,
                 onBack = { nav.popBackStack() },
             )

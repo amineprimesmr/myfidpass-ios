@@ -572,13 +572,59 @@ enum CommerceStatsMonthNavigator {
         return String(first).uppercased() + raw.dropFirst()
     }
 
+    /// `YYYY-MM` à partir de `created_at` API (ISO, SQLite `yyyy-MM-dd HH:mm:ss`, ou préfixe `YYYY-MM`).
+    static func creationMonthKey(fromCreatedAt raw: String?) -> String? {
+        guard let raw = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return nil }
+        if raw.count >= 7 {
+            let prefix7 = String(raw.prefix(7))
+            if isCalendarMonthPeriod(prefix7) { return prefix7 }
+        }
+        let isoFrac = ISO8601DateFormatter()
+        isoFrac.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let isoPlain = ISO8601DateFormatter()
+        isoPlain.formatOptions = [.withInternetDateTime]
+        if let d = isoFrac.date(from: raw) ?? isoPlain.date(from: raw) {
+            return calendarMonthKey(for: d)
+        }
+        let df = DateFormatter()
+        df.locale = Locale(identifier: "en_US_POSIX")
+        df.timeZone = TimeZone.current
+        for pattern in ["yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd'T'HH:mm:ss", "yyyy-MM-dd"] {
+            df.dateFormat = pattern
+            if let d = df.date(from: String(raw.prefix(19))) ?? df.date(from: raw) {
+                return calendarMonthKey(for: d)
+            }
+        }
+        return nil
+    }
+
+    private static func previousCalendarMonthKey(_ key: String) -> String? {
+        let parts = key.split(separator: "-")
+        guard parts.count == 2,
+              let y = Int(parts[0]),
+              let mo = Int(parts[1]),
+              let date = Calendar(identifier: .gregorian).date(from: DateComponents(year: y, month: mo, day: 1)),
+              let prev = Calendar(identifier: .gregorian).date(byAdding: .month, value: -1, to: date)
+        else { return nil }
+        return calendarMonthKey(for: prev)
+    }
+
     /// Mois depuis `creationMonthKey` (inclus) jusqu’au mois courant, max 6, plus récent en premier.
     /// Si `creationMonthKey` est nil ou invalide, renvoie les 6 derniers mois.
     static func monthKeys(from creationMonthKey: String?, reference: Date = Date()) -> [String] {
-        let all = sixMonthKeysEndingCurrentMonth(reference: reference)
-        guard let creation = creationMonthKey, isCalendarMonthPeriod(creation) else { return all }
-        let limited = all.filter { $0 >= creation }
-        return limited.isEmpty ? [all[0]] : limited
+        let current = calendarMonthKey(for: reference)
+        guard let creation = creationMonthKey, isCalendarMonthPeriod(creation) else {
+            return sixMonthKeysEndingCurrentMonth(reference: reference)
+        }
+        if creation > current { return [current] }
+        var keys: [String] = []
+        var cursor = current
+        while cursor >= creation, keys.count < 6 {
+            keys.append(cursor)
+            guard let prev = previousCalendarMonthKey(cursor) else { break }
+            cursor = prev
+        }
+        return keys.isEmpty ? [current] : keys
     }
 
     /// Anciens paramètres (`6m`, `this_month`…) → mois courant pour l’API mois par mois.

@@ -23,6 +23,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.viewmodel.compose.viewModel
 import fr.myfidpass.di.AppContainer
 import fr.myfidpass.services.auth.GoogleOAuthFlow
@@ -59,8 +62,13 @@ fun AppRoot(
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
 
     var appUpdateInfo by remember { mutableStateOf<PlayStoreVersionChecker.UpdateInfo?>(null) }
+
+    suspend fun checkAppStoreUpdate() {
+        appUpdateInfo = PlayStoreVersionChecker.check(context)
+    }
     var notificationPermissionRequested by remember { mutableStateOf(false) }
     var showPaymentThankYou by remember { mutableStateOf(false) }
 
@@ -124,11 +132,23 @@ fun AppRoot(
 
     LaunchedEffect(rootVm.state) {
         if (rootVm.state is RootUiState.Main || rootVm.state is RootUiState.AuthLanding) {
-            appUpdateInfo = PlayStoreVersionChecker.check(context)
+            checkAppStoreUpdate()
         }
         if (rootVm.state is RootUiState.Main) {
             presentPendingSubscriptionThankYouIfNeeded()
         }
+    }
+
+    androidx.compose.runtime.DisposableEffect(lifecycleOwner, rootVm.state) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME &&
+                (rootVm.state is RootUiState.Main || rootVm.state is RootUiState.AuthLanding)
+            ) {
+                scope.launch { checkAppStoreUpdate() }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     appUpdateInfo?.let { info ->

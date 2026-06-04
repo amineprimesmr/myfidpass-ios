@@ -61,7 +61,7 @@ class MerchantStatsViewModel(
     fun monthKeys(): List<String> {
         val slug = sessionStore.currentBusinessSlug
         val created = sessionStore.businesses.firstOrNull { it.slug == slug }?.createdAt
-        return CommerceStatsMonthNavigator.monthKeys(created?.trim()?.take(7))
+        return CommerceStatsMonthNavigator.monthKeys(created)
     }
 
     fun load(force: Boolean = false) {

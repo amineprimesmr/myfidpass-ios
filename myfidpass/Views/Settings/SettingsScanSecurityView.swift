@@ -9,6 +9,7 @@ import SwiftUI
 
 struct SettingsScanSecurityView: View {
     @Environment(\.colorScheme) private var colorScheme
+    @EnvironmentObject private var authService: AuthService
     @EnvironmentObject private var syncService: SyncService
 
     @State private var isLoading = true
@@ -145,6 +146,10 @@ struct SettingsScanSecurityView: View {
                 requireReceiptQr = (s.requireReceiptQrValidation ?? 0) == 1
                 receiptToleranceCents = min(500, max(0, s.receiptQrToleranceCents ?? 5))
                 isLoading = false
+                authService.reconcileScanSecurityBenchAccess(
+                    passes: maxPassesPerDay,
+                    points: maxPointsPerTransaction
+                )
             }
         } catch {
             await MainActor.run {
@@ -174,6 +179,10 @@ struct SettingsScanSecurityView: View {
             await MainActor.run {
                 isSaving = false
                 saveNotice = "Réglages enregistrés."
+                authService.reconcileScanSecurityBenchAccess(
+                    passes: maxPassesPerDay,
+                    points: maxPointsPerTransaction
+                )
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()
             }
             await syncService.syncAfterServerMutation()
@@ -189,6 +198,7 @@ struct SettingsScanSecurityView: View {
 #Preview {
     NavigationStack {
         SettingsScanSecurityView()
+            .environmentObject(AuthService())
             .environmentObject(SyncService(container: PersistenceController.preview.container))
     }
 }

@@ -67,6 +67,8 @@ final class AuthService: NSObject, ObservableObject {
     /// Verrou global UI pendant un switch multi-commerce (évite les états visuels mélangés).
     @Published private(set) var isBusinessSwitching = false
     @Published private(set) var businessSwitchTargetSlug: String?
+    /// Révision UI quand le bench scan active ou désactive l’accès payant local.
+    @Published private(set) var merchantScanBenchAccessActive = false
 
     private var cancellables = Set<AnyCancellable>()
     private var refreshBusinessesTask: Task<Void, Never>?
@@ -106,9 +108,10 @@ final class AuthService: NSObject, ObservableObject {
         hasEncashedMerchantSubscription
     }
 
-    /// Paiement réel (Stripe / App Store).
+    /// Paiement réel (Stripe / App Store) ou bench scan (plafonds 2 / 2 enregistrés).
     var hasEncashedMerchantSubscription: Bool {
         if isPlatformAdmin { return false }
+        if merchantScanBenchAccessActive { return true }
         if serverReportsPaidMerchantSubscription { return true }
         let s = merchantSubscription?.status?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
         guard s == "active" || s == "trialing" || s == "past_due" else { return false }
@@ -201,10 +204,12 @@ final class AuthService: NSObject, ObservableObject {
             }
             syncAccountDisplayLineForSession()
             isPlatformAdmin = AuthStorage.isPlatformAdminFlag
+            merchantScanBenchAccessActive = MerchantInternalBenchAccess.isActive
             Task { await bootstrapAuthenticatedSessionIfNeeded(force: true) }
         } else {
             currentScreen = .welcome
             merchantSubscriptionEligibilityResolved = false
+            merchantScanBenchAccessActive = false
             hasActiveMerchantSubscription = false
             isPlatformAdmin = false
             adminShowsMerchantWorkspace = false
@@ -404,6 +409,12 @@ final class AuthService: NSObject, ObservableObject {
 
     private func persistMerchantSubscriptionForLocalNotifications() {
         AuthStorage.merchantHasEncashedSubscription = hasEncashedMerchantSubscription
+    }
+
+    /// Aligné `MerchantInternalBenchAccess` après chargement / enregistrement des plafonds scan.
+    func reconcileScanSecurityBenchAccess(passes: Int, points: Int) {
+        merchantScanBenchAccessActive = MerchantInternalBenchAccess.sync(passes: passes, points: points)
+        persistMerchantSubscriptionForLocalNotifications()
     }
 
     /// Aligné backend : `has_paid_merchant_subscription`.
@@ -1401,6 +1412,7 @@ final class AuthService: NSObject, ObservableObject {
         currentUserPhone = nil
         businesses = []
         merchantSubscriptionEligibilityResolved = false
+        merchantScanBenchAccessActive = false
         hasActiveMerchantSubscription = false
         serverReportsPaidMerchantSubscription = false
         merchantSubscription = nil

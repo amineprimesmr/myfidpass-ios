@@ -49,6 +49,8 @@ struct AddStampVisitSheet: View {
     /// Appelé sur le thread principal après crédit tampon réussi, juste avant fermeture de la feuille (toast, etc.).
     var onStampVisitSuccess: (ScanResponse) -> Void
     var onConfirm: () async -> ScanResponse?
+    /// Carte pleine : accorder la récompense (QR caisse généré côté commerçant).
+    var onGrantReward: () async -> String?
 
     @Environment(\.colorScheme) private var colorScheme
 
@@ -72,21 +74,30 @@ struct AddStampVisitSheet: View {
         isSubmitting: Binding<Bool>,
         onDismiss: @escaping () -> Void,
         onStampVisitSuccess: @escaping (ScanResponse) -> Void,
-        onConfirm: @escaping () async -> ScanResponse?
+        onConfirm: @escaping () async -> ScanResponse?,
+        onGrantReward: @escaping () async -> String? = { nil }
     ) {
         self.data = data
         self._isSubmitting = isSubmitting
         self.onDismiss = onDismiss
         self.onStampVisitSuccess = onStampVisitSuccess
         self.onConfirm = onConfirm
+        self.onGrantReward = onGrantReward
         let initial = min(max(0, Int(data.cardModel.previewStampsCount)), max(1, Int(data.cardModel.requiredStamps)))
         _committedStamps = State(initialValue: initial)
+    }
+
+    /// Carte pleine ou dernier tampon du cycle (ex. 9/10) : accorder la récompense, pas créditer encore.
+    private var isCardCompleteForReward: Bool {
+        if stampsUntilNextMilestone <= 0 { return true }
+        if committedStamps >= requiredStampsInt { return true }
+        return committedStamps >= max(1, requiredStampsInt - 1)
     }
 
     private var balanceCaption: String {
         let total = requiredStampsInt
         let cur = min(max(0, committedStamps), total)
-        if cur >= total {
+        if isCardCompleteForReward {
             return "Carte complète : \(cur) / \(total) tampons"
         }
         return "Solde actuel : \(cur) / \(total) tampons"
@@ -307,7 +318,11 @@ struct AddStampVisitSheet: View {
 
                             VStack(spacing: 0) {
                                 Spacer(minLength: 0)
-                                if committedStamps < requiredStampsInt {
+                                if isCardCompleteForReward {
+                                    slideToGrantRewardPanel
+                                        .padding(.horizontal, 16)
+                                        .padding(.bottom, bottomPad + 10)
+                                } else {
                                     slideToConfirmPanel
                                         .padding(.horizontal, 16)
                                         .padding(.bottom, bottomPad + 10)
@@ -434,9 +449,58 @@ struct AddStampVisitSheet: View {
         )
     }
 
+    private var slideToGrantRewardPanel: some View {
+        let reward = finalRewardLabelTrimmed.isEmpty ? rewardNameAtNextMilestone : finalRewardLabelTrimmed
+        let idle = reward.isEmpty
+            ? "Glisser pour accorder la récompense"
+            : "Glisser pour accorder : \(reward)"
+        let cfg = SlideToConfirm.Config(
+            idleText: idle,
+            onSwipeText: "Accorder",
+            confirmationText: "Récompense accordée",
+            tint: AppTheme.Colors.success,
+            foregroundColor: .white,
+            height: 56,
+            disabled: isSubmitting
+        )
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("Récompense à valider")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(AppTheme.Colors.textPrimary)
+            SlideToConfirm(config: cfg) {
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+                Task { await applyGrantReward() }
+            }
+            .id(slideResetID)
+            Text("Le client a rempli sa carte. Validez la récompense en caisse (comme le QR « Utiliser en magasin »).")
+                .font(.system(size: 12, weight: .regular))
+                .foregroundStyle(AppTheme.Colors.textSecondary.opacity(0.9))
+        }
+        .padding(14)
+        .background(Color.white.opacity(0.65))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(AppTheme.Colors.textSecondary.opacity(0.12), lineWidth: 1)
+        )
+    }
+
+    private func applyGrantReward() async {
+        if let err = await onGrantReward() {
+            await MainActor.run { slideResetID = UUID() }
+            if !err.isEmpty {
+                await MainActor.run {
+                    UINotificationFeedbackGenerator().notificationOccurred(.error)
+                }
+            }
+            return
+        }
+        await MainActor.run { onDismiss() }
+    }
+
     private func applySingleStampVisit() async {
         let previousBalance = await MainActor.run { committedStamps }
-        guard previousBalance < requiredStampsInt else {
+        guard !isCardCompleteForReward else {
             await MainActor.run { slideResetID = UUID() }
             return
         }

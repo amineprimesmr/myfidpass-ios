@@ -14,16 +14,36 @@ object CommerceStatsMonthNavigator {
 
     fun sixMonthKeysEndingCurrentMonth(): List<String> {
         val now = YearMonth.now()
-        return (0 until 6).map { now.minusMonths(it.toLong()).toString() }.reversed()
+        return (0 until 6).map { now.minusMonths(it.toLong()).toString() }
+    }
+
+    fun creationMonthKey(fromCreatedAt: String?): String? {
+        val raw = fromCreatedAt?.trim().orEmpty()
+        if (raw.isEmpty()) return null
+        if (raw.length >= 7) {
+            val prefix = raw.take(7)
+            if (isCalendarMonthPeriod(prefix)) return prefix
+        }
+        return runCatching {
+            val instant = java.time.Instant.parse(raw)
+            calendarMonthKey(YearMonth.from(instant.atZone(java.time.ZoneId.systemDefault())))
+        }.getOrNull()
+            ?: runCatching { calendarMonthKey(YearMonth.parse(raw.take(10))) }.getOrNull()
     }
 
     fun monthKeys(fromCreation: String?): List<String> {
-        val all = sixMonthKeysEndingCurrentMonth()
-        val creation = fromCreation?.trim()?.takeIf { it.length >= 7 && isCalendarMonthPeriod(it.take(7)) }
-            ?.take(7)
-        if (creation == null) return all
-        val filtered = all.filter { it >= creation }
-        return filtered.ifEmpty { listOf(calendarMonthKey()) }
+        val current = calendarMonthKey()
+        val creation = creationMonthKey(fromCreation)
+        if (creation == null) return sixMonthKeysEndingCurrentMonth()
+        if (creation > current) return listOf(current)
+        val keys = mutableListOf<String>()
+        var cursor = current
+        while (cursor >= creation && keys.size < 6) {
+            keys.add(cursor)
+            val prev = runCatching { YearMonth.parse(cursor).minusMonths(1).toString() }.getOrNull() ?: break
+            cursor = prev
+        }
+        return keys.ifEmpty { listOf(current) }
     }
 
     fun displayTitleInMonth(monthKey: String): String = runCatching {

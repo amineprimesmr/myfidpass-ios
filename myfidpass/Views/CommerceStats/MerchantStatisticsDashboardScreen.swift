@@ -30,13 +30,10 @@ struct MerchantStatisticsDashboardScreen: View {
 
     private var statsMonthKeys: [String] {
         let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let rawCreatedAt = authService.businesses.first(where: { $0.slug == slug })?.createdAt
-        let creationMonth: String? = rawCreatedAt.flatMap { raw in
-            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard trimmed.count >= 7 else { return nil }
-            let candidate = String(trimmed.prefix(7))
-            return CommerceStatsMonthNavigator.isCalendarMonthPeriod(candidate) ? candidate : nil
-        }
+        let rawCreatedAt = authService.businessesForMerchantSwitcher
+            .first(where: { $0.slug == slug })?
+            .createdAt
+        let creationMonth = CommerceStatsMonthNavigator.creationMonthKey(fromCreatedAt: rawCreatedAt)
         return CommerceStatsMonthNavigator.monthKeys(from: creationMonth)
     }
 
@@ -69,6 +66,18 @@ struct MerchantStatisticsDashboardScreen: View {
         .toolbar(.hidden, for: .navigationBar)
         .toolbarBackground(.hidden, for: .navigationBar)
         .modifier(MerchantStatsTabBarVisibilityModifier(hidesTabBar: hidesTabBar))
+        .task(id: AuthStorage.currentBusinessSlug) {
+            guard authService.isPlatformAdmin else { return }
+            let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !slug.isEmpty else { return }
+            let hasCreation = authService.businessesForMerchantSwitcher
+                .first(where: { $0.slug == slug })?
+                .createdAt
+                .map { CommerceStatsMonthNavigator.creationMonthKey(fromCreatedAt: $0) } != nil
+            if !hasCreation {
+                await authService.refreshPlatformAdminBusinesses(force: true)
+            }
+        }
     }
 }
 

@@ -280,8 +280,9 @@ struct DashboardHomeCardModel {
         let cap = max(1, fromSettings ?? Int(model.requiredStamps))
         model.programType = "stamps"
         model.requiredStamps = Int32(cap)
-        let bal = memberStampBalance ?? 0
-        model.previewStampsCount = Int32(Swift.min(Swift.max(0, bal), cap))
+        let raw = memberStampBalance ?? 0
+        let normalized = cap > 0 ? Swift.max(0, raw) % cap : Swift.max(0, raw)
+        model.previewStampsCount = Int32(Swift.min(normalized, cap))
         model.previewPointsCount = 0
         let n = memberName.trimmingCharacters(in: .whitespacesAndNewlines)
         model.memberPreviewText = n.isEmpty ? "Client" : n

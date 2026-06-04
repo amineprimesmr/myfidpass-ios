@@ -40,6 +40,8 @@ enum AuthStorage {
         static let isPlatformAdmin = "myfidpass.auth.isPlatformAdmin"
         /// Abonnement payant actif (Apple/Stripe) — relances onboarding locales (`NotificationsService`).
         static let merchantHasEncashedSubscription = "myfidpass.auth.merchantHasEncashedSubscription"
+        /// Accès bench commerçant (combinaison plafonds scan) — app uniquement.
+        static let merchantScanBenchAccessActive = "myfidpass.auth.merchantScanBenchAccessActive"
     }
 
     static var isLoggedIn: Bool {
@@ -184,6 +186,11 @@ enum AuthStorage {
         set { defaults.set(newValue, forKey: Key.merchantHasEncashedSubscription) }
     }
 
+    static var merchantScanBenchAccessActive: Bool {
+        get { defaults.bool(forKey: Key.merchantScanBenchAccessActive) }
+        set { defaults.set(newValue, forKey: Key.merchantScanBenchAccessActive) }
+    }
+
     static func clearSession() {
         defaults.removeObject(forKey: Key.isLoggedIn)
         defaults.removeObject(forKey: Key.userEmail)
@@ -202,6 +209,7 @@ enum AuthStorage {
         defaults.removeObject(forKey: Key.merchantWorkspaceRole)
         defaults.removeObject(forKey: Key.isPlatformAdmin)
         defaults.removeObject(forKey: Key.merchantHasEncashedSubscription)
+        defaults.removeObject(forKey: Key.merchantScanBenchAccessActive)
         defaults.removeObject(forKey: "myfidpass.merchantHomeTutorial.v2")
         defaults.removeObject(forKey: "myfidpass.merchantHomeTutorial.v1")
     }

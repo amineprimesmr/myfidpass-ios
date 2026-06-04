@@ -24,7 +24,8 @@ struct ScanRewardRedeemSheetData: Identifiable {
 /// Parse le payload `MYFIDPASS_REDEEM` (aligné backend `reward-redeem-qr.js`).
 enum RewardRedeemQRPayload {
     case points(memberId: String, tierIndex: Int, points: Int)
-    case stamps(memberId: String)
+    /// `stampThreshold` nil = carte complète ; sinon palier intermédiaire (ex. 5 tampons).
+    case stamps(memberId: String, stampThreshold: Int?)
 
     private static let prefix = "MYFIDPASS_REDEEM:"
 
@@ -33,6 +34,19 @@ enum RewardRedeemQRPayload {
         case .points(_, _, let pts): return pts
         case .stamps: return nil
         }
+    }
+
+    /// QR caisse « carte complète » (sans palier intermédiaire).
+    static func fullCardBarcode(memberId: String) -> String {
+        let id = memberId.trimmingCharacters(in: .whitespacesAndNewlines)
+        return "MYFIDPASS_REDEEM:1:\(id):s"
+    }
+
+    /// QR caisse palier tampons intermédiaire (ex. 5 tampons).
+    static func stampTierBarcode(memberId: String, threshold: Int) -> String {
+        let id = memberId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let th = max(1, threshold)
+        return "MYFIDPASS_REDEEM:1:\(id):s:\(th)"
     }
 
     static func parse(_ raw: String) -> RewardRedeemQRPayload? {
@@ -44,7 +58,11 @@ enum RewardRedeemQRPayload {
         let memberId = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
         guard !memberId.isEmpty else { return nil }
         let mode = parts[2].lowercased()
-        if mode == "s" { return .stamps(memberId: memberId) }
+        if mode == "s" {
+            var stampThreshold: Int?
+            if parts.count >= 4, let t = Int(parts[3]), t > 0 { stampThreshold = t }
+            return .stamps(memberId: memberId, stampThreshold: stampThreshold)
+        }
         if mode == "p", parts.count >= 5,
            let tierIndex = Int(parts[3]), tierIndex >= 0,
            let points = Int(parts[4]), points > 0 {
@@ -73,8 +91,15 @@ enum ScanRewardRedeemSheetDataBuilder {
         if pointsRequired <= 0, let qrPts = qr?.encodedPoints, qrPts > 0 {
             pointsRequired = qrPts
         }
+        if pointsRequired <= 0, case .stamps(_, let th)? = qr, let th, th > 0 {
+            pointsRequired = th
+        }
         let balance = preview.pointsBalance ?? lookup.member.points ?? 0
-        let eligible = pointsRequired > 0 && balance >= pointsRequired
+        let eligible: Bool = {
+            if let api = preview.eligible { return api }
+            guard pointsRequired > 0 else { return false }
+            return balance >= pointsRequired
+        }()
 
         return ScanRewardRedeemSheetData(
             slug: slug,
@@ -281,9 +306,14 @@ struct RewardRedeemScanSheet: View {
                         case .points(_, let tier, let pts):
                             Text("Palier #\(tier + 1) · \(pts) pts encodés")
                                 .font(.footnote.weight(.medium))
-                        case .stamps:
-                            Text("Récompense tampons (carte complète)")
-                                .font(.footnote.weight(.medium))
+                        case .stamps(_, let th):
+                            if let th, th > 0 {
+                                Text("Palier tampons · \(th) tampon\(th > 1 ? "s" : "") encodés")
+                                    .font(.footnote.weight(.medium))
+                            } else {
+                                Text("Récompense tampons (carte complète)")
+                                    .font(.footnote.weight(.medium))
+                            }
                         }
                     } else {
                         Text("Format QR non reconnu — utilisez « Utiliser en magasin » sur la carte client.")

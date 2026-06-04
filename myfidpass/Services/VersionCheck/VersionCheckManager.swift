@@ -68,7 +68,8 @@ final class VersionCheckManager {
                 availableVersion: available,
                 releaseNotes: releaseNotes,
                 appLogo: appLogo,
-                appURL: appURL
+                appURL: appURL,
+                isMandatoryUpdate: AppVersionUpdatePolicy.isMandatoryUpdate(releaseNotes: releaseNotes)
             )
         } catch {
             versionCheckLog.error("VersionCheckManager error: \(error.localizedDescription)")
@@ -142,5 +143,7 @@ final class VersionCheckManager {
         var releaseNotes: String
         var appLogo: String
         var appURL: String
+        /// Mise à jour bloquante (notes App Store avec marqueur `[force]` / `!` / `UPDATE_REQUIRED`).
+        var isMandatoryUpdate: Bool
     }
 }

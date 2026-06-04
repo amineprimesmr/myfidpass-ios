@@ -34,6 +34,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import fr.myfidpass.data.dto.isApiTrue
+import fr.myfidpass.data.local.MerchantScanBenchAccess
+import fr.myfidpass.data.local.SessionStore
 import fr.myfidpass.data.repo.DashboardRepository
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.buildJsonObject
@@ -43,6 +45,7 @@ import kotlinx.serialization.json.put
 @Composable
 fun ScanSecuritySettingsScreen(
     repository: DashboardRepository,
+    sessionStore: SessionStore,
     snackbar: SnackbarHostState,
     onBack: () -> Unit,
 ) {
@@ -63,6 +66,11 @@ fun ScanSecuritySettingsScreen(
             maxPoints = (s.scanMaxPointsPerTransaction ?: 0).toString()
             requireReceipt = s.requireReceiptQrValidation.isApiTrue()
             toleranceCents = (s.receiptQrToleranceCents ?: 5).toString()
+            MerchantScanBenchAccess.sync(
+                sessionStore,
+                maxPasses.toIntOrNull() ?: 0,
+                maxPoints.toIntOrNull() ?: 0,
+            )
         }
         loading = false
     }
@@ -80,6 +88,11 @@ fun ScanSecuritySettingsScreen(
                 }
                 repository.patchDashboardSettings(slug, patch)
             }.onSuccess {
+                MerchantScanBenchAccess.sync(
+                    sessionStore,
+                    maxPasses.toIntOrNull() ?: 0,
+                    maxPoints.toIntOrNull() ?: 0,
+                )
                 snackbar.showSnackbar("Sécurité scan enregistrée")
                 onBack()
             }.onFailure {
