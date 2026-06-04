@@ -25,7 +25,7 @@ struct MatchPredictionsSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     if isLoading {
-                        ProgressView()
+                        MatchPredictionsLoadingIndicator()
                             .frame(maxWidth: .infinity)
                             .padding(.top, 48)
                     } else {
@@ -95,7 +95,9 @@ struct MatchPredictionsSheet: View {
                 Task { await saveConfig() }
             } label: {
                 HStack {
-                    if isSavingConfig { ProgressView().tint(.white) }
+                    if isSavingConfig {
+                        SpinningSymbolView(systemName: "arrow.clockwise", font: .body, color: .white)
+                    }
                     Text(isSavingConfig ? "Enregistrement..." : "Enregistrer")
                         .fontWeight(.semibold)
                 }
@@ -287,5 +289,30 @@ struct MatchPredictionsSheet: View {
                 .hour()
                 .minute()
         )
+    }
+}
+
+/// Indicateur SwiftUI compatible iOS 17 (pas de `symbolEffect(.rotate)` iOS 18+).
+private struct MatchPredictionsLoadingIndicator: View {
+    var body: some View {
+        SpinningSymbolView(systemName: "arrow.clockwise", font: .title2, color: AppTheme.Colors.primary)
+            .accessibilityLabel("Chargement")
+    }
+}
+
+private struct SpinningSymbolView: View {
+    let systemName: String
+    var font: Font = .title2
+    var color: Color = AppTheme.Colors.primary
+
+    @State private var isAnimating = false
+
+    var body: some View {
+        Image(systemName: systemName)
+            .font(font)
+            .foregroundStyle(color)
+            .rotationEffect(.degrees(isAnimating ? 360 : 0))
+            .animation(.linear(duration: 0.85).repeatForever(autoreverses: false), value: isAnimating)
+            .onAppear { isAnimating = true }
     }
 }

@@ -7,6 +7,28 @@
 
 import Foundation
 
+// MARK: - Décodage API (Int / Bool tolérants)
+
+private enum SaaSAPIDecodingHelpers {
+    static func losslessInt<K: CodingKey>(_ c: KeyedDecodingContainer<K>, forKey key: K) -> Int? {
+        if let n = try? c.decode(Int.self, forKey: key) { return n }
+        if let d = try? c.decode(Double.self, forKey: key) { return Int(d) }
+        if let s = try? c.decode(String.self, forKey: key), let n = Int(s) { return n }
+        return nil
+    }
+
+    static func boolish<K: CodingKey>(_ c: KeyedDecodingContainer<K>, forKey key: K) -> Bool? {
+        if let b = try? c.decode(Bool.self, forKey: key) { return b }
+        if let n = try? c.decode(Int.self, forKey: key) { return n != 0 }
+        if let s = try? c.decode(String.self, forKey: key) {
+            let t = s.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if t == "true" || t == "1" { return true }
+            if t == "false" || t == "0" { return false }
+        }
+        return nil
+    }
+}
+
 // MARK: - Évolution
 
 struct DashboardEvolutionResponse: Codable, Sendable {
@@ -167,7 +189,7 @@ struct MatchPredictionNextMatchDTO: Decodable, Identifiable {
         teamAwayFlag = try c.decodeIfPresent(String.self, forKey: .teamAwayFlag)
         startsAt = try c.decodeIfPresent(String.self, forKey: .startsAt) ?? ""
         roundLabel = try c.decodeIfPresent(String.self, forKey: .roundLabel)
-        entriesCount = MatchPredictionMatchDTO.decodeLosslessInt(c, forKey: .entriesCount)
+        entriesCount = SaaSAPIDecodingHelpers.losslessInt(c, forKey: .entriesCount)
     }
 }
 
@@ -183,26 +205,8 @@ struct MatchPredictionConfigDTO: Decodable {
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        enabled = Self.decodeBoolish(c, forKey: .enabled)
-        pointsPerCorrectPrediction = Self.decodeLosslessInt(c, forKey: .pointsPerCorrectPrediction)
-    }
-
-    private static func decodeBoolish(_ c: KeyedDecodingContainer<CodingKeys>, forKey key: CodingKeys) -> Bool? {
-        if let b = try? c.decode(Bool.self, forKey: key) { return b }
-        if let n = try? c.decode(Int.self, forKey: key) { return n != 0 }
-        if let s = try? c.decode(String.self, forKey: key) {
-            let t = s.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            if t == "true" || t == "1" { return true }
-            if t == "false" || t == "0" { return false }
-        }
-        return nil
-    }
-
-    private static func decodeLosslessInt(_ c: KeyedDecodingContainer<CodingKeys>, forKey key: CodingKeys) -> Int? {
-        if let n = try? c.decode(Int.self, forKey: key) { return n }
-        if let d = try? c.decode(Double.self, forKey: key) { return Int(d) }
-        if let s = try? c.decode(String.self, forKey: key), let n = Int(s) { return n }
-        return nil
+        enabled = SaaSAPIDecodingHelpers.boolish(c, forKey: .enabled)
+        pointsPerCorrectPrediction = SaaSAPIDecodingHelpers.losslessInt(c, forKey: .pointsPerCorrectPrediction)
     }
 }
 
@@ -238,29 +242,16 @@ struct MatchPredictionMatchDTO: Decodable, Identifiable {
         cutoffAt = try c.decodeIfPresent(String.self, forKey: .cutoffAt)
         status = try c.decodeIfPresent(String.self, forKey: .status)
         resultChoice = try c.decodeIfPresent(String.self, forKey: .resultChoice)
-        locked = Self.decodeBoolish(c, forKey: .locked)
-        entriesCount = Self.decodeLosslessInt(c, forKey: .entriesCount)
-        correctCount = Self.decodeLosslessInt(c, forKey: .correctCount)
-        pointsDistributed = Self.decodeLosslessInt(c, forKey: .pointsDistributed)
+        locked = SaaSAPIDecodingHelpers.boolish(c, forKey: .locked)
+        entriesCount = SaaSAPIDecodingHelpers.losslessInt(c, forKey: .entriesCount)
+        correctCount = SaaSAPIDecodingHelpers.losslessInt(c, forKey: .correctCount)
+        pointsDistributed = SaaSAPIDecodingHelpers.losslessInt(c, forKey: .pointsDistributed)
         stage = try c.decodeIfPresent(String.self, forKey: .stage)
         roundLabel = try c.decodeIfPresent(String.self, forKey: .roundLabel)
     }
 
     var isGroupStage: Bool {
         (stage ?? "group").lowercased() == "group"
-    }
-
-    private static func decodeBoolish(_ c: KeyedDecodingContainer<CodingKeys>, forKey key: CodingKeys) -> Bool? {
-        if let b = try? c.decode(Bool.self, forKey: key) { return b }
-        if let n = try? c.decode(Int.self, forKey: key) { return n != 0 }
-        return nil
-    }
-
-    private static func decodeLosslessInt(_ c: KeyedDecodingContainer<CodingKeys>, forKey key: CodingKeys) -> Int? {
-        if let n = try? c.decode(Int.self, forKey: key) { return n }
-        if let d = try? c.decode(Double.self, forKey: key) { return Int(d) }
-        if let s = try? c.decode(String.self, forKey: key), let n = Int(s) { return n }
-        return nil
     }
 }
 

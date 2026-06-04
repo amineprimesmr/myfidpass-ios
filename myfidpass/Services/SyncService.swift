@@ -305,7 +305,7 @@ final class SyncService: ObservableObject {
     /// Préserve uniquement l'état brouillon local (fond photo, icône tampon en cours d'édition).
     private func updateSnapshotRemoteBackground(settings: BusinessSettingsResponse, slug: String) {
         let existing = CardPreviewDisplaySnapshotStore.load(slug: slug)
-        var merged = Self.minimalDisplaySnapshotFromSettings(settings, slug: slug, preserving: existing)
+        let merged = Self.minimalDisplaySnapshotFromSettings(settings, slug: slug, preserving: existing)
         guard existing != merged else { return }
         CardPreviewDisplaySnapshotStore.save(merged, slug: slug)
     }

@@ -51,6 +51,15 @@ final class NotificationsService: NSObject, ObservableObject {
                 await NotificationsService.shared.refreshMerchantCardSetupReminder()
             }
         }
+        NotificationCenter.default.addObserver(
+            forName: .myfidpassMerchantSubscriptionFromRefresh,
+            object: nil,
+            queue: .main
+        ) { _ in
+            Task { @MainActor in
+                await NotificationsService.shared.refreshMerchantCardSetupReminder()
+            }
+        }
     }
 
     /// Après connexion ou refresh JWT : enregistre le token APNs côté API si disponible.
@@ -171,7 +180,8 @@ final class NotificationsService: NSObject, ObservableObject {
 
     // MARK: - Onboarding commerçant (relance création carte)
 
-    /// Campagne locale onboarding commerçant (carte + flyer + fin d'offre 1€).
+    /// Relances onboarding commerçant (carte + flyer) — **locales**, pas APNs serveur.
+    /// Jamais planifiées si l’abonnement payant est actif (`hasPaidMerchantSubscription`).
     func refreshMerchantCardSetupReminder() async {
         guard AuthStorage.isLoggedIn else {
             await cancelMerchantOnboardingReminders()
@@ -179,6 +189,11 @@ final class NotificationsService: NSObject, ObservableObject {
         }
         // Jamais pour les comptes staff.
         if let staff = AuthStorage.userStaffLogin?.trimmingCharacters(in: .whitespacesAndNewlines), !staff.isEmpty {
+            await cancelMerchantOnboardingReminders()
+            return
+        }
+        // Abonnement payant encaissé (Apple/Stripe, persisté par AuthService) : plus de relance carte/flyer.
+        if AuthStorage.merchantHasEncashedSubscription {
             await cancelMerchantOnboardingReminders()
             return
         }

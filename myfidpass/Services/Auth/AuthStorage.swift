@@ -38,6 +38,8 @@ enum AuthStorage {
         static let merchantWorkspaceRole = "myfidpass.auth.merchantWorkspaceRole"
         /// Compte administrateur plateforme (`is_admin`) — évite d’afficher l’UI commerçant au cold start avant `/me`.
         static let isPlatformAdmin = "myfidpass.auth.isPlatformAdmin"
+        /// Abonnement payant actif (Apple/Stripe) — relances onboarding locales (`NotificationsService`).
+        static let merchantHasEncashedSubscription = "myfidpass.auth.merchantHasEncashedSubscription"
     }
 
     static var isLoggedIn: Bool {
@@ -176,6 +178,12 @@ enum AuthStorage {
         set { defaults.set(newValue, forKey: Key.isPlatformAdmin) }
     }
 
+    /// Dernier état connu : commerçant a un abo payant encaissé (pas staff, pas essai gratuit seul).
+    static var merchantHasEncashedSubscription: Bool {
+        get { defaults.bool(forKey: Key.merchantHasEncashedSubscription) }
+        set { defaults.set(newValue, forKey: Key.merchantHasEncashedSubscription) }
+    }
+
     static func clearSession() {
         defaults.removeObject(forKey: Key.isLoggedIn)
         defaults.removeObject(forKey: Key.userEmail)
@@ -193,6 +201,7 @@ enum AuthStorage {
         defaults.removeObject(forKey: Key.pendingShowMerchantHomeTutorialAfterSignup)
         defaults.removeObject(forKey: Key.merchantWorkspaceRole)
         defaults.removeObject(forKey: Key.isPlatformAdmin)
+        defaults.removeObject(forKey: Key.merchantHasEncashedSubscription)
         defaults.removeObject(forKey: "myfidpass.merchantHomeTutorial.v2")
         defaults.removeObject(forKey: "myfidpass.merchantHomeTutorial.v1")
     }

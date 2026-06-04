@@ -399,6 +399,11 @@ final class AuthService: NSObject, ObservableObject {
                 }
             }
         }
+        persistMerchantSubscriptionForLocalNotifications()
+    }
+
+    private func persistMerchantSubscriptionForLocalNotifications() {
+        AuthStorage.merchantHasEncashedSubscription = hasEncashedMerchantSubscription
     }
 
     /// Aligné backend : `has_paid_merchant_subscription`.
