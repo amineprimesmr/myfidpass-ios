@@ -59,7 +59,7 @@ enum CardMissingRequirement: Identifiable, Equatable {
         case .couleursCarte:
             return "Définissez le fond, les titres (POINTS, MEMBRE…) et les textes secondaires."
         case .recompenses:
-            return "Renseignez tous les paliers de récompenses (10 pts inclus)."
+            return "Renseignez au minimum la récompense à 10 pts et les paliers actifs."
         case .imageDeFondPoints:
             return "Choisissez une image pour la zone sous l’en-tête."
         case .iconeTampons:
@@ -155,16 +155,13 @@ enum MyCardCompletionRequirements {
         return serverHasStampIcon
     }
 
-    private static let pointsMinTierCount = MyCardPointsRewardTiers.minVisibleCount
     private static let pointsMaxTierCount = MyCardPointsRewardTiers.slotCount
 
     static func hasStartGameRewardLabel(_ startGameRewardLabel: String) -> Bool {
-        var label = startGameRewardLabel
-        MyCardProgramDefaults.ensureStartGameRewardLabel(&label)
-        return !label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !startGameRewardLabel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    /// Tous les paliers points (min. 5, + lignes ajoutées), ou toutes les récompenses tampons requises.
+    /// Palier 10 pts obligatoire + chaque ligne remplie doit être complète ; tampons : finale + 5ᵉ optionnelle.
     static func hasRecompensesCompletes(
         programType: String,
         tierPoints: [String],
@@ -172,23 +169,24 @@ enum MyCardCompletionRequirements {
         requiredStamps: Int,
         stampRewardLabel: String,
         stampMidRewardLabel: String,
-        startGameRewardLabel: String
+        startGameRewardLabel: String,
+        stampMidRewardEnabled: Bool = true
     ) -> Bool {
         if programType == "points" {
-            let ptsArr = tierPoints + Array(repeating: "", count: max(0, pointsMaxTierCount - tierPoints.count))
-            let labArr = tierLabels + Array(repeating: "", count: max(0, pointsMaxTierCount - tierLabels.count))
-            var requiredRows = pointsMinTierCount
-            for i in pointsMinTierCount..<pointsMaxTierCount {
+            var ptsArr = tierPoints
+            var labArr = tierLabels
+            MyCardProgramDefaults.ensureTierArraysCapacity(tierPoints: &ptsArr, tierLabels: &labArr)
+            let signupPts = ptsArr[0].trimmingCharacters(in: .whitespaces)
+            let signupLab = labArr[0].trimmingCharacters(in: .whitespaces)
+            guard Int(signupPts) == MyCardProgramDefaults.signupRewardPoints, !signupLab.isEmpty else { return false }
+            for i in 1..<pointsMaxTierCount {
                 let ptsStr = ptsArr[i].trimmingCharacters(in: .whitespaces)
                 let lab = labArr[i].trimmingCharacters(in: .whitespaces)
-                if !ptsStr.isEmpty || !lab.isEmpty {
-                    requiredRows = i + 1
+                let hasAny = !ptsStr.isEmpty || !lab.isEmpty
+                guard !hasAny else {
+                    guard let pts = Int(ptsStr), pts >= 0, !lab.isEmpty else { return false }
+                    continue
                 }
-            }
-            for i in 0..<requiredRows {
-                let ptsStr = ptsArr[i].trimmingCharacters(in: .whitespaces)
-                let lab = labArr[i].trimmingCharacters(in: .whitespaces)
-                guard let pts = Int(ptsStr), pts >= 0, !lab.isEmpty else { return false }
             }
             return true
         }
@@ -197,7 +195,7 @@ enum MyCardCompletionRequirements {
             let fin = stampRewardLabel.trimmingCharacters(in: .whitespacesAndNewlines)
             if fin.isEmpty { return false }
             let total = max(1, requiredStamps)
-            if total > 5 {
+            if total > 5, stampMidRewardEnabled {
                 let mid = stampMidRewardLabel.trimmingCharacters(in: .whitespacesAndNewlines)
                 if mid.isEmpty { return false }
             }
@@ -227,7 +225,8 @@ enum MyCardCompletionRequirements {
         requiredStamps: Int,
         stampRewardLabel: String,
         stampMidRewardLabel: String,
-        startGameRewardLabel: String
+        startGameRewardLabel: String,
+        stampMidRewardEnabled: Bool = true
     ) -> [CardMissingRequirement] {
         var missing: [CardMissingRequirement] = []
 
@@ -251,7 +250,8 @@ enum MyCardCompletionRequirements {
             requiredStamps: requiredStamps,
             stampRewardLabel: stampRewardLabel,
             stampMidRewardLabel: stampMidRewardLabel,
-            startGameRewardLabel: startGameRewardLabel
+            startGameRewardLabel: startGameRewardLabel,
+            stampMidRewardEnabled: stampMidRewardEnabled
         ) {
             missing.append(.recompenses)
         }

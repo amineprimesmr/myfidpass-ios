@@ -250,8 +250,8 @@ struct ContentView: View {
     @MainActor
     private func runPostPaywallRefreshPipeline() async {
         syncService.invalidateSyncThrottle()
-        try? await Task.sleep(nanoseconds: 450_000_000)
-        _ = await authService.refreshMerchantBillingStateFromServer(force: true)
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        _ = await authService.refreshMerchantBillingStateWithRetries()
         await authService.reconcileMerchantSubscriptionFromServer(force: true)
         await syncService.syncAfterServerMutation()
     }

@@ -1,23 +1,13 @@
 {
-  "images" : [
+  "images": [
     {
-      "filename" : "5e69eec1-e291-4f78-892f-613dcf688ca7.png",
-      "idiom" : "universal",
-      "scale" : "1x"
-    },
-    {
-      "filename" : "5e69eec1-e291-4f78-892f-613dcf688ca7 1.png",
-      "idiom" : "universal",
-      "scale" : "2x"
-    },
-    {
-      "filename" : "5e69eec1-e291-4f78-892f-613dcf688ca7 2.png",
-      "idiom" : "universal",
-      "scale" : "3x"
+      "filename": "template7.png",
+      "idiom": "universal",
+      "scale": "1x"
     }
   ],
-  "info" : {
-    "author" : "xcode",
-    "version" : 1
+  "info": {
+    "author": "sync-flyer-assets",
+    "version": 1
   }
 }

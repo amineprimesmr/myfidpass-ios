@@ -101,10 +101,13 @@ final class SyncService: ObservableObject {
     /// L’API dashboard plafonne à 200 membres par page (`dashboard.js`).
     private static let membersAPIPageSize = 200
     private static let transactionsAPIPageSize = 100
-    /// Mode perf agressif : limite volontairement le volume synchronisé par passe.
-    private static let maxMemberPages = 4
-    /// `sort=desc` : on garde les transactions récentes en priorité.
-    private static let maxTransactionPages = 4
+    /// Mode perf : limite volontairement le volume synchronisé par passe (200 × pages).
+    private static let maxMemberPages = 25
+    /// `sort=desc` : transactions récentes en priorité (100 × pages = 1000 lignes).
+    private static let maxTransactionPages = 10
+    /// Plafond aligné export SaaS (`GET …/transactions/export`, limit 25000).
+    private static let maxMemberHistoryTransactions = 25_000
+    private static let memberHistoryPageSize = 200
 
     private let syncSerialExecutor = SyncSerialExecutor()
 
@@ -138,6 +141,22 @@ final class SyncService: ObservableObject {
     /// (fil « Dernières transactions ») ne sont jamais fusionnées et l’accueil reste vide ou obsolète après scan.
     func syncAfterServerMutation() async {
         await syncIfNeeded(force: true)
+    }
+
+    /// Historique **complet** d’un membre : pagination API (`memberId`), fusion Core Data, dédoublonnage cartes/tampons, purge locale obsolète.
+    func syncMemberTransactionHistory(memberId: String) async {
+        let trimmed = memberId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !slug.isEmpty else { return }
+        await syncSerialExecutor.enqueue { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.performMemberTransactionHistorySync(slug: slug, memberId: trimmed)
+            } catch {
+                syncServiceLog.error("Member history sync failed: \(String(describing: error))")
+            }
+        }
     }
 
     /// Récupère user + businesses, puis pour le commerce courant (slug) : settings, stats, membres, transactions.
@@ -204,8 +223,8 @@ final class SyncService: ObservableObject {
             postSyncFailureBanner()
         } catch APIError.subscriptionRequired {
             guard syncStillOwnedByCurrentSession(syncGeneration) else { return }
-            lastError = "Abonnement inactif ou expiré. Réactivez votre offre (Stripe) pour synchroniser le tableau de bord."
-            postSyncFailureBanner()
+            lastError = nil
+            MerchantProUnlockPresenter.shared.presentTeaser()
         } catch let err as APIError where err.isHTTPResourceMissing {
             guard syncStillOwnedByCurrentSession(syncGeneration) else { return }
             // Souvent slug / URL mal formée ou commerce supprimé : 2ᵉ essai après relecture du profil (slug recalculé).
@@ -476,28 +495,127 @@ final class SyncService: ObservableObject {
 
     /// Plus utilisé : le scan envoie directement à l’API. Gardé pour compatibilité.
     func pushLocalChanges() async { }
+
+    // MARK: - Historique membre (phase 2)
+
+    private func fetchAllTransactionsForMember(slug: String, memberId: String) async throws -> [TransactionDTO] {
+        var collected: [TransactionDTO] = []
+        var seenIds = Set<String>()
+        var offset = 0
+        var serverTotal: Int?
+        let pageSize = Self.memberHistoryPageSize
+        let maxPages = (Self.maxMemberHistoryTransactions + pageSize - 1) / pageSize
+        for _ in 0..<maxPages {
+            let page = try await APIClient.shared.request(
+                .businessTransactions(
+                    slug: slug,
+                    limit: pageSize,
+                    offset: offset,
+                    memberId: memberId,
+                    days: nil,
+                    type: nil,
+                    sort: "desc"
+                )
+            ) as BusinessTransactionsResponse
+            if serverTotal == nil { serverTotal = page.total }
+            if page.transactions.isEmpty { break }
+            for t in page.transactions {
+                if let id = t.id?.trimmingCharacters(in: .whitespacesAndNewlines), !id.isEmpty {
+                    guard !seenIds.contains(id) else { continue }
+                    seenIds.insert(id)
+                }
+                collected.append(t)
+            }
+            if page.transactions.count < pageSize { break }
+            if let total = serverTotal, collected.count >= total { break }
+            offset += pageSize
+            if offset >= Self.maxMemberHistoryTransactions { break }
+        }
+        return collected
+    }
+
+    private func performMemberTransactionHistorySync(slug: String, memberId: String) async throws {
+        let transactions = try await fetchAllTransactionsForMember(slug: slug, memberId: memberId)
+        let serverTxnIds = Set(
+            transactions.compactMap { t -> String? in
+                let id = t.id?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                return id.isEmpty ? nil : id
+            }
+        )
+        let c = container
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            let child = NSManagedObjectContext(concurrencyType: .privateQueueConcurrencyType)
+            child.parent = c.viewContext
+            child.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
+            child.perform {
+                do {
+                    guard let business = SyncCoreDataMerge.findBusiness(slug: slug, context: child),
+                          let template = SyncCoreDataMerge.findCardTemplate(business: business, context: child) else {
+                        cont.resume()
+                        return
+                    }
+                    SyncCoreDataMerge.deduplicateClientCards(for: template, context: child)
+                    guard let card = SyncCoreDataMerge.clientCard(memberId: memberId, template: template, context: child) else {
+                        cont.resume()
+                        return
+                    }
+                    var txnStampsByKey = SyncCoreDataMerge.existingTxnStampIndex(for: template, context: child)
+                    let cardsByMemberId = [memberId: card]
+                    SyncCoreDataMerge.mergeTransactions(
+                        transactions,
+                        cardsByMemberId: cardsByMemberId,
+                        txnStampsByKey: &txnStampsByKey,
+                        context: child
+                    )
+                    SyncCoreDataMerge.dedupeStamps(on: card, txnStampsByKey: &txnStampsByKey, context: child)
+                    SyncCoreDataMerge.purgeOrphanTxnStamps(
+                        for: card,
+                        serverTxnIds: serverTxnIds,
+                        txnStampsByKey: &txnStampsByKey,
+                        context: child
+                    )
+                    try child.save()
+                    DispatchQueue.main.async {
+                        do {
+                            try c.viewContext.save()
+                            NotificationCenter.default.post(name: .myfidpassMerchantCoreDataDidMergeFromSync, object: nil)
+                            cont.resume()
+                        } catch {
+                            cont.resume(throwing: error)
+                        }
+                    }
+                } catch {
+                    DispatchQueue.main.async { cont.resume(throwing: error) }
+                }
+            }
+        }
+    }
 }
 
 // MARK: - Fusion Core Data (file privée, hors MainActor)
 
 fileprivate enum SyncCoreDataMerge {
     static func parseISO8601(_ s: String?) -> Date? {
-        guard let s = s else { return nil }
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter.date(from: s) ?? ISO8601DateFormatter().date(from: s)
+        guard let raw = s?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return nil }
+        let isoFrac = ISO8601DateFormatter()
+        isoFrac.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = isoFrac.date(from: raw) { return d }
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime]
+        if let d = iso.date(from: raw) { return d }
+        // SQLite `datetime('now')` renvoyé tel quel par l’API (UTC).
+        let sqlite = DateFormatter()
+        sqlite.locale = Locale(identifier: "en_US_POSIX")
+        sqlite.timeZone = TimeZone(secondsFromGMT: 0)
+        for pattern in ["yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd'T'HH:mm:ss"] {
+            sqlite.dateFormat = pattern
+            if let d = sqlite.date(from: raw) { return d }
+        }
+        return nil
     }
 
     private static func normalizedTxnDedupKey(fromStampNote note: String?) -> String? {
-        let raw = note?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard raw.hasPrefix("txn:"), raw.count > 4 else { return nil }
-        let payload = raw.dropFirst(4)
-        if let pipe = payload.firstIndex(of: "|") {
-            let tid = String(payload[..<pipe]).trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !tid.isEmpty else { return nil }
-            return "txn:\(tid)"
-        }
-        return raw
+        MerchantTransactionEventLabels.normalizedTxnDedupKey(fromStampNote: note)
     }
 
     static func apply(
@@ -581,14 +699,19 @@ fileprivate enum SyncCoreDataMerge {
                 created.clientDisplayName = m.name ?? "Client"
                 created.clientEmail = m.email
                 created.stampsCount = Int32(m.points ?? 0)
-                created.createdAt = Date()
-                created.updatedAt = Date()
+                created.createdAt = parseISO8601(m.createdAt)
+                created.updatedAt = parseISO8601(m.lastVisitAt) ?? parseISO8601(m.createdAt) ?? Date()
                 cardsByMemberId[m.id] = created
                 return created
             }()
             card.stampsCount = Int32(m.points ?? 0)
             card.clientDisplayName = m.name ?? "Client"
             card.clientEmail = m.email
+            if let serverCreated = parseISO8601(m.createdAt) {
+                if card.createdAt == nil || serverCreated < card.createdAt! {
+                    card.createdAt = serverCreated
+                }
+            }
             card.updatedAt = parseISO8601(m.lastVisitAt) ?? card.updatedAt
             // Vague 2 de sync passe `categories: nil` : ne pas effacer les catégories déjà fusionnées en vague 1.
             if let categoryIds = m.categoryIds, categories != nil {
@@ -597,40 +720,259 @@ fileprivate enum SyncCoreDataMerge {
             }
         }
 
+        deduplicateClientCards(for: template, context: context)
+        cardsByMemberId = rebuildCardsByMemberId(for: template, context: context)
+        txnStampsByKey = existingTxnStampIndex(for: template, context: context)
+
+        mergeTransactions(
+            transactions.transactions,
+            cardsByMemberId: cardsByMemberId,
+            txnStampsByKey: &txnStampsByKey,
+            context: context
+        )
+    }
+
+    // MARK: - Fusion transactions
+
+    static func mergeTransactions(
+        _ transactions: [TransactionDTO],
+        cardsByMemberId: [String: ClientCard],
+        txnStampsByKey: inout [String: Stamp],
+        context: NSManagedObjectContext
+    ) {
         var txnStampKeys = Set(txnStampsByKey.keys)
-        for t in transactions.transactions {
+        for t in transactions {
             guard let memberId = t.memberId else { continue }
             guard let card = cardsByMemberId[memberId] else { continue }
-            if let tid = t.id {
-                let key = "txn:\(tid)"
-                if txnStampKeys.contains(key) { continue }
-                txnStampKeys.insert(key)
+
+            let dedupKey: String
+            if let tid = t.id?.trimmingCharacters(in: .whitespacesAndNewlines), !tid.isEmpty {
+                dedupKey = "txn:\(tid)"
+            } else {
+                dedupKey = MerchantTransactionEventLabels.compositeDedupKey(
+                    memberId: memberId,
+                    type: t.type,
+                    createdAt: t.createdAt,
+                    points: t.points
+                )
             }
+            if txnStampKeys.contains(dedupKey) {
+                // Réconciliation sur tampon déjà connu
+                if dedupKey.hasPrefix("txn:"),
+                   let stamp = txnStampsByKey[dedupKey],
+                   let tid = t.id?.trimmingCharacters(in: .whitespacesAndNewlines), !tid.isEmpty {
+                    if let serverDate = parseISO8601(t.createdAt) { stamp.createdAt = serverDate }
+                    stamp.note = MerchantTransactionEventLabels.enrichStampNote(
+                        stamp.note,
+                        txnId: tid,
+                        type: t.type,
+                        points: t.points,
+                        metadata: t.metadata
+                    )
+                }
+                continue
+            }
+            txnStampKeys.insert(dedupKey)
+
             let stamp = Stamp(context: context)
             stamp.id = UUID()
             stamp.clientCard = card
-            stamp.createdAt = parseISO8601(t.createdAt) ?? Date()
-            if let tid = t.id {
-                var noteBody = "txn:\(tid)"
-                if let p = t.points {
-                    noteBody += "|p:\(p)"
-                }
-                stamp.note = noteBody
-                txnStampsByKey["txn:\(tid)"] = stamp
+            stamp.createdAt = parseISO8601(t.createdAt)
+            if let tid = t.id?.trimmingCharacters(in: .whitespacesAndNewlines), !tid.isEmpty {
+                stamp.note = MerchantTransactionEventLabels.encodeStampNote(
+                    txnId: tid,
+                    type: t.type,
+                    points: t.points,
+                    metadata: t.metadata
+                )
+                txnStampsByKey[dedupKey] = stamp
             } else {
-                stamp.note = t.metadata
+                stamp.note = t.metadata?.trimmingCharacters(in: .whitespacesAndNewlines)
             }
         }
 
-        // Rétrocompat : tampons déjà importés en `txn:<id>` seuls → ajout `|p:` quand l’API expose `points`.
-        for t in transactions.transactions {
-            guard let tid = t.id, let p = t.points else { continue }
-            guard let stamp = txnStampsByKey["txn:\(tid)"] else { continue }
-            let trimmed = stamp.note?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            guard trimmed.hasPrefix("txn:\(tid)") else { continue }
-            if trimmed.contains("|p:") { continue }
-            stamp.note = "txn:\(tid)|p:\(p)"
+        for t in transactions {
+            guard let memberId = t.memberId else { continue }
+            guard cardsByMemberId[memberId] != nil else { continue }
+            guard let tid = t.id?.trimmingCharacters(in: .whitespacesAndNewlines), !tid.isEmpty else { continue }
+            let key = "txn:\(tid)"
+            guard let stamp = txnStampsByKey[key] else { continue }
+            if let serverDate = parseISO8601(t.createdAt) { stamp.createdAt = serverDate }
+            stamp.note = MerchantTransactionEventLabels.enrichStampNote(
+                stamp.note,
+                txnId: tid,
+                type: t.type,
+                points: t.points,
+                metadata: t.metadata
+            )
         }
+    }
+
+    // MARK: - Dédoublonnage cartes / tampons
+
+    static func memberLogicalKey(for card: ClientCard) -> String {
+        if let q = card.qrCodeValue?.trimmingCharacters(in: .whitespacesAndNewlines), !q.isEmpty { return "q:\(q)" }
+        if let e = card.clientEmail?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !e.isEmpty { return "e:\(e)" }
+        return "o:\(card.objectID.uriRepresentation().absoluteString)"
+    }
+
+    static func deduplicateClientCards(for template: CardTemplate, context: NSManagedObjectContext) {
+        let request = ClientCard.fetchRequest()
+        request.predicate = NSPredicate(format: "template == %@", template)
+        let all = (try? context.fetch(request)) ?? []
+        guard all.count > 1 else { return }
+
+        var emailToMemberId: [String: String] = [:]
+        for card in all {
+            let q = card.qrCodeValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let e = card.clientEmail?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+            if !q.isEmpty, !e.isEmpty { emailToMemberId[e] = q }
+        }
+
+        var groups: [String: [ClientCard]] = [:]
+        for card in all {
+            var key = memberLogicalKey(for: card)
+            if key.hasPrefix("e:") {
+                let email = String(key.dropFirst(2))
+                if let memberId = emailToMemberId[email] { key = "q:\(memberId)" }
+            }
+            groups[key, default: []].append(card)
+        }
+
+        for (_, rawCards) in groups {
+            var seen = Set<NSManagedObjectID>()
+            let cards = rawCards.filter { seen.insert($0.objectID).inserted }
+            guard cards.count > 1 else { continue }
+            let canonical = pickCanonicalCard(cards)
+            for duplicate in cards where duplicate.objectID != canonical.objectID {
+                mergeClientCard(from: duplicate, into: canonical, context: context)
+                context.delete(duplicate)
+            }
+        }
+    }
+
+    private static func pickCanonicalCard(_ cards: [ClientCard]) -> ClientCard {
+        cards.max(by: { cardCanonicalScore($0) < cardCanonicalScore($1) })!
+    }
+
+    private static func cardCanonicalScore(_ card: ClientCard) -> Int {
+        var score = 0
+        if !(card.qrCodeValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { score += 10_000 }
+        score += Int(card.stampsCount) * 10
+        score += card.stamps?.count ?? 0
+        if !(card.clientEmail ?? "").isEmpty { score += 50 }
+        if card.createdAt != nil { score += 5 }
+        if let updated = card.updatedAt { score += min(Int(updated.timeIntervalSince1970 / 86_400), 10_000) }
+        return score
+    }
+
+    private static func mergeClientCard(from source: ClientCard, into target: ClientCard, context: NSManagedObjectContext) {
+        let targetQR = target.qrCodeValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let sourceQR = source.qrCodeValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if targetQR.isEmpty, !sourceQR.isEmpty {
+            target.qrCodeValue = sourceQR
+            target.clientIdentifier = sourceQR
+        }
+        if (target.clientEmail ?? "").isEmpty, let email = source.clientEmail { target.clientEmail = email }
+        let targetName = target.clientDisplayName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if targetName.isEmpty || targetName == "Client",
+           let name = source.clientDisplayName?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
+            target.clientDisplayName = name
+        }
+        if let sourceCreated = source.createdAt {
+            if target.createdAt == nil || sourceCreated < target.createdAt! { target.createdAt = sourceCreated }
+        }
+        if let sourceUpdated = source.updatedAt {
+            if target.updatedAt == nil || sourceUpdated > target.updatedAt! { target.updatedAt = sourceUpdated }
+        }
+        target.stampsCount = max(target.stampsCount, source.stampsCount)
+
+        if let stamps = source.stamps?.allObjects as? [Stamp] {
+            for stamp in stamps { stamp.clientCard = target }
+        }
+
+        let targetCats = (target.categories?.allObjects as? [MemberCategory]) ?? []
+        let sourceCats = (source.categories?.allObjects as? [MemberCategory]) ?? []
+        if !sourceCats.isEmpty {
+            var byId = Set(targetCats.map(\.objectID))
+            var merged = targetCats
+            for cat in sourceCats where byId.insert(cat.objectID).inserted { merged.append(cat) }
+            target.categories = NSSet(array: merged)
+        }
+        _ = context
+    }
+
+    static func dedupeStamps(
+        on card: ClientCard,
+        txnStampsByKey: inout [String: Stamp],
+        context: NSManagedObjectContext
+    ) {
+        guard let stamps = card.stamps?.allObjects as? [Stamp] else { return }
+        var seen = Set<String>()
+        for stamp in stamps {
+            guard let key = normalizedTxnDedupKey(fromStampNote: stamp.note) else { continue }
+            if seen.contains(key) {
+                context.delete(stamp)
+                if txnStampsByKey[key]?.objectID == stamp.objectID { txnStampsByKey.removeValue(forKey: key) }
+            } else {
+                seen.insert(key)
+                txnStampsByKey[key] = stamp
+            }
+        }
+    }
+
+    static func purgeOrphanTxnStamps(
+        for card: ClientCard,
+        serverTxnIds: Set<String>,
+        txnStampsByKey: inout [String: Stamp],
+        context: NSManagedObjectContext
+    ) {
+        guard !serverTxnIds.isEmpty else { return }
+        guard let stamps = card.stamps?.allObjects as? [Stamp] else { return }
+        for stamp in stamps {
+            guard let key = normalizedTxnDedupKey(fromStampNote: stamp.note) else { continue }
+            let txnId = String(key.dropFirst(4))
+            guard !serverTxnIds.contains(txnId) else { continue }
+            context.delete(stamp)
+            if txnStampsByKey[key]?.objectID == stamp.objectID { txnStampsByKey.removeValue(forKey: key) }
+        }
+    }
+
+    static func rebuildCardsByMemberId(for template: CardTemplate, context: NSManagedObjectContext) -> [String: ClientCard] {
+        let request = ClientCard.fetchRequest()
+        request.predicate = NSPredicate(format: "template == %@", template)
+        let cards = (try? context.fetch(request)) ?? []
+        var map: [String: ClientCard] = [:]
+        for card in cards {
+            guard let memberId = card.qrCodeValue?.trimmingCharacters(in: .whitespacesAndNewlines), !memberId.isEmpty else { continue }
+            if let existing = map[memberId] {
+                map[memberId] = pickCanonicalCard([existing, card])
+            } else {
+                map[memberId] = card
+            }
+        }
+        return map
+    }
+
+    static func findBusiness(slug: String, context: NSManagedObjectContext) -> Business? {
+        let request = Business.fetchRequest()
+        request.predicate = NSPredicate(format: "slug == %@", slug)
+        request.fetchLimit = 1
+        return try? context.fetch(request).first
+    }
+
+    static func findCardTemplate(business: Business, context: NSManagedObjectContext) -> CardTemplate? {
+        let request = CardTemplate.fetchRequest()
+        request.predicate = NSPredicate(format: "business == %@", business)
+        request.fetchLimit = 1
+        return try? context.fetch(request).first
+    }
+
+    static func clientCard(memberId: String, template: CardTemplate, context: NSManagedObjectContext) -> ClientCard? {
+        let request = ClientCard.fetchRequest()
+        request.predicate = NSPredicate(format: "template == %@ AND qrCodeValue == %@", template, memberId)
+        request.fetchLimit = 1
+        return try? context.fetch(request).first
     }
 
     private static func existingCardsIndex(for template: CardTemplate, context: NSManagedObjectContext) -> [String: ClientCard] {
@@ -641,7 +983,11 @@ fileprivate enum SyncCoreDataMerge {
         map.reserveCapacity(cards.count)
         for card in cards {
             guard let memberId = card.qrCodeValue?.trimmingCharacters(in: .whitespacesAndNewlines), !memberId.isEmpty else { continue }
-            map[memberId] = card
+            if let existing = map[memberId] {
+                map[memberId] = pickCanonicalCard([existing, card])
+            } else {
+                map[memberId] = card
+            }
         }
         return map
     }
@@ -659,7 +1005,7 @@ fileprivate enum SyncCoreDataMerge {
         return map
     }
 
-    private static func existingTxnStampIndex(for template: CardTemplate, context: NSManagedObjectContext) -> [String: Stamp] {
+    static func existingTxnStampIndex(for template: CardTemplate, context: NSManagedObjectContext) -> [String: Stamp] {
         let request = Stamp.fetchRequest()
         request.predicate = NSPredicate(format: "clientCard.template == %@ AND note BEGINSWITH %@", template, "txn:")
         let stamps = (try? context.fetch(request)) ?? []

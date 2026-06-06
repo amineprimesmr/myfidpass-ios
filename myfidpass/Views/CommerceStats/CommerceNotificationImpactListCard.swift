@@ -123,7 +123,7 @@ struct CommerceNotificationImpactListCard: View {
             .padding(.trailing, 14)
             .padding(.bottom, 8)
 
-            ForEach(Array(campaigns.enumerated()), id: \.element.id) { idx, c in
+            ForEach(Array(campaigns.prefix(24).enumerated()), id: \.element.id) { idx, c in
                 if idx > 0 {
                     Divider()
                         .background(CommerceStatisticsTheme.subtleBorder(forGlassOverlay: commerceStatsGlassOverlay))

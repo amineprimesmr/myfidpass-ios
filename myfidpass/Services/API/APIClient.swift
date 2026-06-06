@@ -277,6 +277,7 @@ final class APIClient: @unchecked Sendable {
         if statusCode == 403, isSubscriptionRequiredPayload(data) {
             DispatchQueue.main.async {
                 NotificationCenter.default.post(name: .myfidpassSubscriptionRequiredByAPI, object: nil)
+                MerchantProUnlockPresenter.shared.presentTeaser()
             }
             return APIError.subscriptionRequired
         }

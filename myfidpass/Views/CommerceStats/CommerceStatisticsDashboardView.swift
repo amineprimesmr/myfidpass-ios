@@ -72,7 +72,7 @@ struct CommerceStatisticsDashboardView: View {
         authService.merchantProInsightsUnlocked
     }
 
-    private var statsPaywallBlurRadius: CGFloat { 5 }
+    @State private var detailCacheRefreshTask: Task<Void, Never>?
 
     /// Marge intérieure sous la rangée panier / fréquence (serrée : pastilles proches des tuiles).
     private let kpiScrollContentBottomPadding: CGFloat = 2
@@ -165,7 +165,7 @@ struct CommerceStatisticsDashboardView: View {
             } else {
                 cachedDetailPresentation = vm.presentationForMonthCarousel(monthKey: key)
             }
-            cachedNotificationCampaigns = Array(vm.notificationCampaignsForPresentation.prefix(40))
+            cachedNotificationCampaigns = Array(vm.notificationCampaignsForPresentation.prefix(24))
         } else if let mockPayload = demoPayloads[key] {
             cachedDetailPresentation = CommerceStatisticsDataBuilder.build(
                 stats: mockPayload.stats,
@@ -285,23 +285,26 @@ struct CommerceStatisticsDashboardView: View {
             }
 
             ScrollView {
-                if glassOverlayMode {
-                    ZStack(alignment: .top) {
-                        Color.clear
-                            .contentShape(Rectangle())
-                            .frame(maxWidth: .infinity)
-                            .frame(minHeight: statsGlassTapBackdropMinHeight)
-                            .onTapGesture { onClose() }
-                            .accessibilityHidden(true)
+                LazyVStack(alignment: .leading, spacing: 0, pinnedViews: []) {
+                    if glassOverlayMode {
+                        ZStack(alignment: .top) {
+                            Color.clear
+                                .contentShape(Rectangle())
+                                .frame(maxWidth: .infinity)
+                                .frame(minHeight: statsGlassTapBackdropMinHeight)
+                                .onTapGesture { onClose() }
+                                .accessibilityHidden(true)
+                            statisticsScrollVStack
+                                .zIndex(1)
+                        }
+                    } else {
                         statisticsScrollVStack
-                            .zIndex(1)
                     }
-                } else {
-                    statisticsScrollVStack
                 }
             }
             .scrollContentBackground(.hidden)
             .scrollIndicators(.hidden)
+            .scrollBounceBehavior(.basedOnSize)
             .refreshable {
                 await loadMonthForCurrentSelection(forceRefresh: true)
             }
@@ -323,6 +326,8 @@ struct CommerceStatisticsDashboardView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Color.clear)
         .onDisappear {
+            detailCacheRefreshTask?.cancel()
+            detailCacheRefreshTask = nil
             panierRepereSheetPresented = false
             showDeferredDetailSections = false
             tabRouter.isCommerceStatsAtRoot = true
@@ -331,12 +336,11 @@ struct CommerceStatisticsDashboardView: View {
             refreshMonthCarouselCachesOnly()
             refreshDetailCachesOnly()
             syncCommerceStatsSubscribePillVisibility()
-            if isEmbeddedCommerceStats {
-                /// Affichage immédiat en embarqué: évite l'effet "les blocs arrivent après".
+            showDeferredDetailSections = false
+            Task { @MainActor in
+                await Task.yield()
                 showDeferredDetailSections = true
                 CommerceStatsRuntimeSession.hasRevealedEmbeddedDetailSections = true
-            } else {
-                showDeferredDetailSections = true
             }
             Task { await refreshSocialMissionsConnectSubtitle() }
         }
@@ -421,15 +425,15 @@ struct CommerceStatisticsDashboardView: View {
 
             kpiCarouselSection
 
-            if showDeferredDetailSections {
-                detailSectionsBelowCarousel
-                    .padding(.top, kpiToDetailSectionsTopInset)
-                    .padding(.horizontal, detailSectionsHorizontalInset)
-            } else {
-                deferredSectionsSkeleton
-                    .padding(.top, kpiToDetailSectionsTopInset)
-                    .padding(.horizontal, detailSectionsHorizontalInset)
+            Group {
+                if showDeferredDetailSections {
+                    detailSectionsBelowCarousel
+                } else {
+                    deferredSectionsSkeleton
+                }
             }
+            .padding(.top, kpiToDetailSectionsTopInset)
+            .padding(.horizontal, detailSectionsHorizontalInset)
 
             if let err = vm.errorMessage, !err.isEmpty {
                 Text(err)
@@ -621,13 +625,19 @@ struct CommerceStatisticsDashboardView: View {
                 .scrollTargetBehavior(.viewAligned)
                 .defaultScrollAnchor(.trailing)
                 .scrollPosition(id: monthCarouselScrollTabBinding)
+                .scrollBounceBehavior(.basedOnSize)
                 .frame(height: stableKpiCarouselBlockHeight, alignment: .top)
 
                 monthCarouselPageIndicator
             }
             .onChange(of: selectedMonthIndex) { old, new in
                 guard old != new else { return }
-                refreshDetailCachesOnly()
+                detailCacheRefreshTask?.cancel()
+                detailCacheRefreshTask = Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(120))
+                    guard !Task.isCancelled else { return }
+                    refreshDetailCachesOnly()
+                }
                 if !accessibilityReduceMotion {
                     let g = UISelectionFeedbackGenerator()
                     g.prepare()
@@ -698,25 +708,15 @@ struct CommerceStatisticsDashboardView: View {
         presentation: CommerceStatisticsPresentation,
         panierFreqCellSide: CGFloat
     ) -> some View {
-        let locked = !commerceStatsInsightsUnlocked
-        ZStack {
-            panierFrequenceSquareRow(presentation: presentation, cellSide: panierFreqCellSide) {
-                panierRepereSheetPresented = true
-            }
-            .blur(radius: locked ? statsPaywallBlurRadius : 0)
-            .allowsHitTesting(!locked)
-
-            if locked {
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .fill(Color.black.opacity(glassOverlayMode ? 0.08 : 0.05))
-                    .allowsHitTesting(false)
-                MerchantProUnlockTeaserButton(preferDarkGlassTint: glassOverlayMode) {
-                    presentCommerceStatsPaywall()
-                }
-                .accessibilityLabel("Déverrouiller avec Pro pour le panier moyen et la fréquence")
-                .accessibilityAddTraits(.isButton)
-            }
+        panierFrequenceSquareRow(presentation: presentation, cellSide: panierFreqCellSide) {
+            panierRepereSheetPresented = true
         }
+        .commerceStatsPaywallGated(
+            locked: !commerceStatsInsightsUnlocked,
+            glassOverlayMode: glassOverlayMode,
+            accessibilityUnlockLabel: "Déverrouiller avec Pro pour le panier moyen et la fréquence",
+            onUnlock: { presentCommerceStatsPaywall() }
+        )
     }
 
     @ViewBuilder
@@ -763,28 +763,18 @@ struct CommerceStatisticsDashboardView: View {
         accessibilityUnlockLabel: String,
         @ViewBuilder content: () -> Content
     ) -> some View {
-        let locked = !commerceStatsInsightsUnlocked
         VStack(alignment: .leading, spacing: 16) {
             CommerceStatsSectionHeader(title: title, titleFontSize: 18, titleWeight: .bold)
 
-            ZStack {
-                VStack(alignment: .leading, spacing: 16) {
-                    content()
-                }
-                .blur(radius: locked ? statsPaywallBlurRadius : 0)
-                .allowsHitTesting(!locked)
-
-                if locked {
-                    RoundedRectangle(cornerRadius: 20, style: .continuous)
-                        .fill(Color.black.opacity(glassOverlayMode ? 0.07 : 0.05))
-                        .allowsHitTesting(false)
-                    MerchantProUnlockTeaserButton(preferDarkGlassTint: glassOverlayMode) {
-                        presentCommerceStatsPaywall()
-                    }
-                    .accessibilityLabel(accessibilityUnlockLabel)
-                    .accessibilityAddTraits(.isButton)
-                }
+            VStack(alignment: .leading, spacing: 16) {
+                content()
             }
+            .commerceStatsPaywallGated(
+                locked: !commerceStatsInsightsUnlocked,
+                glassOverlayMode: glassOverlayMode,
+                accessibilityUnlockLabel: accessibilityUnlockLabel,
+                onUnlock: { presentCommerceStatsPaywall() }
+            )
         }
     }
 

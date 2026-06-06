@@ -499,7 +499,6 @@ struct AddStampVisitSheet: View {
     }
 
     private func applySingleStampVisit() async {
-        let previousBalance = await MainActor.run { committedStamps }
         guard !isCardCompleteForReward else {
             await MainActor.run { slideResetID = UUID() }
             return

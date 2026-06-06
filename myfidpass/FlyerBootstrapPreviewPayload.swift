@@ -9,8 +9,7 @@ import Foundation
 
 // MARK: - Roue : même logique d’aperçu `png` (texture) partout (éditeur, Commerce, cache disque)
 
-/// Ajuste l’état pour l’embed web : la texture **spinflyer** n’est peinte que si `wheelRenderMode === "png"`.
-/// (voir `app-flyer-qr-draw` / `t.wheelRenderMode === "png"` sur myfidpass.fr)
+/// Ajuste l’état pour l’embed web (aperçu roue vectorielle + texture `flyergame` côté canvas).
 enum FlyerWheelWebEmbedPreviewMigration {
     static func normalizedStateForPreview(_ state: FlyerStateDTO, businessSlug: String) -> FlyerStateDTO {
         _ = businessSlug
@@ -78,6 +77,28 @@ struct FlyerBootstrapPreviewPayload: Encodable {
             try c.encode(true, forKey: .matchPredictionsEnabled)
         }
         try c.encodeIfPresent(nativeBgActive, forKey: .nativeBgActive)
+    }
+}
+
+/// Patch léger injecté dans l’embed (`__FIDPASS_FLYER_PATCH_STATE__`) — couleurs / textes sans logo base64.
+struct FlyerPreviewStatePatchPayload: Encodable {
+    let state: FlyerStateDTO
+    let shareUrl: String
+    let matchPredictionsEnabled: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case state
+        case shareUrl = "share_url"
+        case matchPredictionsEnabled = "match_predictions_enabled"
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(state, forKey: .state)
+        try c.encode(shareUrl, forKey: .shareUrl)
+        if matchPredictionsEnabled == true {
+            try c.encode(true, forKey: .matchPredictionsEnabled)
+        }
     }
 }
 

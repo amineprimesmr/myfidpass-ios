@@ -15,16 +15,14 @@ enum FlyerEmbedWarmup {
 
     private static var poolViews: [WKWebView] = []
     private static var readyViews: [WKWebView] = []
-    /// Pool minimal pour réduire le cold-start sans réintroduire du churn lourd.
-    private static let maxPool = 1
+    private static let maxPool = 2
     private static let warmupDelegate = WarmupNavigationDelegate()
     private static var delayedStartWorkItem: DispatchWorkItem?
 
     // MARK: - Init
 
-    /// Appelé tôt (ex. onglet Commerce) pour qu’`FlyerPreviewWebView` ait souvent un chemin `dequeue()`.
-    /// Après le 1er frame navigation / TabView : réduit la concurrence avec WebKit au tout premier affichage accueil.
-    private static let startupDelay: TimeInterval = 0.65
+    /// Appelé tôt (ex. onglet Commerce / Accueil) pour qu’`FlyerPreviewWebView` ait souvent un chemin `dequeue()`.
+    private static let startupDelay: TimeInterval = 0.05
 
     static func startIfNeeded() {
         guard maxPool > 0 else { return }
@@ -42,11 +40,8 @@ enum FlyerEmbedWarmup {
 
     // MARK: - Pool management
 
-    /// Retourne une WKWebView déjà chargée (flyer-embed.html prêt), ou nil si aucune n'est prête.
-    /// Déclenche automatiquement le remplacement.
     static func dequeue() -> WKWebView? {
-        guard let wv = readyViews.last else { return nil }
-        readyViews.removeLast()
+        guard let wv = readyViews.popLast() else { return nil }
         poolViews.removeAll(where: { $0 === wv })
         wv.removeFromSuperview()
         wv.navigationDelegate = nil
@@ -63,8 +58,7 @@ enum FlyerEmbedWarmup {
     // MARK: - Private
 
     private static func replenish() {
-        let needed = maxPool - poolViews.count
-        guard needed > 0 else { return }
+        guard maxPool - poolViews.count > 0 else { return }
         DispatchQueue.main.async {
             guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
                   let window = scene.windows.first(where: { $0.isKeyWindow }) ?? scene.windows.first
@@ -75,9 +69,14 @@ enum FlyerEmbedWarmup {
             for _ in 0 ..< toCreate {
                 let config = WKWebViewConfiguration()
                 config.websiteDataStore = .default()
-                /// Même correctif `atob` + UTF-8 que `FlyerPreviewWebView` (le pool ne passait pas par `makeUIView`).
                 FlyerEmbedAtobUTF8Patch.addTo(config)
                 FlyerEmbedSpinflyerSrcPatch.addTo(config)
+                let previewScript = WKUserScript(
+                    source: "window.__FIDPASS_PREVIEW_MODE=true;window.__FIDPASS_SKIP_CANVAS_BG_FILL=false;",
+                    injectionTime: .atDocumentStart,
+                    forMainFrameOnly: true
+                )
+                config.userContentController.addUserScript(previewScript)
                 let noisyResourceBlocker = WKUserScript(
                     source: """
                     (function(){
@@ -122,7 +121,7 @@ enum FlyerEmbedWarmup {
                 window.addSubview(wv)
                 let req = URLRequest(
                     url: APIConfig.flyerEmbedURL,
-                    cachePolicy: .reloadRevalidatingCacheData,
+                    cachePolicy: .returnCacheDataElseLoad,
                     timeoutInterval: 60
                 )
                 wv.load(req)

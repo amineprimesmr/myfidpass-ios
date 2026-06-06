@@ -61,6 +61,8 @@ extension Notification.Name {
     static let myfidpassCommerceStatsTabDidBecomeSelected = Notification.Name("myfidpass.commerceStatsTabDidBecomeSelected")
     /// Paiement abonnement finalisé dans la WebView (`myfidpass://subscription-paid`) : fermer la feuille et resynchroniser.
     static let myfidpassSubscriptionPaymentCompleted = Notification.Name("myfidpass.subscriptionPaymentCompleted")
+    /// Transaction App Store synchronisée en arrière-plan (code promo, renouvellement) — rafraîchir le paywall ouvert.
+    static let myfidpassAppleStoreTransactionSynced = Notification.Name("myfidpass.appleStoreTransactionSynced")
     /// Demande d'ouverture de la feuille de configuration Google (depuis le hub « non connecté »).
     static let myfidpassOpenGoogleBusinessSetupSheet = Notification.Name("myfidpass.openGoogleBusinessSetupSheet")
     /// Adopter le matchedPlaceId renvoyé par l'OAuth comme placeId configuré du commerce (userInfo["placeId"]: String).

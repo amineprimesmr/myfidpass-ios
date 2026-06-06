@@ -59,18 +59,34 @@ struct DashboardActivityEntry: Identifiable, Equatable {
     let cardObjectID: NSManagedObjectID
     /// Points crédités sur ce scan si connus (encodés dans `Stamp.note` après sync API, suffixe `|p:N`).
     let scanPointsGranted: Int?
+    /// Type serveur (`points_add`, `reward_redeem`, …) encodé dans `Stamp.note` (`|t:`).
+    let transactionType: String?
+    /// Passage / visite (`metadata.visit` → `|v:1` dans la note).
+    let isVisit: Bool
 
     var eventTitle: String {
         switch kind {
-        case .newCard: return "Nouvelle carte"
-        case .scan: return "Scan"
+        case .newCard:
+            return "Nouveau membre"
+        case .scan:
+            return MerchantTransactionEventLabels.eventTitle(
+                type: transactionType,
+                points: scanPointsGranted,
+                isVisit: isVisit,
+                context: .dashboardFeed
+            )
         }
     }
 
     var systemImage: String {
         switch kind {
         case .newCard: return "person.crop.circle.badge.plus"
-        case .scan: return "qrcode.viewfinder"
+        case .scan:
+            let t = transactionType?.lowercased() ?? ""
+            if t == "reward_redeem" { return "gift.fill" }
+            if t == "welcome_bonus" { return "sparkles" }
+            if t == "points_correction" { return "minus.circle" }
+            return "qrcode.viewfinder"
         }
     }
 }
@@ -410,47 +426,32 @@ final class DataService: ObservableObject {
 
     // MARK: - Fil d’activité (tableau de bord)
 
-    /// Lit les points crédités depuis `Stamp.note` (`txn:<id>|p:<points>`), rempli à l’import des transactions serveur.
+    /// Lit les points depuis `Stamp.note` (`|p:N`), rempli à l’import des transactions serveur.
     private static func scanPointsFromStampNote(_ note: String?) -> Int? {
-        guard let raw = note?.trimmingCharacters(in: .whitespacesAndNewlines), raw.hasPrefix("txn:") else { return nil }
-        guard let range = raw.range(of: "|p:") else { return nil }
-        let tail = raw[range.upperBound...]
-        return Int(tail)
+        MerchantTransactionEventLabels.parsePoints(fromStampNote: note)
     }
 
     /// Libellé pour une ligne d’historique membre (fiche détail, tampons locaux ou import sync `txn:`).
     static func memberStampEventTitle(note: String?) -> String {
         let raw = note?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if raw.hasPrefix("txn:") {
-            if let pts = Self.scanPointsFromStampNote(note) {
-                if pts > 0 {
-                    return pts == 1 ? "+1 point crédité" : "+\(pts) points crédités"
-                }
-                if pts < 0 {
-                    let a = abs(pts)
-                    return a == 1 ? "1 point retiré" : "\(a) points retirés"
-                }
-            }
-            return "Transaction enregistrée"
+            return MerchantTransactionEventLabels.eventTitle(
+                type: MerchantTransactionEventLabels.parseType(fromStampNote: note),
+                points: MerchantTransactionEventLabels.parsePoints(fromStampNote: note),
+                isVisit: MerchantTransactionEventLabels.parseVisit(fromStampNote: note),
+                context: .memberHistory
+            )
         }
         if !raw.isEmpty {
             if raw.count > 60 { return String(raw.prefix(60)) + "…" }
             return raw
         }
-        return "Passage / visite"
+        return "Passage enregistré"
     }
 
-    /// Clé stable pour dédoublonner un tampon importé serveur (`txn:<id>` avec ou sans `|p:` / métadonnées).
+    /// Clé stable pour dédoublonner un tampon importé serveur (`txn:<id>` avec ou sans segments).
     private static func normalizedTxnDedupKey(fromStampNote note: String?) -> String? {
-        let raw = note?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard raw.hasPrefix("txn:"), raw.count > 5 else { return nil }
-        let afterPrefix = raw.dropFirst(4)
-        if let pipe = afterPrefix.firstIndex(of: "|") {
-            let idPart = String(afterPrefix[..<pipe]).trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !idPart.isEmpty else { return nil }
-            return "txn:\(idPart)"
-        }
-        return raw
+        MerchantTransactionEventLabels.normalizedTxnDedupKey(fromStampNote: note)
     }
 
     /// Événements récents : nouvelles cartes et scans, **dédupliqués** (une transaction serveur = une ligne ; tampon local = clé par `Stamp`).
@@ -463,9 +464,9 @@ final class DataService: ObservableObject {
         var seenScanKeys = Set<String>()
         for s in recentStamps(for: template, limit: 180) {
             guard let card = s.clientCard, card.template == template else { continue }
+            guard let date = s.createdAt else { continue }
             if WalletPreviewMember.shouldExcludeFromMerchantActivity(clientEmail: card.clientEmail) { continue }
             let name = card.clientDisplayName ?? "Client"
-            let date = s.createdAt ?? .distantPast
             let dedupKey: String
             if let txnKey = Self.normalizedTxnDedupKey(fromStampNote: s.note) {
                 dedupKey = txnKey
@@ -474,13 +475,17 @@ final class DataService: ObservableObject {
             }
             guard !seenScanKeys.contains(dedupKey) else { continue }
             seenScanKeys.insert(dedupKey)
+            let txnType = MerchantTransactionEventLabels.parseType(fromStampNote: s.note)
+            let isVisit = MerchantTransactionEventLabels.parseVisit(fromStampNote: s.note)
             items.append(DashboardActivityEntry(
                 id: "scan-\(dedupKey)",
                 date: date,
                 clientName: name,
                 kind: .scan,
                 cardObjectID: card.objectID,
-                scanPointsGranted: Self.scanPointsFromStampNote(s.note)
+                scanPointsGranted: Self.scanPointsFromStampNote(s.note),
+                transactionType: txnType,
+                isVisit: isVisit
             ))
         }
 
@@ -504,7 +509,9 @@ final class DataService: ObservableObject {
                     clientName: name,
                     kind: .newCard,
                     cardObjectID: firstCard.objectID,
-                    scanPointsGranted: nil
+                    scanPointsGranted: nil,
+                    transactionType: nil,
+                    isVisit: false
                 ))
             }
         }

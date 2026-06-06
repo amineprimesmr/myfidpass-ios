@@ -219,8 +219,7 @@ struct CommerceStatsPointsAttributedCard: View {
                         )
                     )
                 PointsAttributedLineShape(values: values)
-                    .stroke(lineColor.opacity(0.2), lineWidth: 3.5)
-                    .blur(radius: 2.5)
+                    .stroke(lineColor.opacity(0.22), lineWidth: 3)
                 PointsAttributedLineShape(values: values)
                     .stroke(lineColor, lineWidth: 2.1)
             }
@@ -229,6 +228,7 @@ struct CommerceStatsPointsAttributedCard: View {
                 peakMarker(values: values, index: peakIndex)
             }
         }
+        .drawingGroup(opaque: false, colorMode: .nonLinear)
         .frame(height: 100)
         .clipped()
     }

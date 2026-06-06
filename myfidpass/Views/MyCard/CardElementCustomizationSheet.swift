@@ -42,6 +42,7 @@ struct CardCustomizationBindPack {
     let serverHasStampIconAsset: Bool
     let stampRewardLabel: Binding<String>
     let stampMidRewardLabel: Binding<String>
+    let stampMidRewardEnabled: Binding<Bool>
     /// Palier « Début du jeu » (non modifiable côté seuil, récompense éditable). Commun aux modes points et tampons.
     let startGameRewardLabel: Binding<String>
     let backTerms: Binding<String>
@@ -398,10 +399,13 @@ struct CardElementCustomizationSheet: View {
             if pack.programType.wrappedValue == "points" {
                 var pts = pack.tierPoints.wrappedValue
                 var labs = pack.tierLabels.wrappedValue
-                MyCardProgramDefaults.sanitizeEditableTierSlots(tierPoints: &pts, tierLabels: &labs)
+                MyCardProgramDefaults.ensureTierArraysCapacity(tierPoints: &pts, tierLabels: &labs)
                 pack.tierPoints.wrappedValue = pts
                 pack.tierLabels.wrappedValue = labs
-                visiblePointsTierRows = Self.resolvedVisibleTierRows(points: pts)
+                visiblePointsTierRows = MyCardProgramDefaults.resolvedVisibleTierRowCount(
+                    tierPoints: pts,
+                    tierLabels: labs
+                )
                 var startLabel = pack.startGameRewardLabel.wrappedValue
                 MyCardProgramDefaults.syncStartGameLabelFromFirstTier(
                     startGameRewardLabel: &startLabel,
@@ -472,14 +476,12 @@ struct CardElementCustomizationSheet: View {
     private func applyRewardExamplePresets() {
         if pack.programType.wrappedValue == "stamps" {
             pack.startGameRewardLabel.wrappedValue = "Boisson offerte"
+            pack.stampMidRewardEnabled.wrappedValue = true
             pack.stampMidRewardLabel.wrappedValue = "Dessert offert"
             pack.stampRewardLabel.wrappedValue = "Menu offert"
             return
         }
-        let n = visiblePointsTierRows
-        let examplePoints = (0..<n).map { i in
-            i == 0 ? "10" : String(50 * i)
-        }
+        let examplePoints = ["10", "50", "100", "150", "200", "250", "300", "350"]
         let exampleLabels = [
             "Boisson offerte",
             "Dessert offert",
@@ -492,20 +494,25 @@ struct CardElementCustomizationSheet: View {
         ]
         var pts = examplePoints
         var labels = exampleLabels
-        while pts.count < n { pts.append("") }
-        while labels.count < n { labels.append("") }
-        pack.tierPoints.wrappedValue = Array(pts.prefix(n))
-        pack.tierLabels.wrappedValue = Array(labels.prefix(n))
+        MyCardProgramDefaults.applyExamplePointsTiers(tierPoints: &pts, tierLabels: &labels)
+        pack.tierPoints.wrappedValue = pts
+        pack.tierLabels.wrappedValue = labels
+        visiblePointsTierRows = MyCardProgramDefaults.resolvedVisibleTierRowCount(
+            tierPoints: pts,
+            tierLabels: labels
+        )
         pack.startGameRewardLabel.wrappedValue = "Boisson offerte"
     }
 
-    private static func resolvedVisibleTierRows(points: [String]) -> Int {
-        let lastFilled = points.indices.reversed().first { index in
-            !points[index].trimmingCharacters(in: .whitespaces).isEmpty
-        } ?? -1
-        return min(
-            max(MyCardPointsRewardTiers.minVisibleCount, lastFilled + 2),
-            MyCardPointsRewardTiers.slotCount
+    private func removePointsTier(at index: Int) {
+        var pts = pack.tierPoints.wrappedValue
+        var labs = pack.tierLabels.wrappedValue
+        MyCardProgramDefaults.removePointsTier(at: index, tierPoints: &pts, tierLabels: &labs)
+        pack.tierPoints.wrappedValue = pts
+        pack.tierLabels.wrappedValue = labs
+        visiblePointsTierRows = MyCardProgramDefaults.resolvedVisibleTierRowCount(
+            tierPoints: pts,
+            tierLabels: labs
         )
     }
 
@@ -747,6 +754,10 @@ struct CardElementCustomizationSheet: View {
 
     private var pointsRulesContent: some View {
         VStack(alignment: .leading, spacing: 12) {
+            Text("Palier à 10 pts = début du jeu (inscription). Ajoutez ou retirez des paliers librement.")
+                .font(.caption)
+                .foregroundStyle(AppTheme.Colors.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
             ForEach(0..<visiblePointsTierRows, id: \.self) { i in
                 pointsTierRow(index: i)
             }
@@ -824,12 +835,19 @@ struct CardElementCustomizationSheet: View {
     private func pointsTierRow(index: Int) -> some View {
         let seuilPrompt = Self.tierSeuilExamples[min(index, Self.tierSeuilExamples.count - 1)]
         let rewardPrompt = Self.tierRewardExamples[min(index, Self.tierRewardExamples.count - 1)]
+        let isSignupTier = index == 0
         return VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top, spacing: 10) {
                 TextField("", text: Binding(
                     get: {
-                        guard index < pack.tierPoints.wrappedValue.count else { return "" }
-                        return pack.tierPoints.wrappedValue[index]
+                        guard index < pack.tierPoints.wrappedValue.count else {
+                            return isSignupTier ? "10" : ""
+                        }
+                        let val = pack.tierPoints.wrappedValue[index]
+                        if isSignupTier, val.trimmingCharacters(in: .whitespaces).isEmpty {
+                            return "10"
+                        }
+                        return val
                     },
                     set: { newVal in
                         var arr = pack.tierPoints.wrappedValue
@@ -859,6 +877,7 @@ struct CardElementCustomizationSheet: View {
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
                         .strokeBorder(AppTheme.Colors.textSecondary.opacity(0.12), lineWidth: 1)
                 )
+                .disabled(isSignupTier)
                 TextField("", text: Binding(
                     get: {
                         guard index < pack.tierLabels.wrappedValue.count else { return "" }
@@ -890,6 +909,23 @@ struct CardElementCustomizationSheet: View {
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
                         .strokeBorder(AppTheme.Colors.textSecondary.opacity(0.12), lineWidth: 1)
                 )
+                if !isSignupTier {
+                    Button {
+                        removePointsTier(at: index)
+                    } label: {
+                        Image(systemName: "minus.circle.fill")
+                            .font(.title3)
+                            .foregroundStyle(.red.opacity(0.85))
+                            .frame(width: 32, height: 44)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(Text("Supprimer ce palier"))
+                }
+            }
+            if isSignupTier {
+                Text("10 pts — récompense d’inscription")
+                    .font(.caption2)
+                    .foregroundStyle(AppTheme.Colors.textSecondary)
             }
         }
     }
@@ -927,20 +963,40 @@ struct CardElementCustomizationSheet: View {
     private var stampsRulesContent: some View {
         VStack(alignment: .leading, spacing: 12) {
             startGameRewardRow
+            if pack.requiredStamps.wrappedValue > 5 {
+                Toggle(isOn: pack.stampMidRewardEnabled) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Récompense au 5ᵉ passage")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(AppTheme.Colors.textPrimary)
+                        Text("Désactivez si vous ne souhaitez qu’une récompense finale.")
+                            .font(.caption)
+                            .foregroundStyle(AppTheme.Colors.textSecondary)
+                    }
+                }
+                .tint(AppTheme.Colors.primary)
+                .onChange(of: pack.stampMidRewardEnabled.wrappedValue) { _, enabled in
+                    if !enabled {
+                        pack.stampMidRewardLabel.wrappedValue = ""
+                    }
+                }
+                if pack.stampMidRewardEnabled.wrappedValue {
+                    stampsPassageRewardRow(
+                        passageLabel: "5ᵉ",
+                        reward: pack.stampMidRewardLabel,
+                        prompt: Self.stamp5PassageRewardPlaceholder
+                    )
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel(Text("5ᵉ passage, récompense"))
+                }
+            }
             stampsPassageRewardRow(
-                passageLabel: "5ᵉ",
-                reward: pack.stampMidRewardLabel,
-                prompt: Self.stamp5PassageRewardPlaceholder
-            )
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel(Text("5ᵉ passage, récompense"))
-            stampsPassageRewardRow(
-                passageLabel: "10ᵉ",
+                passageLabel: "\(pack.requiredStamps.wrappedValue)ᵉ",
                 reward: pack.stampRewardLabel,
                 prompt: Self.stamp10PassageRewardPlaceholder
             )
             .accessibilityElement(children: .combine)
-            .accessibilityLabel(Text("10ᵉ passage, récompense"))
+            .accessibilityLabel(Text("Récompense finale"))
         }
     }
 

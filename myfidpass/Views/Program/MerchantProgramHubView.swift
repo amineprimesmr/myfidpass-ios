@@ -372,6 +372,8 @@ private final class ProgramFlyerEditorModel: ObservableObject {
     @Published var isLoading = false
     @Published var isSaving = false
     @Published private(set) var bootstrapPreviewBase64: String?
+    /// JSON léger (state + share) pour `__FIDPASS_FLYER_PATCH_STATE__` — pastilles couleur / texte sans re-injecter le logo.
+    @Published private(set) var previewStatePatchJSON: String = ""
     /// Aperçu : image sous la WebView (fond photo/IA) — `nil` si seul le dégradé (dans le JSON) suffit.
     @Published var flyerWebUnderlayUIImage: UIImage? = nil
     /// Aperçu : le fond est en `UIImage` natif, pas de remplissage blanc / dégradé plein côté canvas.
@@ -666,7 +668,7 @@ private final class ProgramFlyerEditorModel: ObservableObject {
             redoStack.removeAll()
         }
         state = n
-        refreshPreviewBootstrap()
+        refreshPreviewStatePatch()
     }
 
     func applyLogoPayload(_ p: FlyerRemoteImagePayload) {
@@ -1003,7 +1005,23 @@ private final class ProgramFlyerEditorModel: ObservableObject {
         /// → l’embed ne redessinait plus roue / QR / textes (aperçu « nu » ou instable après réglage du dégradé).
         guard let data = try? enc.encode(payload) else { return }
         bootstrapPreviewBase64 = data.base64EncodedString()
+        refreshPreviewStatePatch()
         recomputeFlyerWebCanvasDisplayLayers()
+    }
+
+    /// Patch embed instantané (couleurs, textes, roue) — pas de logo base64.
+    func refreshPreviewStatePatch() {
+        let st = FlyerWheelWebEmbedPreviewMigration.normalizedStateForPreview(state, businessSlug: slug)
+        let enc = JSONEncoder()
+        enc.keyEncodingStrategy = .useDefaultKeys
+        let patch = FlyerPreviewStatePatchPayload(
+            state: st,
+            shareUrl: shareUrl,
+            matchPredictionsEnabled: matchPredictionsEnabled ? true : nil
+        )
+        guard let data = try? enc.encode(patch),
+              let json = String(data: data, encoding: .utf8) else { return }
+        previewStatePatchJSON = json
     }
 
     /// Même `bootstrap` pour WK (pas d’JSON « strip » vs plein) : on évite 2 `APPLY` successifs (flash) quand le underlay se décode.
@@ -4005,6 +4023,7 @@ private struct FlyerAIGeneratorSheet: View {
                     }
                     FlyerPreviewWebView(
                         bootstrapBase64: rawBootstrap,
+                        statePatchJSON: flyerModel.previewStatePatchJSON,
                         isLoading: $flyerInteractiveWebLoading,
                         skipCanvasSolidBackground: skip,
                         onWebViewCreated: { webView in
@@ -4081,6 +4100,7 @@ private struct FlyerAIGeneratorSheet: View {
                         }
                         FlyerPreviewWebView(
                             bootstrapBase64: webB64,
+                            statePatchJSON: flyerModel.previewStatePatchJSON,
                             isLoading: $heroCompositePreviewLoading,
                             skipCanvasSolidBackground: (heroUnder != nil) || hasBgDataURL,
                             onWebViewCreated: { webView in

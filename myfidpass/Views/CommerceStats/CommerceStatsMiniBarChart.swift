@@ -112,12 +112,12 @@ struct CommerceStatsMiniSparklineChart: View {
                 )
 
             CommerceMiniSparklineLineShape(values: values)
-                .stroke(lineColor.opacity(0.35), style: StrokeStyle(lineWidth: 7, lineCap: .round, lineJoin: .round))
-                .blur(radius: 4)
+                .stroke(lineColor.opacity(0.28), style: StrokeStyle(lineWidth: 5, lineCap: .round, lineJoin: .round))
 
             CommerceMiniSparklineLineShape(values: values)
                 .stroke(lineColor, style: StrokeStyle(lineWidth: 3.2, lineCap: .round, lineJoin: .round))
         }
+        .drawingGroup(opaque: false, colorMode: .nonLinear)
         .frame(height: 48)
     }
 }

@@ -77,6 +77,7 @@ enum APIError: LocalizedError {
     /// Texte français pour alertes commerçant (évite « The request timed out. » brut d’iOS).
     static func merchantFacingMessage(from error: Error) -> String? {
         if isBenignRequestCancellation(error) { return nil }
+        if let api = error as? APIError, case .subscriptionRequired = api { return nil }
         if let api = error as? APIError, let msg = api.errorDescription, !msg.isEmpty { return msg }
         if let wrapped = error as? APIError, case .network(let underlying) = wrapped {
             return friendlyNetworkDescription(underlying)

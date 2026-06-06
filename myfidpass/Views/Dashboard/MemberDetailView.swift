@@ -30,6 +30,8 @@ struct MemberDetailView: View {
     @State private var grantedRewards: [MemberGameRewardDTO] = []
     @State private var isLoadingRewards = false
     @State private var claimingGrantId: String?
+    @State private var isSyncingHistory = false
+    private let memberQueryKey: String
     private var template: CardTemplate? { dataService.currentCardTemplate() }
 
     /// Identifiant serveur du membre (sync : `qrCodeValue` ; repli `clientIdentifier`).
@@ -52,10 +54,20 @@ struct MemberDetailView: View {
     init(card: ClientCard, context: NSManagedObjectContext) {
         _card = ObservedObject(wrappedValue: card)
         self.context = context
-        _stamps = FetchRequest<Stamp>(
-            sortDescriptors: [SortDescriptor(\Stamp.createdAt, order: .forward)],
-            predicate: NSPredicate(format: "clientCard == %@", card)
-        )
+        let q = card.qrCodeValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let c = card.clientIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        memberQueryKey = !q.isEmpty ? q : c
+        if !memberQueryKey.isEmpty, let template = card.template {
+            _stamps = FetchRequest<Stamp>(
+                sortDescriptors: [SortDescriptor(\Stamp.createdAt, order: .reverse)],
+                predicate: NSPredicate(format: "clientCard.qrCodeValue == %@ AND clientCard.template == %@", memberQueryKey, template)
+            )
+        } else {
+            _stamps = FetchRequest<Stamp>(
+                sortDescriptors: [SortDescriptor(\Stamp.createdAt, order: .reverse)],
+                predicate: NSPredicate(format: "clientCard == %@", card)
+            )
+        }
     }
 
     var body: some View {
@@ -75,9 +87,17 @@ struct MemberDetailView: View {
             }
 
             Section {
+                if isSyncingHistory {
+                    HStack(spacing: 10) {
+                        ProgressView()
+                        Text("Synchronisation de l’historique…")
+                            .font(AppTheme.Fonts.caption())
+                            .foregroundStyle(AppTheme.Colors.textSecondary)
+                    }
+                }
                 if let created = card.createdAt {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Carte créée")
+                        Text("Nouveau membre")
                             .font(AppTheme.Fonts.body().weight(.semibold))
                             .foregroundStyle(AppTheme.Colors.textPrimary)
                         Text(formattedDate(created))
@@ -105,7 +125,10 @@ struct MemberDetailView: View {
             } header: {
                 Text("Historique des transactions")
             } footer: {
-                if stamps.isEmpty, card.createdAt != nil {
+                if !stamps.isEmpty {
+                    Text("\(stamps.count) opération\(stamps.count > 1 ? "s" : "") synchronisée\(stamps.count > 1 ? "s" : "") depuis le serveur.")
+                        .font(AppTheme.Fonts.caption())
+                } else if stamps.isEmpty, card.createdAt != nil {
                     Text("Les mouvements de points et passages synchronisés apparaissent ici.")
                         .font(AppTheme.Fonts.caption())
                 }
@@ -257,10 +280,11 @@ struct MemberDetailView: View {
             if let msg = successMessage { Text(msg) }
         }
         .refreshable {
-            await syncService.syncAfterServerMutation()
+            await syncMemberHistoryAndDashboard()
             await loadGiftRewards()
         }
         .task {
+            await syncMemberHistoryAndDashboard()
             await loadGiftRewards()
         }
         .alert("Supprimer définitivement ce membre ?", isPresented: $showDeleteMemberConfirm) {
@@ -316,12 +340,22 @@ struct MemberDetailView: View {
                 dataService.deleteClientCard(card)
                 dismiss()
             }
-            await syncService.syncAfterServerMutation()
+            await syncMemberHistoryAndDashboard()
         } catch {
             await MainActor.run {
                 errorMessage = (error as? APIError)?.errorDescription ?? "Suppression impossible."
             }
         }
+    }
+
+    private func syncMemberHistoryAndDashboard() async {
+        await MainActor.run { isSyncingHistory = true }
+        defer { Task { @MainActor in isSyncingHistory = false } }
+        await performMemberHistoryAndDashboardSync(
+            memberId: resolvedMemberId,
+            syncService: syncService,
+            dataService: dataService
+        )
     }
 
     private func formattedDate(_ date: Date) -> String {
@@ -439,7 +473,7 @@ struct MemberDetailView: View {
                     successMessage = "\(added) point\(added > 1 ? "s" : "") ajouté\(added > 1 ? "s" : "")."
                     memberPointsAmountFlow = nil
                 }
-                await syncService.syncAfterServerMutation()
+                await syncMemberHistoryAndDashboard()
                 return true
             } catch {
                 await MainActor.run {
@@ -475,7 +509,7 @@ struct MemberDetailView: View {
                     successMessage = "\(removed) point\(removed > 1 ? "s" : "") retiré\(removed > 1 ? "s" : "") (correction)."
                     memberPointsAmountFlow = nil
                 }
-                await syncService.syncAfterServerMutation()
+                await syncMemberHistoryAndDashboard()
                 return true
             } catch {
                 await MainActor.run {
@@ -520,7 +554,7 @@ struct MemberDetailView: View {
                     card.updatedAt = Date()
                     try? context.save()
                 }
-                await syncService.syncAfterServerMutation()
+                await syncMemberHistoryAndDashboard()
                 return newP
             }
             if earned > 0, after >= tier.points {
@@ -559,7 +593,7 @@ struct MemberDetailView: View {
                         try? context.save()
                         errorMessage = "Solde encore insuffisant après crédit."
                     }
-                    await syncService.syncAfterServerMutation()
+                    await syncMemberHistoryAndDashboard()
                     return nil
                 }
                 await MainActor.run {
@@ -574,7 +608,7 @@ struct MemberDetailView: View {
                     card.updatedAt = Date()
                     try? context.save()
                 }
-                await syncService.syncAfterServerMutation()
+                await syncMemberHistoryAndDashboard()
                 return finalP
             }
             await MainActor.run {
@@ -602,7 +636,7 @@ struct MemberDetailView: View {
                     successAlertTitle = "Récompense"
                     successMessage = "Récompense tampons utilisée."
                 }
-                await syncService.syncAfterServerMutation()
+                await syncMemberHistoryAndDashboard()
             } catch {
                 await MainActor.run { errorMessage = (error as? APIError)?.errorDescription ?? "Impossible d'utiliser la récompense." }
             }
@@ -631,7 +665,7 @@ struct MemberDetailView: View {
                     successAlertTitle = "Récompense"
                     successMessage = "Points utilisés."
                 }
-                await syncService.syncAfterServerMutation()
+                await syncMemberHistoryAndDashboard()
             } catch {
                 await MainActor.run { errorMessage = (error as? APIError)?.errorDescription ?? "Impossible d'utiliser les points." }
             }
@@ -672,6 +706,22 @@ struct MemberDetailView: View {
             }
         }
     }
+}
+
+// MARK: - Sync historique (fiche membre + sheet catégories)
+
+@MainActor
+private func performMemberHistoryAndDashboardSync(
+    memberId: String?,
+    syncService: SyncService,
+    dataService: DataService
+) async {
+    let mid = memberId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    if !mid.isEmpty {
+        await syncService.syncMemberTransactionHistory(memberId: mid)
+        dataService.invalidateActivityPreviewCache()
+    }
+    await syncService.syncAfterServerMutation()
 }
 
 // MARK: - Sheet catégories (cocher / décocher pour ce membre)
@@ -776,7 +826,11 @@ struct MemberCategoriesSheet: View {
                     try? context.save()
                     dismiss()
                 }
-                await syncService.syncAfterServerMutation()
+                await performMemberHistoryAndDashboardSync(
+                    memberId: memberId,
+                    syncService: syncService,
+                    dataService: dataService
+                )
             } catch {
                 await MainActor.run { isSaving = false }
             }

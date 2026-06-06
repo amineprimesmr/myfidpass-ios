@@ -352,7 +352,6 @@ struct DashboardView: View {
                         onOpenSideMenu: {
                             openHomeSidebar(animated: true)
                         },
-                        showsBusinessSwitcher: false,
                         onSelectBusiness: { slug in
                             authService.selectBusiness(slug: slug)
                             homeHasNotificationIconConfigured = false

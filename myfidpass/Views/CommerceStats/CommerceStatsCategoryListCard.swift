@@ -374,9 +374,8 @@ private struct CommerceStatsGoogleReviewsCard: View {
                             .frame(width: fillW)
                             .overlay(alignment: .trailing) {
                                 Circle()
-                                    .fill(tint.opacity(0.35))
-                                    .frame(width: 12, height: 12)
-                                    .blur(radius: 4)
+                                    .fill(tint.opacity(0.22))
+                                    .frame(width: 14, height: 14)
                                     .offset(x: 2)
                             }
                     }
@@ -583,9 +582,8 @@ private struct CommerceStatsAudienceSplitCard: View {
                             .frame(width: filledW)
                             .overlay(alignment: .trailing) {
                                 Circle()
-                                    .fill(tint.opacity(glowOpacity))
-                                    .frame(width: 12, height: 12)
-                                    .blur(radius: 4)
+                                    .fill(tint.opacity(glowOpacity * 0.65))
+                                    .frame(width: 14, height: 14)
                                     .offset(x: 2)
                             }
                     }

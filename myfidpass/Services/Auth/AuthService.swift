@@ -432,6 +432,22 @@ final class AuthService: NSObject, ObservableObject {
         return hasEncashedMerchantSubscription
     }
 
+    /// Après achat App Store : `/me` peut être en retard vs `sync-transaction` — plusieurs tentatives courtes.
+    @discardableResult
+    func refreshMerchantBillingStateWithRetries(maxAttempts: Int = 6) async -> Bool {
+        if hasEncashedMerchantSubscription { return true }
+        let attempts = max(1, maxAttempts)
+        for index in 0..<attempts {
+            if await refreshMerchantBillingStateFromServer(force: true), hasEncashedMerchantSubscription {
+                return true
+            }
+            if index < attempts - 1 {
+                try? await Task.sleep(for: .milliseconds(350 + index * 250))
+            }
+        }
+        return hasEncashedMerchantSubscription
+    }
+
     /// Évite un spinner infini si `GET /api/auth/me` reste suspendu (réseau / proxy).
     private func withLoadingBootstrapTimeout<T>(seconds: TimeInterval, operation: @escaping () async throws -> T) async throws -> T {
         try await withThrowingTaskGroup(of: T.self) { group in
@@ -882,9 +898,7 @@ final class AuthService: NSObject, ObservableObject {
     func finishSignupPaywallPhase(honorPaidThankYou: Bool = false) {
         isCompletingSignupPaywallPhase = false
         clearMandatoryPaywallAfterSignupPending()
-        if honorPaidThankYou,
-           signupPaywallPaymentConfirmedThisSession,
-           hasEncashedMerchantSubscription {
+        if honorPaidThankYou, signupPaywallPaymentConfirmedThisSession {
             pendingSubscriptionThankYouAfterSignup = true
         }
         signupPaywallPaymentConfirmedThisSession = false

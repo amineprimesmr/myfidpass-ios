@@ -409,11 +409,13 @@ struct FintechTransactionRow: View {
     private var amountLine: String {
         switch entry.kind {
         case .scan:
-            if isPointsProgram, let pts = entry.scanPointsGranted {
-                return "+\(pts) pts"
-            }
-            return "+ Visite"
-        case .newCard: return "+ Carte"
+            return MerchantTransactionEventLabels.dashboardAmountLine(
+                type: entry.transactionType,
+                points: entry.scanPointsGranted,
+                isVisit: entry.isVisit,
+                isPointsProgram: isPointsProgram
+            )
+        case .newCard: return "Inscription"
         }
     }
 
@@ -447,9 +449,13 @@ struct FintechTransactionRow: View {
                     .foregroundStyle(palette.onCanvasPrimary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.82)
-                Text(activityDateSubtitle)
+                Text(entry.eventTitle)
                     .font(.subheadline)
                     .foregroundStyle(palette.secondaryText)
+                    .lineLimit(1)
+                Text(activityDateSubtitle)
+                    .font(.caption)
+                    .foregroundStyle(palette.tertiaryText)
             }
 
             Spacer(minLength: 8)

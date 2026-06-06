@@ -17,6 +17,8 @@ final class MerchantAppleSubscriptionStore: ObservableObject {
     @Published private(set) var productsById: [String: Product] = [:]
     @Published private(set) var isLoadingProducts = false
     @Published private(set) var loadProductsError: String?
+    /// Dernière réponse `sync-transaction` réussie (code promo / `Transaction.updates`).
+    private(set) var lastSuccessfulSyncResponse: PaymentAppleSyncResponse?
 
     private var updatesTask: Task<Void, Never>?
 
@@ -136,6 +138,7 @@ final class MerchantAppleSubscriptionStore: ObservableObject {
                 signedTransactionInfo: Self.jwsRepresentation(from: verification)
             )
             await transaction.finish()
+            lastSuccessfulSyncResponse = response
             return response
         case .userCancelled:
             throw MerchantAppleSubscriptionStoreError.userCancelled
@@ -174,11 +177,13 @@ final class MerchantAppleSubscriptionStore: ObservableObject {
                 continue
             }
             do {
-                _ = try await syncTransactionToBackend(
+                let response = try await syncTransactionToBackend(
                     transaction,
                     signedTransactionInfo: Self.jwsRepresentation(from: update)
                 )
                 await transaction.finish()
+                lastSuccessfulSyncResponse = response
+                NotificationCenter.default.post(name: .myfidpassAppleStoreTransactionSynced, object: nil)
             } catch {
                 // Webhook / retry au prochain lancement ou reconcile manuel
             }

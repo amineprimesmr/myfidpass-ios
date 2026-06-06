@@ -16,6 +16,10 @@ final class AppState: ObservableObject {
     @Published var errorMessage: String?
     /// Afficher une erreur temporaire (auto-dismiss après délai).
     func showError(_ message: String, dismissAfter: Double = 4) {
+        if MerchantProUnlockPresenter.isSubscriptionGateMessage(message) {
+            MerchantProUnlockPresenter.shared.presentTeaser()
+            return
+        }
         errorMessage = message
         Task {
             try? await Task.sleep(nanoseconds: UInt64(dismissAfter * 1_000_000_000))

@@ -32,6 +32,7 @@ struct CustomMerchantProPaywallView: View {
     @State private var showsPaywallLegalMenu = false
     @State private var measuredTopSafeInset: CGFloat = 0
     @State private var appleIntroOfferAvailable: Bool?
+    @State private var didCompletePaywallSuccess = false
     @ObservedObject private var appleStore = MerchantAppleSubscriptionStore.shared
 
     private var effectiveCommerceSlots: Int {
@@ -132,6 +133,13 @@ struct CustomMerchantProPaywallView: View {
             if !supportsAnnualPlanToggle {
                 isMonthlyPlanSelected = true
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .myfidpassAppleStoreTransactionSynced)) { _ in
+            Task { await handleBackgroundAppleStoreTransactionSynced() }
+        }
+        .onChange(of: authService.hasEncashedMerchantSubscription) { _, active in
+            guard active, !didCompletePaywallSuccess, !isPurchasing else { return }
+            Task { await handleBackgroundAppleStoreTransactionSynced() }
         }
     }
 
@@ -416,12 +424,33 @@ struct CustomMerchantProPaywallView: View {
     // MARK: - StoreKit
 
     @MainActor
+    private func handleBackgroundAppleStoreTransactionSynced() async {
+        guard !didCompletePaywallSuccess else { return }
+        if let response = appleStore.lastSuccessfulSyncResponse {
+            authService.applyAppleSubscriptionSync(response)
+        }
+        _ = await authService.refreshMerchantBillingStateWithRetries()
+        if authService.hasEncashedMerchantSubscription {
+            completePaywallAfterSuccessfulPayment()
+            return
+        }
+        if let response = appleStore.lastSuccessfulSyncResponse,
+           AuthService.appleSyncResponseGrantsPaidAccess(response) {
+            authService.applyAppleSubscriptionSync(response)
+            completePaywallAfterSuccessfulPayment()
+        }
+    }
+
+    @MainActor
     private func completePaywallAfterSuccessfulPayment() {
+        guard !didCompletePaywallSuccess else { return }
         guard authService.hasEncashedMerchantSubscription else { return }
+        didCompletePaywallSuccess = true
         if authService.isCompletingSignupPaywallPhase {
             authService.confirmSignupPaywallPaymentInThisSession()
             authService.finishSignupPaywallPhase(honorPaidThankYou: true)
         } else {
+            dismiss()
             NotificationCenter.default.post(name: .myfidpassSubscriptionPaymentCompleted, object: nil)
         }
     }
@@ -451,19 +480,26 @@ struct CustomMerchantProPaywallView: View {
         }
     }
 
-    /// Valide côté serveur (`GET /me` uniquement) avant tout « Merci » ou déblocage PRO.
+    /// Valide côté serveur (`GET /me` + cache sync) avant tout « Merci » ou déblocage PRO.
     @MainActor
     private func finalizeStoreKitPaymentAfterServerConfirmation(
         initialSync: PaymentAppleSyncResponse?
     ) async -> Bool {
-        _ = initialSync // sync serveur déjà effectué ; seule source de vérité = GET /me
-        _ = await authService.refreshMerchantBillingStateFromServer(force: true)
-        guard authService.hasEncashedMerchantSubscription else {
-            purchaseError =
-                "L’App Store a bien répondu, mais MyFidpass n’a pas confirmé l’abonnement payant. Réessayez dans un instant."
-            return false
+        if let initialSync {
+            authService.applyAppleSubscriptionSync(initialSync)
         }
-        return true
+        if authService.hasEncashedMerchantSubscription {
+            return true
+        }
+        let confirmed = await authService.refreshMerchantBillingStateWithRetries()
+        if confirmed { return true }
+        if let initialSync, AuthService.appleSyncResponseGrantsPaidAccess(initialSync) {
+            authService.applyAppleSubscriptionSync(initialSync)
+            return true
+        }
+        purchaseError =
+                "L’App Store a bien répondu, mais MyFidpass n’a pas confirmé l’abonnement payant. Réessayez dans un instant."
+        return false
     }
 }
 

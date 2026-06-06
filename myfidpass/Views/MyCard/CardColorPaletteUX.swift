@@ -539,7 +539,10 @@ private struct FlyerPrecisionColorGridSheet: View {
     }
 
     private static let lightSwatchNorms: Set<String> = [
-        "FFFFFF", "F5F5F7", "F5F5F5", "FAFAFA", "F0F0F0", "E8E8ED", "D1D1D6"
+        "FFFFFF", "F5F5F7", "F5F5F5", "FAFAFA", "F0F0F0", "E8E8ED", "D1D1D6", "C7C7CC",
+        "FFF176", "FF80AB", "EA80FC", "18FFFF", "4DD0E1", "80DEEA",
+        "F0E6D8", "F5EBDD", "FAF3E8", "E8DCC8", "FCE4EC", "FFF9C4", "FFE0B2", "B2EBF2", "F3E5F5",
+        "D7CCC8", "BCAAA4", "C5E1A5", "A5D6A7", "FFCC80",
     ]
 }
 

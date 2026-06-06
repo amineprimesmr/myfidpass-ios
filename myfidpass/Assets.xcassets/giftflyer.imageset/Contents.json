@@ -1,23 +1,13 @@
 {
-  "images" : [
+  "images": [
     {
-      "filename" : "giftflyer.png",
-      "idiom" : "universal",
-      "scale" : "1x"
-    },
-    {
-      "filename" : "giftflyer 1.png",
-      "idiom" : "universal",
-      "scale" : "2x"
-    },
-    {
-      "filename" : "giftflyer 2.png",
-      "idiom" : "universal",
-      "scale" : "3x"
+      "filename": "giftflyer.png",
+      "idiom": "universal",
+      "scale": "1x"
     }
   ],
-  "info" : {
-    "author" : "xcode",
-    "version" : 1
+  "info": {
+    "author": "sync-flyer-assets",
+    "version": 1
   }
 }

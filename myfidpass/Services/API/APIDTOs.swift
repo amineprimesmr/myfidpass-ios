@@ -1384,7 +1384,7 @@ struct FlyerStateDTO: Codable, Equatable {
             /// Fond clair, vif (dégradé) — cohérent avec le texte titre foncé.
             colorBgTop: "#FEF3C7",
             colorBgBottom: "#FED7AA",
-            /// `png` = texture web `spinflyer` ; `segments` = secteurs aplats (sans image).
+            /// Legacy : `wheelRenderMode` ignoré côté canvas (roue vectorielle + `flyergame.png`).
             wheelRenderMode: "png",
             wheelColorOdd: "#fbbf24",
             wheelColorEven: "#ffffff",
@@ -1556,8 +1556,7 @@ struct FlyerStateDTO: Codable, Equatable {
         Self.coerceFiniteNumericFields(&self)
         templateId = Self.templateIdFixed
         wheelRenderMode = Self.normalizeWheelRenderMode(wheelRenderMode)
-        /// `segments` = disques colorés sans texture ; `png` = image **spinflyer** dans l’embed web. L’app ne propose
-        /// plus le mode « roue plate » : tout état enregistré en `segments` repasse en `png` pour l’aperçu et le PUT.
+        /// Legacy : `wheelRenderMode` conservé pour compat API ; le canvas utilise roue vectorielle + `flyergame.png`.
         if wheelRenderMode == "segments" {
             wheelRenderMode = "png"
         }

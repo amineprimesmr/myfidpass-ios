@@ -150,6 +150,7 @@ private struct MyCardPersistedSnapshot: Equatable {
     var expiryMonths: String
     var sector: String
     var stampMidRewardLabel: String
+    var stampMidRewardEnabled: Bool
     /// Récompense « Début du jeu » (1ʳᵉ tour de roue avant tout palier).
     var startGameRewardLabel: String
     var backTerms: String
@@ -225,6 +226,8 @@ struct MyCardView: View {
     @State private var backTerms: String = ""
     @State private var backContact: String = ""
     @State private var stampMidRewardLabel: String = ""
+    /// Récompense au 5ᵉ passage (désactivable si le programme tampons le permet).
+    @State private var stampMidRewardEnabled: Bool = false
     @State private var labelRestants: String = ""
     /// Non éditables dans l’UI (fixes sur le SaaS) : conservés pour ne pas écraser l’API au PATCH.
     @State private var labelMember: String = ""
@@ -275,7 +278,8 @@ struct MyCardView: View {
             requiredStamps: requiredStamps,
             stampRewardLabel: stampRewardLabel,
             stampMidRewardLabel: stampMidRewardLabel,
-            startGameRewardLabel: startGameRewardLabel
+            startGameRewardLabel: startGameRewardLabel,
+            stampMidRewardEnabled: stampMidRewardEnabled
         )
     }
 
@@ -287,7 +291,8 @@ struct MyCardView: View {
             requiredStamps: requiredStamps,
             stampRewardLabel: stampRewardLabel,
             stampMidRewardLabel: stampMidRewardLabel,
-            startGameRewardLabel: startGameRewardLabel
+            startGameRewardLabel: startGameRewardLabel,
+            stampMidRewardEnabled: stampMidRewardEnabled
         )
     }
 
@@ -330,12 +335,7 @@ struct MyCardView: View {
     }
 
     private var shouldShowCompletionPills: Bool {
-        if let slug = AuthStorage.currentBusinessSlug,
-           CardPreviewDisplaySnapshotStore.isMerchantCardConfigured(slug: slug),
-           !dashboardSettingsHydrated {
-            return false
-        }
-        return !cardMissingRequirements.isEmpty
+        !cardMissingRequirements.isEmpty
     }
 
     var body: some View {
@@ -583,6 +583,7 @@ struct MyCardView: View {
         expiryMonths = snap.expiryMonths
         sector = snap.sector
         stampMidRewardLabel = snap.stampMidRewardLabel
+        stampMidRewardEnabled = snap.stampMidRewardEnabled
         startGameRewardLabel = snap.startGameRewardLabel
         backTerms = snap.backTerms
         backContact = snap.backContact
@@ -628,27 +629,11 @@ struct MyCardView: View {
         welcomeBonusEnabled = true
         welcomeBonusAmount = new == "points" ? 10 : 1
         if new == "points" {
-            MyCardProgramDefaults.fillDefaultPointsTiersIfNeeded(
-                tierPoints: &tierPoints,
-                tierLabels: &tierLabels
-            )
-            MyCardProgramDefaults.syncStartGameLabelFromFirstTier(
-                startGameRewardLabel: &startGameRewardLabel,
-                tierPoints: tierPoints,
-                tierLabels: tierLabels
-            )
             if pointsPerEuro < 1 { pointsPerEuro = 1 }
         } else if new == "stamps" {
-            requiredStamps = 10
-            if previewStampsCount > 10 { previewStampsCount = 10 }
+            if requiredStamps < 5 { requiredStamps = 10 }
+            if previewStampsCount > requiredStamps { previewStampsCount = requiredStamps }
             cardBackgroundPhotoItem = nil
-            MyCardProgramDefaults.fillDefaultStampRewardsIfNeeded(
-                requiredStamps: &requiredStamps,
-                stampRewardLabel: &stampRewardLabel,
-                stampMidRewardLabel: &stampMidRewardLabel,
-                startGameRewardLabel: &startGameRewardLabel,
-                stampEmoji: &stampEmoji
-            )
         }
         if let slug = AuthStorage.currentBusinessSlug {
             persistDisplaySnapshot(slug: slug)
@@ -721,6 +706,7 @@ struct MyCardView: View {
                 }
                 .padding(.horizontal, AppTheme.Spacing.lg)
             }
+            .id(programType)
             .frame(maxWidth: .infinity, alignment: .top)
             .transaction { $0.disablesAnimations = true }
         }
@@ -771,6 +757,7 @@ struct MyCardView: View {
             serverHasStampIconAsset: serverHasStampIconAsset,
             stampRewardLabel: $stampRewardLabel,
             stampMidRewardLabel: $stampMidRewardLabel,
+            stampMidRewardEnabled: $stampMidRewardEnabled,
             startGameRewardLabel: $startGameRewardLabel,
             backTerms: $backTerms,
             backContact: $backContact,
@@ -1389,6 +1376,7 @@ struct MyCardView: View {
                 stampRewardLabel = settings.stampRewardLabel ?? ""
                 let midSaved = settings.stampMidRewardLabel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 stampMidRewardLabel = midSaved
+                stampMidRewardEnabled = requiredStamps > 5 && !midSaved.isEmpty
                 let startSaved = settings.startGameRewardLabel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 if programType == "stamps", !startSaved.isEmpty {
                     startGameRewardLabel = startSaved
@@ -1545,6 +1533,7 @@ struct MyCardView: View {
             expiryMonths: expiryMonths,
             sector: sector,
             stampMidRewardLabel: stampMidRewardLabel,
+            stampMidRewardEnabled: stampMidRewardEnabled,
             startGameRewardLabel: startGameRewardLabel,
             backTerms: backTerms,
             backContact: backContact,
@@ -1611,10 +1600,7 @@ struct MyCardView: View {
         patch.startGameRewardLabel = String(startGameRewardLabel.prefix(120))
 
         if programType == "points" {
-            MyCardProgramDefaults.fillDefaultPointsTiersIfNeeded(
-                tierPoints: &tierPoints,
-                tierLabels: &tierLabels
-            )
+            MyCardProgramDefaults.ensureTierArraysCapacity(tierPoints: &tierPoints, tierLabels: &tierLabels)
             MyCardProgramDefaults.syncStartGameLabelFromFirstTier(
                 startGameRewardLabel: &startGameRewardLabel,
                 tierPoints: tierPoints,
@@ -1631,11 +1617,11 @@ struct MyCardView: View {
             patch.stampRewardLabel = stampRewardLabel.isEmpty
                 ? nil
                 : String(stampRewardLabel.prefix(120))
-            let mid = stampMidRewardLabel.trimmingCharacters(in: .whitespaces)
-            if mid.isEmpty {
-                patch.stampMidRewardLabelIsExplicitNull = true
+            if stampMidRewardEnabled, requiredStamps > 5 {
+                let mid = stampMidRewardLabel.trimmingCharacters(in: .whitespaces)
+                patch.stampMidRewardLabel = mid.isEmpty ? nil : String(mid.prefix(120))
             } else {
-                patch.stampMidRewardLabel = String(mid.prefix(120))
+                patch.stampMidRewardLabelIsExplicitNull = true
             }
             patch.pointsRewardTiersIsExplicitNull = true
             patch.loyaltyMode = "points_cash"
@@ -1696,10 +1682,7 @@ struct MyCardView: View {
         )
         var rewardTiers: [PointsRewardTierPayload]? = nil
         if programType == "points" {
-            MyCardProgramDefaults.fillDefaultPointsTiersIfNeeded(
-                tierPoints: &tierPoints,
-                tierLabels: &tierLabels
-            )
+            MyCardProgramDefaults.ensureTierArraysCapacity(tierPoints: &tierPoints, tierLabels: &tierLabels)
             MyCardProgramDefaults.syncStartGameLabelFromFirstTier(
                 startGameRewardLabel: &startGameRewardLabel,
                 tierPoints: tierPoints,
@@ -1751,11 +1734,11 @@ struct MyCardView: View {
                 MyCardProgramDefaults.ensureStartGameRewardLabel(&startGameRewardLabel)
                 patch.startGameRewardLabel = String(startGameRewardLabel.prefix(120))
                 if programType == "stamps" {
-                    let mid = stampMidRewardLabel.trimmingCharacters(in: .whitespaces)
-                    if mid.isEmpty {
-                        patch.stampMidRewardLabelIsExplicitNull = true
+                    if stampMidRewardEnabled, requiredStamps > 5 {
+                        let mid = stampMidRewardLabel.trimmingCharacters(in: .whitespaces)
+                        patch.stampMidRewardLabel = mid.isEmpty ? nil : String(mid.prefix(120))
                     } else {
-                        patch.stampMidRewardLabel = String(mid.prefix(120))
+                        patch.stampMidRewardLabelIsExplicitNull = true
                     }
                 }
                 patch.sector = sectorVal.isEmpty ? nil : String(sectorVal.prefix(64))

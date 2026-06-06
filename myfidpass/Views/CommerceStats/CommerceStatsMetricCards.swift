@@ -193,6 +193,7 @@ struct CommerceStatsLargeMetricCard: View {
             membersAreaChart(lineColor: lineColor)
                 .frame(height: 104)
                 .frame(maxWidth: .infinity)
+                .drawingGroup(opaque: false, colorMode: .nonLinear)
                 .clipShape(
                     UnevenRoundedRectangle(
                         topLeadingRadius: 0,

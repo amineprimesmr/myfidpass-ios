@@ -63,12 +63,52 @@ enum MyCardProgramDefaults {
 
     /// Retire les doublons 10 pts hors 1ʳᵉ ligne.
     static func sanitizeEditableTierSlots(tierPoints: inout [String], tierLabels: inout [String]) {
-        for i in 1..<min(pointsTierCount, tierPoints.count) {
+        ensureTierArraysCapacity(tierPoints: &tierPoints, tierLabels: &tierLabels)
+        for i in 1..<pointsTierCount {
             if Int(tierPoints[i].trimmingCharacters(in: .whitespaces)) == signupRewardPoints {
                 tierPoints[i] = ""
                 if i < tierLabels.count { tierLabels[i] = "" }
             }
         }
+    }
+
+    /// Garantit des tableaux de taille fixe sans écraser le contenu saisi.
+    static func ensureTierArraysCapacity(tierPoints: inout [String], tierLabels: inout [String]) {
+        var pts = Array(tierPoints.prefix(pointsTierCount))
+        var labs = Array(tierLabels.prefix(pointsTierCount))
+        while pts.count < pointsTierCount { pts.append("") }
+        while labs.count < pointsTierCount { labs.append("") }
+        if pts[0].trimmingCharacters(in: .whitespaces).isEmpty {
+            pts[0] = String(signupRewardPoints)
+        }
+        tierPoints = pts
+        tierLabels = labs
+    }
+
+    /// Nombre de lignes à afficher dans l’éditeur (au moins `minVisibleCount`, jusqu’au dernier palier rempli).
+    static func resolvedVisibleTierRowCount(tierPoints: [String], tierLabels: [String]) -> Int {
+        var lastFilled = -1
+        for i in 0..<pointsTierCount {
+            let p = tierPoints.indices.contains(i) ? tierPoints[i].trimmingCharacters(in: .whitespaces) : ""
+            let l = tierLabels.indices.contains(i) ? tierLabels[i].trimmingCharacters(in: .whitespaces) : ""
+            if !p.isEmpty || !l.isEmpty { lastFilled = i }
+        }
+        return min(
+            max(MyCardPointsRewardTiers.minVisibleCount, lastFilled + 1),
+            pointsTierCount
+        )
+    }
+
+    /// Supprime un palier (index > 0) et remonte les suivants.
+    static func removePointsTier(at index: Int, tierPoints: inout [String], tierLabels: inout [String]) {
+        guard index > 0, index < pointsTierCount else { return }
+        ensureTierArraysCapacity(tierPoints: &tierPoints, tierLabels: &tierLabels)
+        for i in index..<(pointsTierCount - 1) {
+            tierPoints[i] = tierPoints[i + 1]
+            tierLabels[i] = tierLabels[i + 1]
+        }
+        tierPoints[pointsTierCount - 1] = ""
+        tierLabels[pointsTierCount - 1] = ""
     }
 
     /// Aligne `startGameRewardLabel` sur la 1ʳᵉ ligne si elle vaut 10 pts (champ API legacy).
@@ -135,25 +175,8 @@ enum MyCardProgramDefaults {
         return tiers
     }
 
-    /// Remplit les paliers points s’ils sont incomplets (ex. passage Tampons → Points).
-    static func fillDefaultPointsTiersIfNeeded(tierPoints: inout [String], tierLabels: inout [String]) {
-        var pts = Array(tierPoints.prefix(pointsTierCount))
-        var labs = Array(tierLabels.prefix(pointsTierCount))
-        while pts.count < pointsTierCount { pts.append("") }
-        while labs.count < pointsTierCount { labs.append("") }
-
-        let minRequired = MyCardPointsRewardTiers.minVisibleCount
-        let complete = (0..<minRequired).allSatisfy { i in
-            let p = pts[i].trimmingCharacters(in: .whitespaces)
-            let lab = labs[i].trimmingCharacters(in: .whitespaces)
-            return Int(p) != nil && !lab.isEmpty
-        }
-        guard !complete else {
-            tierPoints = pts
-            tierLabels = labs
-            return
-        }
-
+    /// Exemples fixes (bouton « Appliquer les exemples » uniquement — jamais au enregistrement silencieux).
+    static func applyExamplePointsTiers(tierPoints: inout [String], tierLabels: inout [String]) {
         let defaultsPts = ["10", "50", "100", "150", "200"]
         let defaultsLabs = [
             "Boisson offerte",
@@ -180,10 +203,6 @@ enum MyCardProgramDefaults {
         }
         if stampRewardLabel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             stampRewardLabel = "Une récompense offerte"
-        }
-        if requiredStamps > 5,
-           stampMidRewardLabel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            stampMidRewardLabel = "−50 % sur un article"
         }
         if stampEmoji.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             stampEmoji = "cafe"

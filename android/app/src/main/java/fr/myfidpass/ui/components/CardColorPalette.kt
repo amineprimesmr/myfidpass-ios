@@ -21,21 +21,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import fr.myfidpass.flyer.AppVibrantColorPalette
 import fr.myfidpass.util.toComposeColorOr
 
-val CardColorPresets = listOf(
-    "000000" to "Noir",
-    "E5E7EB" to "Gris clair",
-    "FFFFFF" to "Blanc",
-    "EC4899" to "Magenta",
-    "EF4444" to "Rouge vif",
-    "F97316" to "Orange",
-    "EAB308" to "Jaune",
-    "22C55E" to "Vert",
-    "14B8A6" to "Turquoise",
-    "2563EB" to "Bleu",
-    "7C3AED" to "Violet vif",
-)
+val CardColorPresets: List<Pair<String, String>> = AppVibrantColorPalette.cardRowPresets
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable

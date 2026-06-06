@@ -1,23 +1,13 @@
 {
-  "images" : [
+  "images": [
     {
-      "filename" : "Design sans titre (1).png",
-      "idiom" : "universal",
-      "scale" : "1x"
-    },
-    {
-      "filename" : "Design sans titre (1) 1.png",
-      "idiom" : "universal",
-      "scale" : "2x"
-    },
-    {
-      "filename" : "Design sans titre (1) 2.png",
-      "idiom" : "universal",
-      "scale" : "3x"
+      "filename": "template5.png",
+      "idiom": "universal",
+      "scale": "1x"
     }
   ],
-  "info" : {
-    "author" : "xcode",
-    "version" : 1
+  "info": {
+    "author": "sync-flyer-assets",
+    "version": 1
   }
 }

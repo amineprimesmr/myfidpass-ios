@@ -137,5 +137,6 @@ struct RootView: View {
         }
         .animation(shouldShowAuthenticatedApp ? .onboardingTransition : nil, value: shouldShowAuthenticatedApp)
         .appVersionUpdateCheck()
+        .merchantProUnlockFlow()
     }
 }

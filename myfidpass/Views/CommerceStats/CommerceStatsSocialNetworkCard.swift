@@ -288,8 +288,7 @@ struct CommerceStatsSocialNetworkCard: View {
                 SocialAreaShape(values: values)
                     .fill(LinearGradient(colors: areaColors, startPoint: .top, endPoint: .bottom))
                 SocialLineShape(values: values)
-                    .stroke(lc.opacity(0.2), lineWidth: 3.5)
-                    .blur(radius: 2.5)
+                    .stroke(lc.opacity(0.22), lineWidth: 3)
                 SocialLineShape(values: values)
                     .stroke(lc, lineWidth: 2.1)
             }
@@ -297,6 +296,7 @@ struct CommerceStatsSocialNetworkCard: View {
                 peakMarker(values: values, index: peakIdx)
             }
         }
+        .drawingGroup(opaque: false, colorMode: .nonLinear)
         .frame(height: 100)
         .clipped()
     }

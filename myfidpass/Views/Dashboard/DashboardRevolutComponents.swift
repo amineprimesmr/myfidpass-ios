@@ -159,7 +159,7 @@ struct RevolutMemberActivityRow: View {
 
     private var isScanHighlight: Bool { summary.lastScanDate != nil || summary.card.stampsCount > 0 }
 
-    private var eventTitle: String { isScanHighlight ? "Scan" : "Carte créée" }
+    private var eventTitle: String { isScanHighlight ? "Dernière activité" : "Nouveau membre" }
 
     private var iconBackground: Color {
         isScanHighlight ? palette.accentGreen.opacity(0.2) : palette.accentBlue.opacity(0.22)
@@ -263,7 +263,7 @@ struct RevolutActivityRow: View {
                     .foregroundStyle(palette.secondaryText)
             }
             Spacer(minLength: 0)
-            Text(entry.kind == .scan ? "Scan" : "Carte")
+            Text(entry.kind == .newCard ? "Inscription" : (entry.scanPointsGranted.map { "\($0) pts" } ?? "Activité"))
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(palette.tertiaryText)
         }

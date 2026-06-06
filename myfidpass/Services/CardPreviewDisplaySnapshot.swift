@@ -77,7 +77,9 @@ enum CardPreviewDisplaySnapshotStore {
             requiredStamps: snap.requiredStamps,
             stampRewardLabel: snap.stampRewardLabel,
             stampMidRewardLabel: snap.stampMidRewardLabel ?? "",
-            startGameRewardLabel: snap.startGameRewardLabel ?? ""
+            startGameRewardLabel: snap.startGameRewardLabel ?? "",
+            stampMidRewardEnabled: snap.requiredStamps > 5
+                && !(snap.stampMidRewardLabel ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         )
     }
 

@@ -101,6 +101,8 @@ struct FlyerPreviewWebView: UIViewRepresentable {
 
     /// Réponse JSON brute GET …/dashboard/flyer, encodée en base64 pour injection JS.
     let bootstrapBase64: String
+    /// Patch JSON léger (`__FIDPASS_FLYER_PATCH_STATE__`) — couleurs / textes sans logo.
+    var statePatchJSON: String = ""
     @Binding var isLoading: Bool
     /// Document + hook `APPLY` : flyer canvas ou page jeu QR (après scan).
     var embedKind: FlyerPreviewWebViewEmbedKind = .flyerCanvas
@@ -194,7 +196,9 @@ struct FlyerPreviewWebView: UIViewRepresentable {
             context.coordinator.webView = warm
             context.coordinator.embedKind = embedKind
             context.coordinator.latestBootstrap = bootstrapBase64
+            context.coordinator.latestStatePatch = statePatchJSON
             context.coordinator.lastFlushedBootstrap = ""
+            context.coordinator.lastFlushedStatePatch = ""
             context.coordinator.skipCanvasSolidBackground = skipCanvasSolidBackground
             // La page est déjà chargée — on injecte le bootstrap immédiatement.
             context.coordinator.markPageReady()
@@ -215,7 +219,8 @@ struct FlyerPreviewWebView: UIViewRepresentable {
         let skipFlag = skipCanvasSolidBackground
             ? "window.__FIDPASS_SKIP_CANVAS_BG_FILL=true;"
             : "window.__FIDPASS_SKIP_CANVAS_BG_FILL=false;"
-        let bootstrapPlaceholder = "window.__FIDPASS_FLYER_B64__=’’;\(skipFlag)"
+        let previewMode = "window.__FIDPASS_PREVIEW_MODE=true;"
+        let bootstrapPlaceholder = "\(previewMode)\(skipFlag)window.__FIDPASS_FLYER_B64__='';"
         let script = WKUserScript(source: bootstrapPlaceholder, injectionTime: .atDocumentStart, forMainFrameOnly: true)
         config.userContentController.addUserScript(script)
 
@@ -232,15 +237,16 @@ struct FlyerPreviewWebView: UIViewRepresentable {
         context.coordinator.webView = wv
         context.coordinator.embedKind = embedKind
         context.coordinator.latestBootstrap = bootstrapBase64
+        context.coordinator.latestStatePatch = statePatchJSON
         context.coordinator.lastFlushedBootstrap = ""
 
         Task { @MainActor in
             isLoading = true
         }
-        /// Toujours revalider le document : évite de rester bloqué sur un ancien bundle JS après déploiement.
+        /// Toujours revalider le document : cache local pour un 2ᵉ affichage instantané.
         let req = URLRequest(
             url: embedKind.pageURL,
-            cachePolicy: .reloadRevalidatingCacheData,
+            cachePolicy: .returnCacheDataElseLoad,
             timeoutInterval: 60
         )
         wv.load(req)
@@ -277,10 +283,12 @@ struct FlyerPreviewWebView: UIViewRepresentable {
     func updateUIView(_ uiView: WKWebView, context: Context) {
         context.coordinator.webView = uiView
         let bootstrapChanged = context.coordinator.latestBootstrap != bootstrapBase64
+        let statePatchChanged = context.coordinator.latestStatePatch != statePatchJSON
         let skipChanged = context.coordinator.skipCanvasSolidBackground != skipCanvasSolidBackground
         let kindChanged = context.coordinator.embedKind != embedKind
         let scaleFitChanged = context.coordinator.scalesEmbeddedDocumentToViewport != scalesEmbeddedDocumentToViewport
         context.coordinator.latestBootstrap = bootstrapBase64
+        context.coordinator.latestStatePatch = statePatchJSON
         context.coordinator.skipCanvasSolidBackground = skipCanvasSolidBackground
         context.coordinator.embedKind = embedKind
         context.coordinator.scalesEmbeddedDocumentToViewport = scalesEmbeddedDocumentToViewport
@@ -291,24 +299,25 @@ struct FlyerPreviewWebView: UIViewRepresentable {
                 webView: uiView
             )
         }
-        /// Ne pas rappeler `onWebViewCreated` ici : c’est un hook « création », le relancer à chaque `updateUIView` cassait
-        /// les hypothèses côté parent et inutile si la closure fait du travail coûteux.
         if kindChanged {
             let req = URLRequest(
                 url: embedKind.pageURL,
-                cachePolicy: .reloadRevalidatingCacheData,
+                cachePolicy: .returnCacheDataElseLoad,
                 timeoutInterval: 60
             )
             uiView.load(req)
             context.coordinator.isPageReady = false
             context.coordinator.lastFlushedBootstrap = ""
+            context.coordinator.lastFlushedStatePatch = ""
             Task { @MainActor in
                 isLoading = true
             }
             return
         }
         if bootstrapChanged || skipChanged {
-            context.coordinator.flush()
+            context.coordinator.flushBootstrap(showLoading: !context.coordinator.isEmbedRenderReady)
+        } else if statePatchChanged {
+            context.coordinator.flushStatePatch()
         }
     }
 
@@ -326,7 +335,17 @@ struct FlyerPreviewWebView: UIViewRepresentable {
             .replacingOccurrences(of: "\"", with: "\\\"")
     }
 
-    // MARK: - Relance APPLY tant que le bundle n’est pas prêt (1er `evaluate` souvent **avant** `__FIDPASS_FLYER_APPLY__`).
+    private static func javaScriptToPatchState(escapedJsonForBacktick: String) -> String {
+        """
+        (function(){
+          var fn="__FIDPASS_FLYER_PATCH_STATE__";
+          if(typeof window[fn]==="function"){window[fn](`\(escapedJsonForBacktick)`);return;}
+          if(typeof window.__FIDPASS_FLYER_APPLY__==="function"){window.__FIDPASS_FLYER_APPLY__();}
+        })();
+        """
+    }
+
+    // MARK: - Relance APPLY tant que le bundle n’est pas prêt
 
     /// Polling court — évite l’aperçu « vide » jusqu’à un 2ᵉ refocus / pastille, sans 2ᵉ rechargement côté natif.
     private static func javaScriptToAssignB64AndPollApply(
@@ -381,12 +400,17 @@ struct FlyerPreviewWebView: UIViewRepresentable {
         var scalesEmbeddedDocumentToViewport: Bool
         weak var webView: WKWebView?
         var latestBootstrap: String = ""
+        var latestStatePatch: String = ""
         var lastFlushedBootstrap: String = ""
+        var lastFlushedStatePatch: String = ""
         var lastFlushedSkipCanvasBg: Bool = false
         /// Réinitialisable depuis `updateUIView` (changement de document embed).
         var isPageReady = false
         private var debounceInjectWorkItem: DispatchWorkItem?
         private var renderPhase: RenderPhase = .hydrating
+
+        /// Exposé à `updateUIView` (évite d’accéder à `renderPhase` privé).
+        var isEmbedRenderReady: Bool { renderPhase == .ready }
         /// Début du flush JS courant (injection evaluateJavaScript).
         private var lastInjectFlushStart = Date()
         private var injectionCountInSession = 0
@@ -423,12 +447,11 @@ struct FlyerPreviewWebView: UIViewRepresentable {
             injectionCountInSession = 0
             setLoading(true)
             armLoadingWatchdog()
-            flush()
+            flushBootstrap(showLoading: true)
         }
 
-        /// Regroupe les mises à jour rapides (roue, pastilles) : un seul `evaluate` ~40 ms après le dernier changement → moins de flash.
-        /// Le **polling** JS ci-dessous gère l’ordre d’arrivée du bundle `__FIDPASS_FLYER_APPLY__` au 1ʳᵉ affichage.
-        func flush() {
+        /// Injection immédiate (plus de debounce 80 ms) — patch couleur/texte ou bootstrap complet.
+        func flushBootstrap(showLoading: Bool = true) {
             debounceInjectWorkItem?.cancel()
             guard isPageReady, webView != nil else { return }
             if latestBootstrap == lastFlushedBootstrap, lastFlushedSkipCanvasBg == skipCanvasSolidBackground { return }
@@ -438,26 +461,44 @@ struct FlyerPreviewWebView: UIViewRepresentable {
             let work = DispatchWorkItem { [weak self] in
                 guard let self, let wv = self.webView else { return }
                 if self.latestBootstrap == self.lastFlushedBootstrap, self.lastFlushedSkipCanvasBg == self.skipCanvasSolidBackground { return }
-                self.executeInjectFlush(using: wv)
+                if showLoading { self.setLoading(true) }
+                self.executeInjectFlush(using: wv, showLoading: showLoading)
             }
             debounceInjectWorkItem = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08, execute: work)
+            DispatchQueue.main.async(execute: work)
         }
 
-        private func executeInjectFlush(using wv: WKWebView) {
+        func flushStatePatch() {
+            guard embedKind == .flyerCanvas else { return }
+            guard isPageReady, let wv = webView else { return }
+            let patch = latestStatePatch.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !patch.isEmpty else { return }
+            if patch == lastFlushedStatePatch { return }
+            let escaped = FlyerPreviewWebView.escapeForJSTemplateLiteral(patch)
+            let js = FlyerPreviewWebView.javaScriptToPatchState(escapedJsonForBacktick: escaped)
+            wv.evaluateJavaScript(js) { [weak self] _, error in
+                guard let self else { return }
+                if error == nil {
+                    self.lastFlushedStatePatch = patch
+                    self.renderPhase = .ready
+                }
+            }
+        }
+
+        private func executeInjectFlush(using wv: WKWebView, showLoading: Bool) {
             if latestBootstrap == lastFlushedBootstrap, lastFlushedSkipCanvasBg == skipCanvasSolidBackground { return }
             guard isPageReady else { return }
             lastInjectFlushStart = Date()
             let payload = latestBootstrap
             let maxSingle = 100_000
             if payload.count <= maxSingle {
-                injectSingleChunk(wv: wv, payload: payload)
+                injectSingleChunk(wv: wv, payload: payload, showLoading: showLoading)
             } else {
-                injectChunked(wv: wv, payload: payload)
+                injectChunked(wv: wv, payload: payload, showLoading: showLoading)
             }
         }
 
-        private func injectSingleChunk(wv: WKWebView, payload: String) {
+        private func injectSingleChunk(wv: WKWebView, payload: String, showLoading: Bool) {
             let escaped = FlyerPreviewWebView.escapeForJSTemplateLiteral(payload)
             let js = FlyerPreviewWebView.javaScriptToAssignB64AndPollApply(
                 skipCanvasBgFill: skipCanvasSolidBackground,
@@ -466,12 +507,13 @@ struct FlyerPreviewWebView: UIViewRepresentable {
             )
             renderPhase = .applying
             injectionCountInSession += 1
-            armLoadingWatchdog()
+            if showLoading { armLoadingWatchdog() }
             wv.evaluateJavaScript(js) { [weak self] _, error in
                 guard let self else { return }
                 if error == nil {
                     self.lastFlushedBootstrap = self.latestBootstrap
                     self.lastFlushedSkipCanvasBg = self.skipCanvasSolidBackground
+                    self.lastFlushedStatePatch = self.latestStatePatch.trimmingCharacters(in: .whitespacesAndNewlines)
                     self.renderPhase = .ready
                     self.didAttemptRecoveryAfterTermination = false
                     let elapsed = Int(Date().timeIntervalSince(self.lastInjectFlushStart) * 1000)
@@ -484,13 +526,15 @@ struct FlyerPreviewWebView: UIViewRepresentable {
                 } else {
                     self.renderPhase = .failed
                 }
-                self.disarmLoadingWatchdog()
-                self.setLoading(false)
+                if showLoading {
+                    self.disarmLoadingWatchdog()
+                    self.setLoading(false)
+                }
             }
         }
 
         /// Au-delà de ~100k caractères, `evaluateJavaScript` peut échouer silencieusement sur certains iOS ; on concatène.
-        private func injectChunked(wv: WKWebView, payload: String) {
+        private func injectChunked(wv: WKWebView, payload: String, showLoading: Bool) {
             let chunkSize = 80_000
             var parts: [String] = []
             parts.reserveCapacity(payload.count / chunkSize + 1)
@@ -503,20 +547,22 @@ struct FlyerPreviewWebView: UIViewRepresentable {
 
             renderPhase = .applying
             injectionCountInSession += 1
-            armLoadingWatchdog()
+            if showLoading { armLoadingWatchdog() }
             wv.evaluateJavaScript("window.__FIDPASS_FLYER_B64__='';") { [weak self] _, err in
                 guard let self else { return }
                 if err != nil {
                     self.renderPhase = .failed
-                    self.disarmLoadingWatchdog()
-                    self.setLoading(false)
+                    if showLoading {
+                        self.disarmLoadingWatchdog()
+                        self.setLoading(false)
+                    }
                     return
                 }
-                self.appendChunks(wv: wv, parts: parts, index: 0)
+                self.appendChunks(wv: wv, parts: parts, index: 0, showLoading: showLoading)
             }
         }
 
-        private func appendChunks(wv: WKWebView, parts: [String], index: Int) {
+        private func appendChunks(wv: WKWebView, parts: [String], index: Int, showLoading: Bool) {
             if index >= parts.count {
                 let apply = FlyerPreviewWebView.javaScriptToPollApplyAfterChunkedBootstrap(
                     skipCanvasBgFill: skipCanvasSolidBackground,
@@ -527,6 +573,7 @@ struct FlyerPreviewWebView: UIViewRepresentable {
                     if error == nil {
                         self.lastFlushedBootstrap = self.latestBootstrap
                         self.lastFlushedSkipCanvasBg = self.skipCanvasSolidBackground
+                        self.lastFlushedStatePatch = self.latestStatePatch.trimmingCharacters(in: .whitespacesAndNewlines)
                         self.renderPhase = .ready
                         self.didAttemptRecoveryAfterTermination = false
                         let elapsed = Int(Date().timeIntervalSince(self.lastInjectFlushStart) * 1000)
@@ -539,8 +586,10 @@ struct FlyerPreviewWebView: UIViewRepresentable {
                     } else {
                         self.renderPhase = .failed
                     }
-                    self.disarmLoadingWatchdog()
-                    self.setLoading(false)
+                    if showLoading {
+                        self.disarmLoadingWatchdog()
+                        self.setLoading(false)
+                    }
                 }
                 return
             }
@@ -550,27 +599,28 @@ struct FlyerPreviewWebView: UIViewRepresentable {
                 guard let self else { return }
                 if err != nil {
                     self.renderPhase = .failed
-                    self.disarmLoadingWatchdog()
-                    self.setLoading(false)
+                    if showLoading {
+                        self.disarmLoadingWatchdog()
+                        self.setLoading(false)
+                    }
                     return
                 }
-                self.appendChunks(wv: wv, parts: parts, index: index + 1)
+                self.appendChunks(wv: wv, parts: parts, index: index + 1, showLoading: showLoading)
             }
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             isPageReady = true
             renderPhase = .applying
-            /// Sans pool préchauffé : repartir un chronométrage cohérent pour la télémétrie DEBUG.
             lastInjectFlushStart = Date()
             injectionCountInSession = 0
             armLoadingWatchdog()
-            flush()
+            flushBootstrap(showLoading: true)
         }
 
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
             isPageReady = true
-            flush()
+            flushBootstrap(showLoading: true)
             Task { @MainActor in
                 self.disarmLoadingWatchdog()
                 self.isLoading.wrappedValue = false
@@ -583,7 +633,7 @@ struct FlyerPreviewWebView: UIViewRepresentable {
 
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
             isPageReady = true
-            flush()
+            flushBootstrap(showLoading: true)
             Task { @MainActor in
                 self.disarmLoadingWatchdog()
                 self.isLoading.wrappedValue = false

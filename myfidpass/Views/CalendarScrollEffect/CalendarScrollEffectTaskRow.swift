@@ -18,12 +18,7 @@ struct CalendarScrollActivityRow: View {
         return f
     }()
 
-    private var kindLabel: String {
-        switch entry.kind {
-        case .scan: return "Scan fidélité"
-        case .newCard: return "Nouvelle carte"
-        }
-    }
+    private var kindLabel: String { entry.eventTitle }
 
     private var iconName: String {
         switch entry.kind {
