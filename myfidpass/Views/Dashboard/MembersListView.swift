@@ -62,14 +62,6 @@ struct MembersListView: View {
         .navigationTitle("Membres")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                NavigationLink {
-                    CategoriesManagementView(context: context)
-                        .environmentObject(syncService)
-                } label: {
-                    Label("Catégories", systemImage: "folder.badge.gearshape")
-                }
-            }
             ToolbarItem(placement: .destructiveAction) {
                 if !allMembers.isEmpty {
                     Button {

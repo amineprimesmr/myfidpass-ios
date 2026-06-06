@@ -81,7 +81,6 @@ fun DashboardQuickNotificationSheet(
                             repository.sendNotification(
                                 s,
                                 body.trim(),
-                                null,
                                 title.trim().takeIf { it.isNotEmpty() },
                                 null,
                             )

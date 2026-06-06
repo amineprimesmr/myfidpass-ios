@@ -630,6 +630,8 @@ struct MyCardView: View {
         welcomeBonusAmount = new == "points" ? 10 : 1
         if new == "points" {
             if pointsPerEuro < 1 { pointsPerEuro = 1 }
+            restorePointsTiersIfSlotsEmpty()
+            MyCardProgramDefaults.ensureStartGameRewardLabel(&startGameRewardLabel)
         } else if new == "stamps" {
             if requiredStamps < 5 { requiredStamps = 10 }
             if previewStampsCount > requiredStamps { previewStampsCount = requiredStamps }
@@ -637,6 +639,28 @@ struct MyCardView: View {
         }
         if let slug = AuthStorage.currentBusinessSlug {
             persistDisplaySnapshot(slug: slug)
+        }
+    }
+
+    /// Réinjecte les paliers points depuis le snapshot local si l’API les a effacés lors d’un passage tampons.
+    private func restorePointsTiersIfSlotsEmpty() {
+        let empty = tierPoints.allSatisfy { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            && tierLabels.allSatisfy { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        guard empty else { return }
+        guard let slug = AuthStorage.currentBusinessSlug,
+              let snap = CardPreviewDisplaySnapshotStore.load(slug: slug) else { return }
+        if let tp = snap.tierPoints, tp.contains(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
+            tierPoints = Self.normalizeTierStrings(tp)
+            tierLabels = Self.normalizeTierStrings(snap.tierLabels ?? [])
+            if let sg = snap.startGameRewardLabel?.trimmingCharacters(in: .whitespacesAndNewlines), !sg.isEmpty {
+                startGameRewardLabel = sg
+            }
+            MyCardProgramDefaults.sanitizeEditableTierSlots(tierPoints: &tierPoints, tierLabels: &tierLabels)
+            MyCardProgramDefaults.syncStartGameLabelFromFirstTier(
+                startGameRewardLabel: &startGameRewardLabel,
+                tierPoints: tierPoints,
+                tierLabels: tierLabels
+            )
         }
     }
 
@@ -665,8 +689,8 @@ struct MyCardView: View {
                             stampEmoji: stampEmoji.isEmpty ? nil : stampEmoji,
                             stampIconDataURL: stampIconPendingBase64,
                             stampIconRemoteURL: stampIconRemoteURLForPreview(),
-                            cardBackgroundImagePath: CardLogoStorage.resolvedDisplayPath(forStoredPath: cardBackgroundImagePath),
-                            cardBackgroundRemoteURL: cardBackgroundRemoteURL,
+                            cardBackgroundImagePath: nil,
+                            cardBackgroundRemoteURL: nil,
                             labelColorHex: labelHex.trimmingCharacters(in: .whitespaces).isEmpty ? nil : labelHex,
                             headerRightText: CardRewardsHeaderLink.displayText,
                             memberPreviewText: cardMemberPreviewText,
@@ -1367,10 +1391,17 @@ struct MyCardView: View {
                 } else {
                     tierPoints = Array(repeating: "", count: MyCardPointsRewardTiers.slotCount)
                     tierLabels = Array(repeating: "", count: MyCardPointsRewardTiers.slotCount)
-                    let apiStart = settings.startGameRewardLabel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                    if !apiStart.isEmpty { startGameRewardLabel = apiStart }
                     if programType == "points" {
-                        MyCardProgramDefaults.ensureStartGameRewardLabel(&startGameRewardLabel)
+                        MyCardProgramDefaults.ensureTierArraysCapacity(tierPoints: &tierPoints, tierLabels: &tierLabels)
+                    }
+                    let apiStart = settings.startGameRewardLabel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    if !apiStart.isEmpty {
+                        startGameRewardLabel = apiStart
+                        if programType == "points", !tierLabels.isEmpty {
+                            tierLabels[0] = apiStart
+                        }
+                    } else {
+                        startGameRewardLabel = ""
                     }
                 }
                 stampRewardLabel = settings.stampRewardLabel ?? ""
@@ -1623,7 +1654,6 @@ struct MyCardView: View {
             } else {
                 patch.stampMidRewardLabelIsExplicitNull = true
             }
-            patch.pointsRewardTiersIsExplicitNull = true
             patch.loyaltyMode = "points_cash"
         }
 
@@ -1711,11 +1741,13 @@ struct MyCardView: View {
                 patch.logoBase64 = logoBase64
                 patch.logoUrl = logoUrl
                 patch.stampEmoji = stampEmoji.isEmpty ? nil : String(stampEmoji.prefix(32))
-                // Tampons : ne pas envoyer de fond vide (conserver l’image côté serveur pour le retour en mode points).
-                if cardBackgroundWasRemoved {
-                    patch.cardBackgroundBase64 = ""
-                } else if let bg = cardBackgroundBase64 {
-                    patch.cardBackgroundBase64 = bg
+                // Tampons : ne pas toucher au fond points ni aux paliers en base (masqués côté pass / aperçu).
+                if programType == "points" {
+                    if cardBackgroundWasRemoved {
+                        patch.cardBackgroundBase64 = ""
+                    } else if let bg = cardBackgroundBase64 {
+                        patch.cardBackgroundBase64 = bg
+                    }
                 }
                 patch.programType = programType
                 patch.pointsPerEuro = programType == "points" ? pointsPerEuro : nil
@@ -1725,7 +1757,6 @@ struct MyCardView: View {
                     patch.pointsRewardTiers = rewardTiers
                     patch.loyaltyMode = "points_cash"
                 } else {
-                    patch.pointsRewardTiersIsExplicitNull = true
                     patch.loyaltyMode = "points_cash"
                 }
                 patch.stampRewardLabel = stampRewardLabel.isEmpty ? nil : String(stampRewardLabel.prefix(120))

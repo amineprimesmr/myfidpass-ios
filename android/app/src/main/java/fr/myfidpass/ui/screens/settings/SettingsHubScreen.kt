@@ -13,7 +13,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AccountCircle
-import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.QrCode
@@ -63,7 +62,6 @@ fun SettingsHubScreen(
     onMatchPredictions: () -> Unit,
     onAccounting: () -> Unit = {},
     onOpenFlyerHub: () -> Unit,
-    onCategories: () -> Unit = {},
     showFlyerShortcuts: Boolean = false,
 ) {
     val context = LocalContext.current
@@ -106,13 +104,6 @@ fun SettingsHubScreen(
                         icon = Icons.Default.Groups,
                         title = "Équipe",
                         onClick = onTeam,
-                    )
-                    GroupedSettingsRowDivider()
-                    GroupedSettingsNavigationRow(
-                        icon = Icons.Default.Category,
-                        title = "Catégories membres",
-                        subtitle = "Segments pour campagnes et filtres",
-                        onClick = onCategories,
                     )
                 }
                 Spacer(Modifier.height(GroupedSettingsMetrics.interCardSpacing))

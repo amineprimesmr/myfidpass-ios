@@ -12,7 +12,10 @@ import fr.myfidpass.data.dto.TransactionDto
 import fr.myfidpass.data.repo.DashboardRepository
 import fr.myfidpass.services.sync.SyncService
 import fr.myfidpass.ui.mycard.CardPreviewSnapshotSync
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 class DashboardViewModel(
@@ -32,6 +35,8 @@ class DashboardViewModel(
     var refreshing by mutableStateOf(false)
         private set
     var error: String? by mutableStateOf(null)
+
+    private var homeLiveSyncJob: Job? = null
 
     fun load() {
         val slug = dashboardRepository.currentSlug() ?: return
@@ -68,6 +73,47 @@ class DashboardViewModel(
         refreshing = false
     }
 
+    /**
+     * Accueil : observe Room + poll léger (aligné iOS push `dashboard_sync` + polling 25 s).
+     * Les transactions web / QR apparaissent sans pull-to-refresh manuel.
+     */
+    fun bindHomeActivityLiveUpdates(slug: String) {
+        val trimmed = slug.trim()
+        if (trimmed.isEmpty()) return
+        homeLiveSyncJob?.cancel()
+        homeLiveSyncJob = viewModelScope.launch {
+            launch {
+                syncService.transactionDao.observeRecent(trimmed, 12).collect { rows ->
+                    recentTransactions = rows.map { entityToDto(it) }
+                }
+            }
+            launch {
+                runCatching { syncService.syncIfNeeded(trimmed, force = false) }
+                while (isActive) {
+                    delay(HOME_ACTIVITY_POLL_MS)
+                    runCatching { syncService.syncIfNeeded(trimmed, force = false) }
+                }
+            }
+        }
+    }
+
+    fun unbindHomeActivityLiveUpdates() {
+        homeLiveSyncJob?.cancel()
+        homeLiveSyncJob = null
+    }
+
+    private fun entityToDto(entity: fr.myfidpass.data.local.db.entities.TransactionEntity): TransactionDto =
+        TransactionDto(
+            id = entity.id,
+            memberId = entity.memberId,
+            memberName = entity.memberName,
+            memberEmail = entity.memberEmail,
+            type = entity.type,
+            points = entity.points,
+            metadata = entity.detail,
+            createdAt = entity.createdAt,
+        )
+
     private suspend fun reload(slug: String, forceSync: Boolean) {
         loadCachedTransactions(slug)?.let { recentTransactions = it }
         syncService.syncIfNeeded(slug, force = forceSync)
@@ -88,17 +134,10 @@ class DashboardViewModel(
             syncService.transactionDao.observeRecent(slug, 12).first()
         }.getOrNull().orEmpty()
         if (rows.isEmpty()) return null
-        return rows.map {
-            TransactionDto(
-                id = it.id,
-                memberId = it.memberId,
-                memberName = it.memberName,
-                memberEmail = it.memberEmail,
-                type = it.type,
-                points = it.points,
-                metadata = it.detail,
-                createdAt = it.createdAt,
-            )
-        }
+        return rows.map { entityToDto(it) }
+    }
+
+    companion object {
+        private const val HOME_ACTIVITY_POLL_MS = 25_000L
     }
 }

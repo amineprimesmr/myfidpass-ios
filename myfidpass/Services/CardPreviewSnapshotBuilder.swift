@@ -32,7 +32,7 @@ enum CardPreviewSnapshotBuilder {
 
         var hasRemote = false
         var bgURL: String?
-        if settings.hasCardBackground == true {
+        if settings.hasCardBackground == true, programType == "points" {
             hasRemote = true
             let base = APIConfig.baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
             let enc = slug.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? slug

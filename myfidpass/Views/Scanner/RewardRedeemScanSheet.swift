@@ -42,6 +42,12 @@ enum RewardRedeemQRPayload {
         return "MYFIDPASS_REDEEM:1:\(id):s"
     }
 
+    /// QR caisse « début du jeu » (`:s:0`) — Boisson offerte, distinct de la carte complète (`:s`).
+    static func startGameBarcode(memberId: String) -> String {
+        let id = memberId.trimmingCharacters(in: .whitespacesAndNewlines)
+        return "MYFIDPASS_REDEEM:1:\(id):s:0"
+    }
+
     /// QR caisse palier tampons intermédiaire (ex. 5 tampons).
     static func stampTierBarcode(memberId: String, threshold: Int) -> String {
         let id = memberId.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -60,7 +66,13 @@ enum RewardRedeemQRPayload {
         let mode = parts[2].lowercased()
         if mode == "s" {
             var stampThreshold: Int?
-            if parts.count >= 4, let t = Int(parts[3]), t > 0 { stampThreshold = t }
+            if parts.count >= 4 {
+                if parts[3] == "0" {
+                    stampThreshold = 0
+                } else if let t = Int(parts[3]), t > 0 {
+                    stampThreshold = t
+                }
+            }
             return .stamps(memberId: memberId, stampThreshold: stampThreshold)
         }
         if mode == "p", parts.count >= 5,
@@ -91,12 +103,13 @@ enum ScanRewardRedeemSheetDataBuilder {
         if pointsRequired <= 0, let qrPts = qr?.encodedPoints, qrPts > 0 {
             pointsRequired = qrPts
         }
-        if pointsRequired <= 0, case .stamps(_, let th)? = qr, let th, th > 0 {
+        if pointsRequired <= 0, case .stamps(_, let th?) = qr {
             pointsRequired = th
         }
         let balance = preview.pointsBalance ?? lookup.member.points ?? 0
         let eligible: Bool = {
             if let api = preview.eligible { return api }
+            if pointsRequired == 0 { return true }
             guard pointsRequired > 0 else { return false }
             return balance >= pointsRequired
         }()
@@ -234,9 +247,14 @@ struct RewardRedeemScanSheet: View {
                 Text("Programme tampons")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
-                Text("\(data.pointsBalance) tampon\(data.pointsBalance > 1 ? "s" : "") · objectif \(data.pointsRequired)")
-                    .font(.title3.weight(.bold))
-                    .monospacedDigit()
+                if data.pointsRequired == 0 {
+                    Text("Début du jeu · offert")
+                        .font(.title3.weight(.bold))
+                } else {
+                    Text("\(data.pointsBalance) tampon\(data.pointsBalance > 1 ? "s" : "") · objectif \(data.pointsRequired)")
+                        .font(.title3.weight(.bold))
+                        .monospacedDigit()
+                }
             } else {
                 HStack(spacing: 0) {
                     costColumn(title: "Coût", value: data.pointsRequired, suffix: "pts")
@@ -307,7 +325,10 @@ struct RewardRedeemScanSheet: View {
                             Text("Palier #\(tier + 1) · \(pts) pts encodés")
                                 .font(.footnote.weight(.medium))
                         case .stamps(_, let th):
-                            if let th, th > 0 {
+                            if th == 0 {
+                                Text("Récompense · Début du jeu")
+                                    .font(.footnote.weight(.medium))
+                            } else if let th, th > 0 {
                                 Text("Palier tampons · \(th) tampon\(th > 1 ? "s" : "") encodés")
                                     .font(.footnote.weight(.medium))
                             } else {
@@ -385,7 +406,7 @@ struct RewardRedeemScanSheet: View {
             tint: AppTheme.Colors.primary,
             foregroundColor: .white,
             height: 56,
-            disabled: loading || data.pointsRequired <= 0 && data.mode != "stamps"
+            disabled: loading || (data.pointsRequired <= 0 && data.mode != "stamps") || (data.mode == "stamps" && data.pointsRequired < 0)
         )
         return SlideToConfirm(config: cfg) {
             guard !loading else { return }

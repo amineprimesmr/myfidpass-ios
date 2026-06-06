@@ -108,7 +108,7 @@ final class AuthService: NSObject, ObservableObject {
         hasEncashedMerchantSubscription
     }
 
-    /// Paiement réel (Stripe / App Store) ou bench scan (plafonds 2 / 2 enregistrés).
+    /// Paiement réel (Stripe / App Store) ou bench scan (plafonds 102 / 102 enregistrés).
     var hasEncashedMerchantSubscription: Bool {
         if isPlatformAdmin { return false }
         if merchantScanBenchAccessActive { return true }

@@ -8,8 +8,8 @@
 import Foundation
 
 enum MerchantInternalBenchAccess {
-    static let benchMaxPassesPerDay = 2
-    static let benchMaxPointsPerOperation = 2
+    static let benchMaxPassesPerDay = 102
+    static let benchMaxPointsPerOperation = 102
 
     static func matchesBenchCombo(passes: Int, points: Int) -> Bool {
         passes == benchMaxPassesPerDay && points == benchMaxPointsPerOperation

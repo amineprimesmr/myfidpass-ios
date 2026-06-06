@@ -45,19 +45,33 @@ enum MyCardProgramDefaults {
             labsOut[slot] = lab
             slot += 1
         }
-        if startGame.isEmpty {
-            startGame = "Boisson offerte"
+
+        let hadApiTierRows = sorted.contains {
+            !$0.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
-        if ptsOut[0].trimmingCharacters(in: .whitespaces).isEmpty {
-            ptsOut[0] = String(signupRewardPoints)
-            labsOut[0] = startGame
+        let serverPersistedRewards = hadApiTierRows || !startGame.isEmpty
+
+        if serverPersistedRewards {
+            if startGame.isEmpty { startGame = "Boisson offerte" }
+            if ptsOut[0].trimmingCharacters(in: .whitespaces).isEmpty {
+                ptsOut[0] = String(signupRewardPoints)
+            }
+            if labsOut[0].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                labsOut[0] = startGame
+            }
+            sanitizeEditableTierSlots(tierPoints: &ptsOut, tierLabels: &labsOut)
+            syncStartGameLabelFromFirstTier(
+                startGameRewardLabel: &startGame,
+                tierPoints: ptsOut,
+                tierLabels: labsOut
+            )
+        } else {
+            // Aucun palier enregistré : ne pas préremplir le libellé (pastille « Touchez » sur Récompenses).
+            if ptsOut[0].trimmingCharacters(in: .whitespaces).isEmpty {
+                ptsOut[0] = String(signupRewardPoints)
+            }
+            sanitizeEditableTierSlots(tierPoints: &ptsOut, tierLabels: &labsOut)
         }
-        sanitizeEditableTierSlots(tierPoints: &ptsOut, tierLabels: &labsOut)
-        syncStartGameLabelFromFirstTier(
-            startGameRewardLabel: &startGame,
-            tierPoints: ptsOut,
-            tierLabels: labsOut
-        )
         return (startGame, ptsOut, labsOut)
     }
 

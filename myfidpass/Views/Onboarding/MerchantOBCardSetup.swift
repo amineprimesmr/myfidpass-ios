@@ -70,8 +70,6 @@ enum MerchantOBCardSettingsSaver {
                 patch.stampMidRewardLabelIsExplicitNull = true
             }
             patch.stampEmoji = working.stampEmoji.isEmpty ? "cafe" : String(working.stampEmoji.prefix(32))
-            // Tampons : pas d’image de fond carte (réservée au mode points).
-            patch.cardBackgroundBase64 = ""
         } else {
             patch.pointsPerEuro = 1
             patch.pointsPerVisit = 1

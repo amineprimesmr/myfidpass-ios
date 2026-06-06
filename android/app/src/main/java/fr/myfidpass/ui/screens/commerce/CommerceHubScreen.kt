@@ -17,7 +17,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.AdminPanelSettings
-import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.Settings
@@ -63,7 +62,7 @@ import androidx.compose.ui.platform.LocalContext
 
 /**
  * Aligné sur [ProfileView] iOS : bandeau noir (identité + QR + réglages), contenu sur surface claire arrondie,
- * section « Votre commerce » puis raccourcis (réglages, stats, catégories, programme, admin).
+ * section « Votre commerce » puis raccourcis (réglages, stats, programme, admin).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -73,7 +72,6 @@ fun CommerceHubScreen(
     isAdmin: Boolean,
     onOpenSettings: () -> Unit,
     onOpenStats: () -> Unit,
-    onOpenCategories: () -> Unit,
     onOpenProgram: () -> Unit,
     onOpenFlyer: () -> Unit = onOpenProgram,
     onOpenTeam: () -> Unit = {},
@@ -232,8 +230,6 @@ fun CommerceHubScreen(
                 HubRow(Icons.Default.Settings, "Réglages & abonnement", onOpenSettings)
                 Spacer(Modifier.height(10.dp))
                 HubRow(Icons.Default.ShowChart, "Statistiques & activité", onOpenStats)
-                Spacer(Modifier.height(10.dp))
-                HubRow(Icons.Default.Category, "Catégories membres", onOpenCategories)
                 Spacer(Modifier.height(10.dp))
                 HubRow(Icons.Default.Group, "Équipe & accès staff", onOpenTeam)
                 Spacer(Modifier.height(10.dp))

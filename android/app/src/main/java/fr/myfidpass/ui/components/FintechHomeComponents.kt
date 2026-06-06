@@ -33,6 +33,7 @@ import androidx.compose.ui.unit.dp
 import fr.myfidpass.data.dto.TransactionDto
 import fr.myfidpass.ui.theme.DashboardFintechPalette
 import fr.myfidpass.ui.theme.MerchantDesignSystem
+import fr.myfidpass.util.MerchantActivityDateFormat
 import fr.myfidpass.ui.theme.FintechLightPalette
 
 @Composable
@@ -161,7 +162,7 @@ fun FintechTransactionPill(
                 color = palette.onCanvasPrimary,
                 maxLines = 1,
             )
-            transaction.createdAt?.take(16)?.let {
+            MerchantActivityDateFormat.activitySubtitle(transaction.createdAt)?.let {
                 Text(it, style = MaterialTheme.typography.labelSmall, color = palette.secondaryText)
             }
         }

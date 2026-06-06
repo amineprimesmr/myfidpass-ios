@@ -123,7 +123,7 @@ fun mergedAutomationRules(api: CampaignAutomationConfigDto?): Map<String, Campai
                 else -> null
             }
         rules[spec.id] = CampaignAutomationRuleDto(
-            enabled = existing?.enabled ?: false,
+            enabled = existing?.enabled ?: true,
             message = existing?.message?.takeIf { it.isNotBlank() } ?: defMsg,
             segment = existing?.segment,
             title = existing?.title,
@@ -137,7 +137,30 @@ fun mergedAutomationRules(api: CampaignAutomationConfigDto?): Map<String, Campai
         }
     }
     purgeRetiredWelcomeAutomationRules(rules)
+    upgradeFactoryDisabledHubRules(rules)
     return rules
+}
+
+/** Hub entier encore à l’état usine (tout désactivé + libellés par défaut) → activer le carrousel. */
+private fun upgradeFactoryDisabledHubRules(rules: MutableMap<String, CampaignAutomationRuleDto>) {
+    val hubIds = automationHubRules.map { it.id }
+    if (!hubIds.all { rules[it]?.enabled != true }) return
+    if (!hubIds.all { id ->
+            val msg = rules[id]?.message?.trim().orEmpty()
+            val def = defaultAutomationRuleMessages[id].orEmpty()
+            msg.isEmpty() || msg == def
+        }
+    ) {
+        return
+    }
+    for (id in hubIds) {
+        val def = defaultAutomationRuleMessages[id].orEmpty()
+        val row = rules[id] ?: CampaignAutomationRuleDto(enabled = true, message = def)
+        rules[id] = row.copy(
+            enabled = true,
+            message = row.message?.trim()?.takeIf { it.isNotEmpty() } ?: def,
+        )
+    }
 }
 
 fun ruleDisplayTitle(ruleId: String): String {

@@ -35,11 +35,6 @@ data class CreateBusinessResponse(
 )
 
 @Serializable
-data class UpdateMemberCategoriesRequest(
-    @SerialName("category_ids") val categoryIds: List<String>,
-)
-
-@Serializable
 data class DeviceRegisterRequest(
     @SerialName("device_token") val deviceToken: String,
     val platform: String = "android",
@@ -48,7 +43,6 @@ data class DeviceRegisterRequest(
 @Serializable
 data class NotifyClientsRequest(
     val message: String,
-    @SerialName("category_ids") val categoryIds: List<String>? = null,
 )
 
 @Serializable

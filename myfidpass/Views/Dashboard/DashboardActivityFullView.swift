@@ -93,17 +93,6 @@ struct DashboardActivityFullView: View {
         .navigationBarTitleDisplayMode(.large)
         .toolbarBackground(palette.canvas, for: .navigationBar)
         .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Nom, e-mail ou code…")
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                NavigationLink {
-                    CategoriesManagementView(context: context)
-                        .environmentObject(syncService)
-                } label: {
-                    Label("Catégories", systemImage: "folder.badge.gearshape")
-                }
-                .buttonStyle(.borderless)
-            }
-        }
         .refreshable {
             await syncService.syncAfterServerMutation()
         }

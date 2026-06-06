@@ -43,6 +43,10 @@ struct FlyerLayoutMetrics {
 
     var printSafeBottomY: CGFloat { canvasHeight * (1 - 0.034) }
     var footerStepsHeight: CGFloat { canvasHeight * 0.108 }
+    var footerBannerMaxHeight: CGFloat { canvasHeight * 0.132 }
+    var poweredByBadgeLiftFromBottom: CGFloat {
+        max(6 * designScale, canvasHeight * 0.003)
+    }
 
     func logoLayout(from state: FlyerStateDTO) -> (centerY: CGFloat, maxW: CGFloat, maxH: CGFloat) {
         let cy = min(0.22, max(0.06, state.flyerLogoCenterYFrac))

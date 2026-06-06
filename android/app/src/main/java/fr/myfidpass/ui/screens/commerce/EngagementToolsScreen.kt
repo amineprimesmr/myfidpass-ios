@@ -120,7 +120,7 @@ fun EngagementToolsScreen(
                     if (m.isEmpty()) return@OutlinedButton
                     scope.launch {
                         runCatching {
-                            repository.notifyClients(s, m, null)
+                            repository.notifyClients(s, m)
                             snackbarHostState.showSnackbar("Notification envoyée")
                         }.onFailure {
                             snackbarHostState.showSnackbar(it.message ?: "Erreur")

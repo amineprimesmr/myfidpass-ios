@@ -43,6 +43,9 @@ private final class SyncSerialExecutor {
 
 @MainActor
 final class SyncService: ObservableObject {
+    /// Instance live de l’app (pas les previews) — push silencieux `dashboard_sync` et sync au premier plan.
+    private static weak var liveInstance: SyncService?
+
     private let container: NSPersistentContainer
     /// Mise à jour profil / abonnement après chaque `GET /api/auth/me` (ex. paiement Stripe : la sync voit l’état actif avant que l’utilisateur rouvre la feuille d’abonnement).
     private weak var authService: AuthService?
@@ -73,6 +76,7 @@ final class SyncService: ObservableObject {
         self.container = container
         self.authService = authService
         self.lastSyncDate = UserDefaults.standard.object(forKey: Self.lastSyncKey) as? Date
+        Self.liveInstance = self
         sessionEndObserver = NotificationCenter.default
             .publisher(for: .myfidpassLocalSessionDidEnd)
             .receive(on: RunLoop.main)
@@ -92,9 +96,24 @@ final class SyncService: ObservableObject {
         capturedGeneration == sessionGeneration && AuthStorage.isLoggedIn
     }
 
-    /// Push silencieux serveur : désactivé volontairement en mode perf agressif.
+    /// Push silencieux serveur (`myfidpass_action=dashboard_sync`) : pull transactions / membres sans bannière.
     static func handleSilentDashboardPush(completion: @escaping (UIBackgroundFetchResult) -> Void) {
-        completion(.noData)
+        Task { @MainActor in
+            guard AuthStorage.isLoggedIn, let service = liveInstance else {
+                completion(.noData)
+                return
+            }
+            await service.syncIfNeeded(force: true)
+            completion(.newData)
+        }
+    }
+
+    /// Même logique quand l’app est déjà au premier plan (APNs reçu sans alerte).
+    static func requestDashboardSyncFromPush() {
+        Task { @MainActor in
+            guard AuthStorage.isLoggedIn, let service = liveInstance else { return }
+            await service.syncIfNeeded(force: true)
+        }
     }
 
     private static let syncThrottleInterval: TimeInterval = 45
@@ -296,7 +315,6 @@ final class SyncService: ObservableObject {
         guard syncStillOwnedByCurrentSession(syncGeneration) else { throw SyncSessionEnded.sessionEnded }
         ScanFlowSettingsCache.store(settings, for: slug)
         let stats: BusinessStatsResponse = try await APIClient.shared.request(.businessStats(slug: slug, period: nil))
-        let categoriesResponse = await fetchCategoriesOptional(slug: slug)
         guard syncStillOwnedByCurrentSession(syncGeneration) else { throw SyncSessionEnded.sessionEnded }
         updateSnapshotRemoteBackground(settings: settings, slug: slug)
 
@@ -313,7 +331,6 @@ final class SyncService: ObservableObject {
             stats: stats,
             members: members,
             transactions: transactions,
-            categories: categoriesResponse,
             skipTemplateOverwrite: skipTemplateOverwrite,
             notifyUI: true
         )
@@ -406,21 +423,12 @@ final class SyncService: ObservableObject {
         return BusinessTransactionsResponse(transactions: collected, total: serverTotal ?? collected.count)
     }
 
-    private func fetchCategoriesOptional(slug: String) async -> BusinessCategoriesResponse? {
-        do {
-            return try await APIClient.shared.request(.businessCategories(slug: slug)) as BusinessCategoriesResponse
-        } catch {
-            return nil
-        }
-    }
-
     private func mergeOnBackground(
         slug: String,
         settings: BusinessSettingsResponse,
         stats: BusinessStatsResponse,
         members: BusinessMembersResponse,
         transactions: BusinessTransactionsResponse,
-        categories: BusinessCategoriesResponse?,
         skipTemplateOverwrite: Bool,
         notifyUI: Bool = true
     ) async throws {
@@ -444,7 +452,6 @@ final class SyncService: ObservableObject {
                         stats: stats,
                         members: members,
                         transactions: transactions,
-                        categories: categories,
                         skipTemplateOverwrite: skipTemplateOverwrite,
                         lastLogoUploadKey: logoKey,
                         lastLogoIconUploadKey: logoIconKey,
@@ -624,7 +631,6 @@ fileprivate enum SyncCoreDataMerge {
         stats: BusinessStatsResponse,
         members: BusinessMembersResponse,
         transactions: BusinessTransactionsResponse,
-        categories: BusinessCategoriesResponse?,
         skipTemplateOverwrite: Bool,
         lastLogoUploadKey: String,
         lastLogoIconUploadKey: String,
@@ -638,7 +644,6 @@ fileprivate enum SyncCoreDataMerge {
 
         let template = findOrCreateCardTemplate(business: business, context: context)
         let existingCardsByMemberId = existingCardsIndex(for: template, context: context)
-        let existingCategoriesByServerId = existingCategoriesIndex(for: template, context: context)
         var txnStampsByKey = existingTxnStampIndex(for: template, context: context)
         MerchantLogoAssetCache.applyMerchantLogoTimestamps(from: settings)
         if !skipTemplateOverwrite {
@@ -672,22 +677,6 @@ fileprivate enum SyncCoreDataMerge {
             template.updatedAt = Date()
         }
 
-        var categoryByServerId = existingCategoriesByServerId
-        if let categories = categories {
-            for (index, dto) in categories.categories.enumerated() {
-                let cat = categoryByServerId[dto.id] ?? {
-                    let created = MemberCategory(context: context)
-                    created.serverId = dto.id
-                    created.template = template
-                    categoryByServerId[dto.id] = created
-                    return created
-                }()
-                cat.name = dto.name
-                cat.colorHex = dto.colorHex
-                cat.sortOrder = Int32(dto.sortOrder ?? index)
-            }
-        }
-
         var cardsByMemberId = existingCardsByMemberId
         for m in members.members {
             let card = cardsByMemberId[m.id] ?? {
@@ -713,11 +702,6 @@ fileprivate enum SyncCoreDataMerge {
                 }
             }
             card.updatedAt = parseISO8601(m.lastVisitAt) ?? card.updatedAt
-            // Vague 2 de sync passe `categories: nil` : ne pas effacer les catégories déjà fusionnées en vague 1.
-            if let categoryIds = m.categoryIds, categories != nil {
-                let cats = categoryIds.compactMap { categoryByServerId[$0] }
-                card.categories = NSSet(array: cats)
-            }
         }
 
         deduplicateClientCards(for: template, context: context)
@@ -891,14 +875,6 @@ fileprivate enum SyncCoreDataMerge {
             for stamp in stamps { stamp.clientCard = target }
         }
 
-        let targetCats = (target.categories?.allObjects as? [MemberCategory]) ?? []
-        let sourceCats = (source.categories?.allObjects as? [MemberCategory]) ?? []
-        if !sourceCats.isEmpty {
-            var byId = Set(targetCats.map(\.objectID))
-            var merged = targetCats
-            for cat in sourceCats where byId.insert(cat.objectID).inserted { merged.append(cat) }
-            target.categories = NSSet(array: merged)
-        }
         _ = context
     }
 
@@ -988,19 +964,6 @@ fileprivate enum SyncCoreDataMerge {
             } else {
                 map[memberId] = card
             }
-        }
-        return map
-    }
-
-    private static func existingCategoriesIndex(for template: CardTemplate, context: NSManagedObjectContext) -> [String: MemberCategory] {
-        let request = MemberCategory.fetchRequest()
-        request.predicate = NSPredicate(format: "template == %@", template)
-        let categories = (try? context.fetch(request)) ?? []
-        var map: [String: MemberCategory] = [:]
-        map.reserveCapacity(categories.count)
-        for category in categories {
-            guard let sid = category.serverId?.trimmingCharacters(in: .whitespacesAndNewlines), !sid.isEmpty else { continue }
-            map[sid] = category
         }
         return map
     }

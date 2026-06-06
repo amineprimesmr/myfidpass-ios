@@ -18,6 +18,7 @@ struct CommerceStatisticsDashboardView: View {
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @EnvironmentObject private var authService: AuthService
     @EnvironmentObject private var tabRouter: MainTabRouter
+    @Environment(\.merchantTabIsActive) private var merchantTabIsActive
     @ObservedObject var vm: MerchantStatsIndicatorsViewModel
     /// Ordre : index 0 = mois le plus récent, … 5 = M-5.
     let statsMonthKeys: [String]
@@ -39,6 +40,7 @@ struct CommerceStatisticsDashboardView: View {
     @State private var cachedDetailPresentation: CommerceStatisticsPresentation = CommerceStatisticsDataBuilder.build(stats: nil, evolution: [], panierRepereEuro: nil)
     /// Campagnes de notification — liste dérivée coûteuse (merge 3 sources), mise en cache.
     @State private var cachedNotificationCampaigns: [NotificationCampaignInsightDTO] = []
+    @State private var statsScrollToTopTick = 0
 
     /// Espace sous le titre du carrousel KPI, entre carrousel et points (inchangé, lisible).
     private let kpiClusterVerticalSpacing: CGFloat = 8
@@ -300,29 +302,39 @@ struct CommerceStatisticsDashboardView: View {
                     .ignoresSafeArea(edges: [.horizontal, .bottom])
             }
 
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0, pinnedViews: []) {
-                    if glassOverlayMode {
-                        ZStack(alignment: .top) {
-                            Color.clear
-                                .contentShape(Rectangle())
-                                .frame(maxWidth: .infinity)
-                                .frame(minHeight: statsGlassTapBackdropMinHeight)
-                                .onTapGesture { onClose() }
-                                .accessibilityHidden(true)
+            ScrollViewReader { scrollProxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        if glassOverlayMode {
+                            ZStack(alignment: .top) {
+                                Color.clear
+                                    .contentShape(Rectangle())
+                                    .frame(maxWidth: .infinity)
+                                    .frame(minHeight: statsGlassTapBackdropMinHeight)
+                                    .onTapGesture { onClose() }
+                                    .accessibilityHidden(true)
+                                statisticsScrollVStack
+                                    .zIndex(1)
+                            }
+                        } else {
                             statisticsScrollVStack
-                                .zIndex(1)
                         }
-                    } else {
-                        statisticsScrollVStack
+                    }
+                    .id("commerce-stats-scroll-root")
+                }
+                .defaultScrollAnchor(.top)
+                .scrollContentBackground(.hidden)
+                .scrollIndicators(.hidden)
+                .scrollBounceBehavior(.basedOnSize)
+                .refreshable {
+                    await loadMonthForCurrentSelection(forceRefresh: true)
+                }
+                .onChange(of: statsScrollToTopTick) { _, _ in
+                    Task { @MainActor in
+                        await Task.yield()
+                        scrollStatsToTop(with: scrollProxy, animated: false)
                     }
                 }
-            }
-            .scrollContentBackground(.hidden)
-            .scrollIndicators(.hidden)
-            .scrollBounceBehavior(.basedOnSize)
-            .refreshable {
-                await loadMonthForCurrentSelection(forceRefresh: true)
             }
 
             if showBlockingStatsLoading {
@@ -349,16 +361,20 @@ struct CommerceStatisticsDashboardView: View {
             tabRouter.isCommerceStatsAtRoot = true
         }
         .onAppear {
+            vm.syncLoyaltyProgramTypeFromLocalSources()
             refreshMonthCarouselCachesOnly()
             refreshDetailCachesOnly()
             syncCommerceStatsSubscribePillVisibility()
-            showDeferredDetailSections = false
-            Task { @MainActor in
-                await Task.yield()
-                showDeferredDetailSections = true
-                CommerceStatsRuntimeSession.hasRevealedEmbeddedDetailSections = true
-            }
+            revealDeferredDetailSectionsIfNeeded()
+            resetStatsScrollToTop(animated: false)
             Task { await refreshSocialMissionsConnectSubtitle() }
+        }
+        .onChange(of: merchantTabIsActive) { _, active in
+            guard active, isEmbeddedCommerceStats else { return }
+            vm.syncLoyaltyProgramTypeFromLocalSources()
+            refreshCachedPresentations()
+            revealDeferredDetailSectionsIfNeeded()
+            resetStatsScrollToTop(animated: false)
         }
         .onChange(of: vm.lastSuccessfullyLoadedPeriod) { _, newPeriod in
             let p = newPeriod?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -418,6 +434,16 @@ struct CommerceStatisticsDashboardView: View {
         .onChange(of: vm.loyaltyProgramType) { _, _ in
             refreshCachedPresentations()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .myfidpassCardPreviewDisplayDidChange)) { _ in
+            vm.syncLoyaltyProgramTypeFromLocalSources()
+            refreshCachedPresentations()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .myfidpassCommerceStatsTabDidBecomeSelected)) { _ in
+            vm.syncLoyaltyProgramTypeFromLocalSources()
+            refreshCachedPresentations()
+            revealDeferredDetailSectionsIfNeeded()
+            resetStatsScrollToTop(animated: false)
+        }
         .onChange(of: vm.configuredSocialHandles) { _, _ in
             refreshCachedPresentations()
         }
@@ -450,6 +476,41 @@ struct CommerceStatisticsDashboardView: View {
         tabRouter.isCommerceStatsAtRoot = !accountingPackPresented
             && !panierReperePopupPresented
             && !socialMissionsSheetPresented
+    }
+
+    /// Onglet Commerce : afficher tout de suite (pas de skeleton + yield qui décale le layout).
+    private func revealDeferredDetailSectionsIfNeeded() {
+        if isEmbeddedCommerceStats || CommerceStatsRuntimeSession.hasRevealedEmbeddedDetailSections {
+            showDeferredDetailSections = true
+            CommerceStatsRuntimeSession.hasRevealedEmbeddedDetailSections = true
+            return
+        }
+        showDeferredDetailSections = false
+        Task { @MainActor in
+            await Task.yield()
+            showDeferredDetailSections = true
+            CommerceStatsRuntimeSession.hasRevealedEmbeddedDetailSections = true
+        }
+    }
+
+    private func resetStatsScrollToTop(animated: Bool) {
+        if animated {
+            withAnimation(MerchantMotion.tabSwitch) {
+                statsScrollToTopTick &+= 1
+            }
+        } else {
+            statsScrollToTopTick &+= 1
+        }
+    }
+
+    private func scrollStatsToTop(with proxy: ScrollViewProxy, animated: Bool) {
+        if animated {
+            withAnimation(MerchantMotion.tabSwitch) {
+                proxy.scrollTo("commerce-stats-scroll-root", anchor: .top)
+            }
+        } else {
+            proxy.scrollTo("commerce-stats-scroll-root", anchor: .top)
+        }
     }
 
     /// Contenu scrollé (KPI, sections) — dupliqué seulement en structure si/pas mode verre.

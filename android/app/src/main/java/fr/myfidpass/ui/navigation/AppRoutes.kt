@@ -15,7 +15,6 @@ object AppRoutes {
     const val Scanner = "scanner"
     const val MyCard = "my_card"
     const val CommerceStats = "commerce_stats"
-    const val Categories = "categories"
     const val SettingsRoot = "settings"
     const val SettingsNotifications = "settings_notifications"
     const val SettingsScan = "settings_scan"

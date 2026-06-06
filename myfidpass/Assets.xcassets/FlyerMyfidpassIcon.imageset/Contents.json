@@ -1,0 +1,13 @@
+{
+  "images": [
+    {
+      "filename": "icone.png",
+      "idiom": "universal",
+      "scale": "1x"
+    }
+  ],
+  "info": {
+    "author": "sync-flyer-assets",
+    "version": 1
+  }
+}

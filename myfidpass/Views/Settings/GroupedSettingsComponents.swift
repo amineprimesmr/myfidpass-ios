@@ -197,6 +197,64 @@ struct GroupedSettingsInfoRow: View {
     }
 }
 
+/// Champ numérique éditable (tap + clavier) — remplace le Stepper +/- pour les plafonds caisse.
+struct GroupedSettingsEditableIntRow: View {
+    let title: String
+    @Binding var value: Int
+    let range: ClosedRange<Int>
+    var zeroLabel: String = "Illimité"
+
+    @State private var draft: String = ""
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .font(.body.weight(.medium))
+                .foregroundStyle(Color(UIColor.label))
+            TextField("", text: $draft, prompt: Text(zeroLabel).foregroundStyle(Color(UIColor.secondaryLabel)))
+                .keyboardType(.numberPad)
+                .focused($isFocused)
+                .multilineTextAlignment(.trailing)
+                .font(.body.monospacedDigit())
+                .foregroundStyle(Color(UIColor.label))
+                .padding(.horizontal, 14)
+                .padding(.vertical, 11)
+                .background(Color(UIColor.secondarySystemFill), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .onAppear { syncDraftFromValue() }
+                .onChange(of: value) { _, _ in
+                    if !isFocused { syncDraftFromValue() }
+                }
+                .onChange(of: draft) { _, new in
+                    let digits = new.filter(\.isNumber)
+                    if digits != new { draft = digits }
+                    guard !digits.isEmpty, let parsed = Int(digits) else { return }
+                    let clamped = min(max(parsed, range.lowerBound), range.upperBound)
+                    if clamped != value { value = clamped }
+                    if parsed != clamped { draft = String(clamped) }
+                }
+                .onChange(of: isFocused) { _, focused in
+                    if !focused { commitDraft() }
+                }
+        }
+        .padding(.horizontal, GroupedSettingsMetrics.horizontalPadding)
+        .padding(.vertical, GroupedSettingsMetrics.rowVerticalPadding)
+    }
+
+    private func syncDraftFromValue() {
+        draft = value == 0 ? "" : String(value)
+    }
+
+    private func commitDraft() {
+        if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            value = 0
+        } else if let parsed = Int(draft.filter(\.isNumber)) {
+            value = min(max(parsed, range.lowerBound), range.upperBound)
+        }
+        syncDraftFromValue()
+    }
+}
+
 /// Ligne destructive (suppression de compte).
 struct GroupedSettingsDestructiveRow: View {
     let title: String

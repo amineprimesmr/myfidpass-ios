@@ -15,7 +15,6 @@ struct MemberDetailView: View {
     @EnvironmentObject private var syncService: SyncService
     @EnvironmentObject private var dataService: DataService
     @Environment(\.dismiss) private var dismiss
-    @State private var showCategorySheet = false
     /// Même UX plein écran que après scan QR (`AddPointsAmountSheet`).
     @State private var memberPointsAmountFlow: MemberPointsAmountFlow?
     @State private var isMemberPointsAmountSubmitting = false
@@ -41,16 +40,6 @@ struct MemberDetailView: View {
         let c = card.clientIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return c.isEmpty ? nil : c
     }
-    private var categories: [MemberCategory] {
-        guard let t = template else { return [] }
-        return dataService.categories(for: t)
-    }
-    private var memberCategoryNames: [String] {
-        (card.categories?.allObjects as? [MemberCategory])?
-            .compactMap(\.name)
-            .sorted() ?? []
-    }
-
     init(card: ClientCard, context: NSManagedObjectContext) {
         _card = ObservedObject(wrappedValue: card)
         self.context = context
@@ -134,21 +123,7 @@ struct MemberDetailView: View {
                 }
             }
 
-            if !memberCategoryNames.isEmpty {
-                Section("Catégories") {
-                    ForEach(memberCategoryNames, id: \.self) { name in
-                        Text(name)
-                            .font(AppTheme.Fonts.body())
-                    }
-                }
-            }
-
             Section {
-                Button {
-                    showCategorySheet = true
-                } label: {
-                    Label("Catégoriser", systemImage: "folder.badge.gearshape")
-                }
                 Button {
                     prepareMemberPointsFlow(mode: .credit)
                 } label: {
@@ -255,14 +230,6 @@ struct MemberDetailView: View {
         .listStyle(.insetGrouped)
         .navigationTitle(card.clientDisplayName ?? "Membre")
         .navigationBarTitleDisplayMode(.inline)
-        .sheet(isPresented: $showCategorySheet) {
-            MemberCategoriesSheet(card: card, context: context, categories: categories)
-                .environmentObject(syncService)
-                .environmentObject(dataService)
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.hidden)
-                .modifier(LiquidGlassSheetModifier())
-        }
         .fullScreenCover(item: $memberPointsAmountFlow) { flow in
             memberPointsAmountSheet(for: flow)
         }
@@ -308,6 +275,7 @@ struct MemberDetailView: View {
             memberPoints: flow.data.memberPoints,
             rewardTiers: flow.data.rewardTiers,
             pointsMinAmountEur: flow.data.pointsMinAmountEur,
+            scanMaxPointsPerTransaction: flow.data.scanMaxPointsPerTransaction,
             isSubmitting: $isMemberPointsAmountSubmitting,
             receiptCoordinator: receiptCoordinator,
             onDismiss: { memberPointsAmountFlow = nil },
@@ -400,7 +368,8 @@ struct MemberDetailView: View {
                     pointsPerEuro: settings.pointsPerEuro ?? 1,
                     memberPoints: Int(card.stampsCount),
                     rewardTiers: rewardTiers,
-                    pointsMinAmountEur: settings.pointsMinAmountEur
+                    pointsMinAmountEur: settings.pointsMinAmountEur,
+                    scanMaxPointsPerTransaction: settings.scanMaxPointsPerTransaction
                 )
                 await MainActor.run {
                     memberPointsAmountFlow = MemberPointsAmountFlow(data: data, mode: mode)
@@ -722,120 +691,6 @@ private func performMemberHistoryAndDashboardSync(
         dataService.invalidateActivityPreviewCache()
     }
     await syncService.syncAfterServerMutation()
-}
-
-// MARK: - Sheet catégories (cocher / décocher pour ce membre)
-
-struct MemberCategoriesSheet: View {
-    @ObservedObject var card: ClientCard
-    let context: NSManagedObjectContext
-    let categories: [MemberCategory]
-    @Environment(\.dismiss) private var dismiss
-    @EnvironmentObject private var syncService: SyncService
-    @EnvironmentObject private var dataService: DataService
-    @State private var selectedIds: Set<String> = []
-    @State private var isSaving = false
-
-    var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                HStack(spacing: 10) {
-                    if #available(iOS 26.0, *) {
-                        Button("Annuler") { dismiss() }
-                            .buttonStyle(.glass(.regular))
-                            .buttonBorderShape(.capsule)
-                            .controlSize(.regular)
-                    } else {
-                        Button("Annuler") { dismiss() }
-                            .font(.subheadline.weight(.semibold))
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 8)
-                            .background(.ultraThinMaterial, in: Capsule())
-                            .overlay(Capsule().strokeBorder(Color.white.opacity(0.28), lineWidth: 1))
-                    }
-                    Spacer(minLength: 8)
-                    Text("Catégories")
-                        .font(.headline.weight(.semibold))
-                    Spacer(minLength: 8)
-                    if #available(iOS 26.0, *) {
-                        Button("Enregistrer") {
-                            saveCategories()
-                        }
-                        .disabled(isSaving)
-                        .buttonStyle(.glass(.regular))
-                        .buttonBorderShape(.capsule)
-                        .controlSize(.regular)
-                        .tint(AppTheme.Colors.primary)
-                    } else {
-                        Button("Enregistrer") {
-                            saveCategories()
-                        }
-                        .disabled(isSaving)
-                        .font(.subheadline.weight(.semibold))
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
-                        .background(.ultraThinMaterial, in: Capsule())
-                        .overlay(Capsule().strokeBorder(Color.white.opacity(0.28), lineWidth: 1))
-                    }
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-
-                List {
-                    ForEach(categories, id: \.serverId) { cat in
-                        let sid = cat.serverId ?? ""
-                        Toggle(isOn: Binding(
-                            get: { selectedIds.contains(sid) },
-                            set: { selectedIds = $0 ? selectedIds.union([sid]) : selectedIds.subtracting([sid]) }
-                        )) {
-                            HStack(spacing: 8) {
-                                if let hex = cat.colorHex, !hex.isEmpty {
-                                    Circle()
-                                        .fill(Color(hex: hex))
-                                        .frame(width: 12, height: 12)
-                                }
-                                Text(cat.name ?? "")
-                                    .font(AppTheme.Fonts.body())
-                            }
-                        }
-                        .disabled(isSaving)
-                    }
-                }
-            }
-            .sheetHideNavigationBar()
-            .onAppear {
-                selectedIds = Set((card.categories?.allObjects as? [MemberCategory])?.compactMap(\.serverId) ?? [])
-            }
-        }
-    }
-
-    private func saveCategories() {
-        let memberId = (card.qrCodeValue?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 }
-            ?? card.clientIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let slug = AuthStorage.currentBusinessSlug,
-              let memberId, !memberId.isEmpty,
-              let template = card.template else { return }
-        isSaving = true
-        let ids = Array(selectedIds)
-        Task {
-            do {
-                _ = try await APIClient.shared.request(.updateMemberCategories(slug: slug, memberId: memberId, categoryIds: ids)) as EmptyResponse
-                let newCats = ids.compactMap { dataService.category(byServerId: $0, template: template) }
-                await MainActor.run {
-                    card.categories = NSSet(array: newCats)
-                    try? context.save()
-                    dismiss()
-                }
-                await performMemberHistoryAndDashboardSync(
-                    memberId: memberId,
-                    syncService: syncService,
-                    dataService: dataService
-                )
-            } catch {
-                await MainActor.run { isSaving = false }
-            }
-        }
-    }
 }
 
 /// Réponse POST .../members/:id/points ou .../points/remove

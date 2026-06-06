@@ -1019,8 +1019,6 @@ private struct MemberAPIRow: Decodable {
     let points: Int?
     let createdAt: String?
     let lastVisitAt: String?
-    let categoryIds: [String]?
-
     func toMemberDTO() -> MemberDTO? {
         let trimmed = (id ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
@@ -1030,8 +1028,7 @@ private struct MemberAPIRow: Decodable {
             email: email,
             points: points,
             createdAt: createdAt,
-            lastVisitAt: lastVisitAt,
-            categoryIds: categoryIds
+            lastVisitAt: lastVisitAt
         )
     }
 }
@@ -1043,8 +1040,6 @@ struct MemberDTO: Decodable {
     let points: Int?
     let createdAt: String?
     let lastVisitAt: String?
-    /// Identifiants des catégories auxquelles le membre appartient (sync backend).
-    let categoryIds: [String]?
 
     /// Utilisé par le décodage large des listes ; le décodage JSON direct d’un seul `MemberDTO` reste le synthétiseur.
     fileprivate init(
@@ -1053,8 +1048,7 @@ struct MemberDTO: Decodable {
         email: String?,
         points: Int?,
         createdAt: String?,
-        lastVisitAt: String?,
-        categoryIds: [String]?
+        lastVisitAt: String?
     ) {
         self.id = id
         self.name = name
@@ -1062,7 +1056,6 @@ struct MemberDTO: Decodable {
         self.points = points
         self.createdAt = createdAt
         self.lastVisitAt = lastVisitAt
-        self.categoryIds = categoryIds
     }
 }
 
@@ -1168,19 +1161,6 @@ struct RedeemResponse: Decodable {
     let previousPoints: Int?
     let pointsDeducted: Int?
     let message: String?
-}
-
-// MARK: - Catégories de membres (GET .../dashboard/categories)
-
-struct BusinessCategoriesResponse: Decodable {
-    let categories: [CategoryDTO]
-}
-
-struct CategoryDTO: Decodable {
-    let id: String
-    let name: String
-    let colorHex: String?
-    let sortOrder: Int?
 }
 
 // MARK: - GET/PUT .../dashboard/flyer (flyer QR, sync SaaS)

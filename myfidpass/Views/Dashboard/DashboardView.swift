@@ -283,6 +283,14 @@ struct DashboardView: View {
         dataService.dashboardActivityPreview(limit: 8, includeNewCardEvents: false)
     }
 
+    /// Relance le polling accueil quand onglet actif, retour à la racine navigation, ou retour premier plan.
+    private var homeActivityLiveSyncTaskKey: String {
+        let slug = currentBusinessSlug ?? ""
+        return "\(slug)|\(merchantTabIsActive)|\(navigationPath.count)|\(scenePhase)"
+    }
+
+    private static let homeActivityPollIntervalSeconds: UInt64 = 25
+
     private var currentBusinessSlug: String? {
         let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return slug.isEmpty ? nil : slug
@@ -555,19 +563,17 @@ struct DashboardView: View {
             && !showHomeFlyerHubFullScreen
     }
 
-    /// Ferme le menu latéral puis exécute l’action une fois l’animation terminée (évite les conflits fullScreenCover / sheet).
+    /// Ferme le menu latéral puis exécute l’action — le fullScreenCover recouvre la sidebar : pas d’attente animation.
     private func runAfterHomeSidebarDismisses(_ action: @escaping () -> Void) {
-        let sidebarWasOpen = isHomeSidebarExpanded
-        if sidebarWasOpen {
+        if isHomeSidebarExpanded {
             homeSidebarPresentationPending = true
             withAnimation(MerchantMotion.sidebar) {
                 isHomeSidebarExpanded = false
             }
         }
-        let delay = sidebarWasOpen ? 0.26 : 0
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+        action()
+        DispatchQueue.main.async {
             homeSidebarPresentationPending = false
-            action()
         }
     }
 
@@ -878,11 +884,29 @@ struct DashboardView: View {
     }
 
     private var homeFlyerHubLiveSnapshot: CommerceFlyerLiveSnapshot? {
-        guard homeFlyerHubOpenedForEdit else { return nil }
+        if homeFlyerHubOpenedForEdit {
+            return CommerceFlyerLiveSnapshot(
+                bootstrapPreviewB64: homeFlyerBootstrapB64,
+                customBgDataURL: homeFlyerCustomBgDataURL,
+                shareURL: homeFlyerPublicPageURLString
+            )
+        }
+        if let b64 = homeFlyerBootstrapB64?.trimmingCharacters(in: .whitespacesAndNewlines), !b64.isEmpty {
+            return CommerceFlyerLiveSnapshot(
+                bootstrapPreviewB64: b64,
+                customBgDataURL: homeFlyerCustomBgDataURL,
+                shareURL: homeFlyerPublicPageURLString
+            )
+        }
+        guard let slug = currentBusinessSlug,
+              let cached = CommerceFlyerStateCache.load(slug: slug),
+              let b64 = cached.bootstrapPreviewB64?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !b64.isEmpty
+        else { return nil }
         return CommerceFlyerLiveSnapshot(
-            bootstrapPreviewB64: homeFlyerBootstrapB64,
-            customBgDataURL: homeFlyerCustomBgDataURL,
-            shareURL: homeFlyerPublicPageURLString
+            bootstrapPreviewB64: b64,
+            customBgDataURL: cached.customBgDataURL,
+            shareURL: cached.shareURL
         )
     }
 
@@ -896,6 +920,7 @@ struct DashboardView: View {
             memberPoints: data.memberPoints,
             rewardTiers: data.rewardTiers,
             pointsMinAmountEur: data.pointsMinAmountEur,
+            scanMaxPointsPerTransaction: data.scanMaxPointsPerTransaction,
             isSubmitting: $isScanAmountSubmitting,
             receiptCoordinator: receiptCoordinator,
             onDismiss: { scanResultSheet = nil },
@@ -1398,7 +1423,8 @@ struct DashboardView: View {
     }
 
     private var fintechTransactionsSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        let _ = dataService.updateTrigger
+        return VStack(alignment: .leading, spacing: 12) {
             FintechTransactionsSectionHeader(
                 palette: palette,
                 onSeeAll: nil,
@@ -1431,12 +1457,24 @@ struct DashboardView: View {
                             FintechTransactionRow(entry: entry, palette: palette, isPointsProgram: homeProgramIsPoints)
                         }
                         .buttonStyle(MerchantPressableButtonStyle(scalePressed: 0.98, opacityPressed: 0.94))
-                        .accessibilityLabel("Ouvrir la fiche de \(entry.clientName)")
+                        .accessibilityLabel("\(entry.clientName), \(entry.eventTitle)")
+                        .accessibilityHint("Ouvre la fiche membre")
                     }
                 }
             }
         }
         .padding(.horizontal, DashboardHomeLayoutMetrics.transactionsSectionExtraHorizontal)
+        .task(id: homeActivityLiveSyncTaskKey) {
+            guard merchantTabIsActive, navigationPath.isEmpty, scenePhase == .active else { return }
+            guard currentBusinessSlug != nil else { return }
+            await syncService.syncIfNeeded()
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(Self.homeActivityPollIntervalSeconds))
+                guard !Task.isCancelled else { return }
+                guard merchantTabIsActive, navigationPath.isEmpty, scenePhase == .active else { return }
+                await syncService.syncIfNeeded()
+            }
+        }
     }
 
     @ViewBuilder
@@ -1713,7 +1751,8 @@ struct DashboardView: View {
                         pointsPerEuro: pointsPerEuro,
                         memberPoints: lookup.member.points,
                         rewardTiers: rewardTiers,
-                        pointsMinAmountEur: settings.pointsMinAmountEur
+                        pointsMinAmountEur: settings.pointsMinAmountEur,
+                        scanMaxPointsPerTransaction: settings.scanMaxPointsPerTransaction
                     )
                     await MainActor.run {
                         var tx = Transaction()

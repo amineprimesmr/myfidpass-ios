@@ -68,7 +68,7 @@ struct MainTabView: View {
         .onChange(of: tabRouter.selectedTab) { oldValue, newValue in
             guard oldValue != newValue else { return }
             MerchantTabSwitchHaptic.impact()
-            if !authService.usesFullMerchantTabLayout, newValue == 2 {
+            if authService.usesFullMerchantTabLayout, newValue == 2 {
                 NotificationCenter.default.post(name: .myfidpassCommerceStatsTabDidBecomeSelected, object: nil)
             }
         }

@@ -8,7 +8,6 @@ import fr.myfidpass.data.dto.AdminEventsListResponse
 import fr.myfidpass.data.dto.AdminOverviewResponse
 import fr.myfidpass.data.dto.AdminUsersListResponse
 import fr.myfidpass.data.dto.AppleAuthRequest
-import fr.myfidpass.data.dto.BusinessCategoriesResponse
 import fr.myfidpass.data.dto.BusinessMembersResponse
 import fr.myfidpass.data.dto.BusinessSettingsResponse
 import fr.myfidpass.data.dto.BusinessStatsResponse
@@ -25,7 +24,6 @@ import fr.myfidpass.data.dto.CreateBusinessRequest
 import fr.myfidpass.data.dto.CreateBusinessResponse
 import fr.myfidpass.data.dto.CheckoutUrlResponse
 import fr.myfidpass.data.dto.DashboardGamesResponse
-import fr.myfidpass.data.dto.CreateCategoryRequest
 import fr.myfidpass.data.dto.CreateMemberRequest
 import fr.myfidpass.data.dto.CreateMemberResponse
 import fr.myfidpass.data.dto.CreditMemberRequest
@@ -79,8 +77,6 @@ import fr.myfidpass.data.dto.RewardRedeemScanRequest
 import fr.myfidpass.data.dto.RewardRedeemScanResponse
 import fr.myfidpass.data.dto.ScanRequest
 import fr.myfidpass.data.dto.ScanResponse
-import fr.myfidpass.data.dto.UpdateCategoryRequest
-import fr.myfidpass.data.dto.UpdateMemberCategoriesRequest
 import kotlinx.serialization.json.JsonObject
 import okhttp3.ResponseBody
 import retrofit2.http.Body
@@ -231,35 +227,6 @@ interface MyfidpassApi {
 
     @GET("/api/businesses/{slug}/dashboard/settings")
     suspend fun businessSettings(@Path("slug") slug: String): BusinessSettingsResponse
-
-    @GET("/api/businesses/{slug}/dashboard/categories")
-    suspend fun businessCategories(@Path("slug") slug: String): BusinessCategoriesResponse
-
-    @POST("/api/businesses/{slug}/dashboard/categories")
-    suspend fun createCategory(
-        @Path("slug") slug: String,
-        @Body body: CreateCategoryRequest,
-    ): JsonObject
-
-    @PATCH("/api/businesses/{slug}/dashboard/categories/{categoryId}")
-    suspend fun updateCategory(
-        @Path("slug") slug: String,
-        @Path("categoryId") categoryId: String,
-        @Body body: UpdateCategoryRequest,
-    ): JsonObject
-
-    @DELETE("/api/businesses/{slug}/dashboard/categories/{categoryId}")
-    suspend fun deleteCategory(
-        @Path("slug") slug: String,
-        @Path("categoryId") categoryId: String,
-    )
-
-    @PATCH("/api/businesses/{slug}/dashboard/members/{memberId}/categories")
-    suspend fun updateMemberCategories(
-        @Path("slug") slug: String,
-        @Path("memberId") memberId: String,
-        @Body body: UpdateMemberCategoriesRequest,
-    ): JsonObject
 
     @POST("/api/businesses/{slug}/dashboard/members/delete-all")
     suspend fun deleteAllDashboardMembers(

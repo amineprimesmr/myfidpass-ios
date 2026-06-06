@@ -67,6 +67,7 @@ struct MerchantStatisticsDashboardScreen: View {
         .toolbarBackground(.hidden, for: .navigationBar)
         .modifier(MerchantStatsTabBarVisibilityModifier(hidesTabBar: hidesTabBar))
         .task(id: AuthStorage.currentBusinessSlug) {
+            vm.syncLoyaltyProgramTypeFromLocalSources()
             guard authService.isPlatformAdmin else { return }
             let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             guard !slug.isEmpty else { return }

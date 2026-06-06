@@ -185,6 +185,18 @@ final class MerchantStatsIndicatorsViewModel: ObservableObject {
         configuredSocialHandles = handles
     }
 
+    /// Met à jour `loyaltyProgramType` depuis le cache local (settings / snapshot carte) — sans attendre le GET stats.
+    func syncLoyaltyProgramTypeFromLocalSources() {
+        guard let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines), !slug.isEmpty else { return }
+        let fromSettings = ScanFlowSettingsCache.cached(for: slug)?.programType
+        let fromSnapshot = CardPreviewDisplaySnapshotStore.load(slug: slug)?.programType
+        let raw = (fromSettings ?? fromSnapshot ?? loyaltyProgramType)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized = CommerceStatsProgramKind.normalized(raw)
+        guard normalized != loyaltyProgramType else { return }
+        loyaltyProgramType = normalized
+    }
+
     private func normalizedMonthlyAudience(from s: BusinessStatsResponse) -> (members: Int, active: Int, inactive30: Int)? {
         let members = max(0, s.membersCount ?? 0)
         guard members > 0 else { return nil }
@@ -205,6 +217,7 @@ final class MerchantStatsIndicatorsViewModel: ObservableObject {
     /// Hydrate la mémoire depuis le cache disque pour tous les mois du carrousel, puis le mois affiché.
     func prepareMonthNavigation(slug: String, allMonthKeys: [String], focusPeriod: String) {
         guard !slug.isEmpty else { return }
+        syncLoyaltyProgramTypeFromLocalSources()
         for key in allMonthKeys where monthSnapshots[key] == nil {
             if let c = MerchantStatisticsDiskCache.load(slug: slug, period: key) {
                 monthSnapshots[key] = MonthStatsSnapshot(
@@ -231,6 +244,8 @@ final class MerchantStatsIndicatorsViewModel: ObservableObject {
             errorMessage = "Aucun commerce sélectionné."
             return
         }
+
+        syncLoyaltyProgramTypeFromLocalSources()
 
         // Cache mémoire partagé process (écran stats recréé) avant disque.
         if monthSnapshots[period] == nil,

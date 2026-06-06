@@ -144,6 +144,16 @@ fun ScanSecuritySettingsScreen(
                 label = { Text("Points max par opération") },
                 modifier = Modifier.fillMaxWidth(),
             )
+            if ((maxPasses.toIntOrNull() ?: 0) == MerchantScanBenchAccess.BENCH_MAX_PASSES_PER_DAY)
+                && ((maxPoints.toIntOrNull() ?: 0) == MerchantScanBenchAccess.BENCH_MAX_POINTS_PER_OPERATION)
+            ) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Combinaison 102 / 102 : accès app sans abonnement (mode bench).",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             Spacer(Modifier.height(16.dp))
             Row(
                 Modifier.fillMaxWidth(),

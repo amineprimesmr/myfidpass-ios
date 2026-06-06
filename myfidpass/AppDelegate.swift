@@ -99,6 +99,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     ) {
         let userInfo = notification.request.content.userInfo
         if let action = userInfo["myfidpass_action"] as? String, action == "dashboard_sync" {
+            SyncService.requestDashboardSyncFromPush()
             completionHandler([])
             return
         }

@@ -290,14 +290,12 @@ struct MatchPredictionsResultResponse: Decodable {
 struct NotificationSendPayload: Encodable {
     let title: String?
     let message: String
-    let categoryIds: [String]?
     let segment: String?
     /// `true` : n’envoyer le PassKit qu’au commerçant (même compte), pas aux autres membres.
     var testSelfOnly: Bool = false
 
     enum CodingKeys: String, CodingKey {
         case title, message, segment
-        case categoryIds = "category_ids"
         case testSelfOnly = "test_self_only"
     }
 }

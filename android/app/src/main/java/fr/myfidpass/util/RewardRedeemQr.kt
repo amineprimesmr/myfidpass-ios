@@ -1,6 +1,7 @@
 package fr.myfidpass.util
 
 private const val PREFIX = "MYFIDPASS_REDEEM:"
+const val STAMP_START_GAME_QR_THRESHOLD = 0
 
 data class ParsedRewardRedeemQr(
     val memberId: String,
@@ -19,8 +20,12 @@ fun parseRewardRedeemQrPayload(raw: String): ParsedRewardRedeemQr? {
     if (memberId.isEmpty()) return null
     when (parts[2].lowercase()) {
         "s" -> {
-            val th = if (parts.size >= 4) parts[3].toIntOrNull() else null
-            return ParsedRewardRedeemQr(memberId = memberId, stampThreshold = th?.takeIf { it > 0 })
+            val th = when {
+                parts.size >= 4 && parts[3] == "0" -> STAMP_START_GAME_QR_THRESHOLD
+                parts.size >= 4 -> parts[3].toIntOrNull()?.takeIf { it > 0 }
+                else -> null
+            }
+            return ParsedRewardRedeemQr(memberId = memberId, stampThreshold = th)
         }
         "p" -> {
             if (parts.size < 5) return null
@@ -37,6 +42,7 @@ fun effectiveRewardRedeemPoints(apiPoints: Int?, barcode: String): Int {
     val fromApi = apiPoints ?: 0
     if (fromApi > 0) return fromApi
     val parsed = parseRewardRedeemQrPayload(barcode) ?: return 0
+    if (parsed.stampThreshold == STAMP_START_GAME_QR_THRESHOLD) return 0
     if (parsed.stampThreshold != null) return parsed.stampThreshold
     return parsed.points
 }
@@ -51,5 +57,6 @@ fun effectiveRewardRedeemEligible(
     if (apiEligible == false) return false
     val cost = effectiveRewardRedeemPoints(apiPoints, barcode)
     val balance = pointsBalance ?: 0
+    if (cost == 0) return true
     return cost > 0 && balance >= cost
 }

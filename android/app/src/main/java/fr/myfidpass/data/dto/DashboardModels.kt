@@ -117,7 +117,6 @@ data class MemberDto(
     val points: Int? = null,
     @SerialName("created_at") val createdAt: String? = null,
     @SerialName("last_visit_at") val lastVisitAt: String? = null,
-    @SerialName("category_ids") val categoryIds: List<String>? = null,
 )
 
 /** Membre renvoyé par scan / lookup (champs souples, `id` parfois optionnel selon erreurs partielles). */
@@ -246,7 +245,6 @@ data class MemberPublicDetailDto(
     val phone: String? = null,
     val city: String? = null,
     @SerialName("birth_date") val birthDate: String? = null,
-    @SerialName("category_ids") val categoryIds: List<String>? = null,
 )
 
 @Serializable
@@ -274,6 +272,5 @@ data class CreditPointsResponse(
 data class NotificationSendRequest(
     val message: String,
     val title: String? = null,
-    @SerialName("category_ids") val categoryIds: List<String>? = null,
     val segment: String? = null,
 )

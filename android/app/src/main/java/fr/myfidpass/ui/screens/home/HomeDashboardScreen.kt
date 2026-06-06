@@ -22,6 +22,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -85,6 +86,13 @@ fun HomeDashboardScreen(
     val snapshot = slug.takeIf { it.isNotEmpty() }?.let { CardPreviewSnapshotStore.load(context, it) }
     val cardConfigured = MyCardCompletionRequirements.isConfigured(settings, snapshot)
     val scrollState = rememberScrollState()
+
+    DisposableEffect(slug) {
+        if (slug.isNotEmpty()) {
+            viewModel.bindHomeActivityLiveUpdates(slug)
+        }
+        onDispose { viewModel.unbindHomeActivityLiveUpdates() }
+    }
 
     PullToRefreshBox(
         isRefreshing = viewModel.refreshing,

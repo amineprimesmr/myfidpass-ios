@@ -449,7 +449,7 @@ private func mergedAutomation(from api: CampaignAutomationConfigDTO?) -> Campaig
             }
         }()
         rules[r.id] = CampaignAutomationRuleDTO(
-            enabled: existing?.enabled ?? false,
+            enabled: existing?.enabled ?? true,
             message: (existing?.message?.isEmpty == false ? existing?.message : defMsg) ?? defMsg,
             segment: existing?.segment,
             title: existing?.title
@@ -470,8 +470,29 @@ private func mergedAutomation(from api: CampaignAutomationConfigDTO?) -> Campaig
     foldLegacyAutomationKeys(into: &rules, canonical: "birthday_today", legacy: "birthdayToday")
     rules.removeValue(forKey: "new_week")
     purgeRetiredWelcomeAutomationRules(&rules)
+    upgradeFactoryDisabledHubAutomationRules(&rules)
     let cd = api?.globalCooldownDays ?? 7
     return CampaignAutomationConfigDTO(version: api?.version ?? 1, globalCooldownDays: min(90, max(1, cd)), rules: rules)
+}
+
+/// Ancien état usine (hub entier désactivé + textes par défaut) → activer toutes les cartes du carrousel.
+private func upgradeFactoryDisabledHubAutomationRules(_ rules: inout [String: CampaignAutomationRuleDTO]) {
+    let hubIds = automationHubRules.filter { !$0.id.hasPrefix("_info") }.map(\.id)
+    guard hubIds.allSatisfy({ rules[$0]?.enabled != true }) else { return }
+    guard hubIds.allSatisfy({ id in
+        let msg = rules[id]?.message?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let def = defaultAutomationRuleMessages[id] ?? ""
+        return msg.isEmpty || msg == def
+    }) else { return }
+    for id in hubIds {
+        let def = defaultAutomationRuleMessages[id] ?? ""
+        var row = rules[id] ?? CampaignAutomationRuleDTO(enabled: true, message: def)
+        row.enabled = true
+        if row.message?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+            row.message = def
+        }
+        rules[id] = row
+    }
 }
 
 /// Programmation manuelle dans l’app : une fois, ou chaque jour (conversion fuseau → UTC côté token, comme le job SaaS).
@@ -3187,7 +3208,6 @@ struct CampaignNotificationsView: View {
             var payload = NotificationSendPayload(
                 title: title.trimmingCharacters(in: .whitespaces).isEmpty ? nil : title,
                 message: msg,
-                categoryIds: nil,
                 segment: segment
             )
             payload.testSelfOnly = false

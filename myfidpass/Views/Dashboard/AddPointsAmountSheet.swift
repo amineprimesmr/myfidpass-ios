@@ -39,6 +39,8 @@ struct ScanResultSheetData: Identifiable {
     let rewardTiers: [ScanRewardTier]
     /// Si le montant du panier est strictement inférieur, 0 pt crédité (règle commerce).
     let pointsMinAmountEur: Double?
+    /// Plafond serveur `scan_max_points_per_transaction` (nil ou 0 = illimité).
+    let scanMaxPointsPerTransaction: Int?
 }
 
 /// Fiche membre : même plein écran que le scan (crédit ou correction débit).
@@ -155,6 +157,7 @@ struct AddPointsAmountSheet: View {
     let memberPoints: Int?
     let rewardTiers: [ScanRewardTier]
     let pointsMinAmountEur: Double?
+    var scanMaxPointsPerTransaction: Int? = nil
     @Binding var isSubmitting: Bool
     /// Même instance que l’écran parent : le scan ticket doit se présenter **depuis** cette feuille (évite 2 `fullScreenCover` imbriqués depuis la racine, qui ne s’affichent pas).
     @ObservedObject var receiptCoordinator: ReceiptValidationCoordinator
@@ -181,6 +184,7 @@ struct AddPointsAmountSheet: View {
         memberPoints: Int?,
         rewardTiers: [ScanRewardTier],
         pointsMinAmountEur: Double?,
+        scanMaxPointsPerTransaction: Int? = nil,
         isSubmitting: Binding<Bool>,
         receiptCoordinator: ReceiptValidationCoordinator,
         onDismiss: @escaping () -> Void,
@@ -194,6 +198,7 @@ struct AddPointsAmountSheet: View {
         self.memberPoints = memberPoints
         self.rewardTiers = rewardTiers
         self.pointsMinAmountEur = pointsMinAmountEur
+        self.scanMaxPointsPerTransaction = scanMaxPointsPerTransaction
         _isSubmitting = isSubmitting
         _receiptCoordinator = ObservedObject(wrappedValue: receiptCoordinator)
         self.onDismiss = onDismiss
@@ -213,6 +218,15 @@ struct AddPointsAmountSheet: View {
         return Int(floor(amountValue * Double(pointsPerEuro)))
     }
 
+    /// Points réellement crédités après plafond sécurité caisse (mode crédit).
+    private var creditPointsApplied: Int {
+        ScanCreditLimits.effectivePoints(raw: pointsFromAmount, maxPerTransaction: scanMaxPointsPerTransaction)
+    }
+
+    private var creditLimitedByScanSecurity: Bool {
+        mode == .credit && ScanCreditLimits.isCapped(raw: pointsFromAmount, maxPerTransaction: scanMaxPointsPerTransaction)
+    }
+
     /// Points effectivement retirés (plafonnés au solde affiché).
     private var effectiveDebitPoints: Int {
         let raw = pointsFromAmount
@@ -224,7 +238,7 @@ struct AddPointsAmountSheet: View {
         guard amountValue > 0, !isSubmitting else { return false }
         switch mode {
         case .credit:
-            return pointsFromAmount > 0
+            return creditPointsApplied > 0
         case .debit:
             return effectiveDebitPoints > 0
         }
@@ -262,8 +276,14 @@ struct AddPointsAmountSheet: View {
     /// Sous-titre carte : palier atteint avec ce montant, prochain palier, ou crédit / retrait de points.
     private var rewardProgressCaption: String {
         let before = displayedPoints
-        let earned = pointsFromAmount
+        let earned = mode == .credit ? creditPointsApplied : pointsFromAmount
         let tiers = rewardTiers.sorted { $0.points < $1.points }
+
+        if creditLimitedByScanSecurity {
+            let raw = pointsFromAmount
+            let cap = scanMaxPointsPerTransaction ?? 0
+            return "Plafond sécurité : \(formatPts(raw)) pts calculés → \(formatPts(earned)) crédité(s) (max \(formatPts(cap)) / op.). Réglages → Sécurité caisse pour illimité."
+        }
 
         if let minEur = pointsMinAmountEur, amountValue > 0, amountValue < minEur - 1e-9 {
             let s = Self.eurFormatter.string(from: NSNumber(value: minEur)) ?? "\(minEur)"
@@ -316,7 +336,7 @@ struct AddPointsAmountSheet: View {
     private var justCrossedTier: ScanRewardTier? {
         guard mode == .credit, onRedeemTier != nil else { return nil }
         let before = displayedPoints
-        let earned = pointsFromAmount
+        let earned = creditPointsApplied
         guard earned > 0 else { return nil }
         if let minEur = pointsMinAmountEur, amountValue > 0, amountValue < minEur - 1e-9 { return nil }
         let tiers = rewardTiers.filter { $0.points > 0 }.sorted { $0.points < $1.points }
@@ -790,8 +810,8 @@ struct AddPointsAmountSheet: View {
         VStack(alignment: .leading, spacing: 8) {
             if let crossed = justCrossedTier {
                 let canNow = displayedPoints >= crossed.points
-                let afterSim = displayedPoints + pointsFromAmount
-                let canAfterCredit = pointsFromAmount > 0 && afterSim >= crossed.points
+                let afterSim = displayedPoints + creditPointsApplied
+                let canAfterCredit = creditPointsApplied > 0 && afterSim >= crossed.points
                 let enabled = canNow || canAfterCredit
                 redeemCTAButton(
                     tier: crossed,

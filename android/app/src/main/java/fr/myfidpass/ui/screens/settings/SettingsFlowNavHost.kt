@@ -15,7 +15,6 @@ import fr.myfidpass.ui.navigation.merchantPopExit
 import fr.myfidpass.ui.navigation.merchantPushEnter
 import fr.myfidpass.ui.navigation.merchantPushExit
 import fr.myfidpass.ui.screens.commerce.AddCommerceScreen
-import fr.myfidpass.ui.screens.commerce.CategoriesScreen
 import fr.myfidpass.ui.screens.commerce.MatchPredictionsScreen
 import fr.myfidpass.ui.screens.commerce.ScanSecuritySettingsScreen
 import fr.myfidpass.ui.screens.commerce.TeamManagementScreen
@@ -64,14 +63,6 @@ fun SettingsFlowNavHost(
                 onAccounting = { nav.navigate(CommerceRoutes.ACCOUNTING) },
                 onOpenFlyerHub = onOpenFlyerHub,
                 showFlyerShortcuts = showFlyerShortcuts,
-                onCategories = { nav.navigate(CommerceRoutes.CATEGORIES) },
-            )
-        }
-        composable(CommerceRoutes.CATEGORIES) {
-            CategoriesScreen(
-                repository = container.dashboardRepository,
-                snackbarHostState = snackbarHostState,
-                onBack = { nav.popBackStack() },
             )
         }
         composable(CommerceRoutes.SETTINGS_APP) {

@@ -13,7 +13,6 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.foundation.layout.Row
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -37,7 +36,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import fr.myfidpass.data.dto.CategoryDto
 import fr.myfidpass.data.dto.isApiTrue
 import fr.myfidpass.services.scan.ReceiptTicketScanSession
 import fr.myfidpass.ui.screens.scanner.ReceiptTicketValidationScreen
@@ -71,8 +69,6 @@ fun MemberDetailScreen(
     var ticketsMode by remember { mutableStateOf<String?>(null) }
     var pointsPerTicket by remember { mutableStateOf<Int?>(null) }
     var showDelete by remember { mutableStateOf(false) }
-    var allCategories by remember { mutableStateOf<List<CategoryDto>>(emptyList()) }
-    var selectedCategoryIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var convertPointsInput by remember { mutableStateOf("50") }
     var rewards by remember { mutableStateOf<List<MemberGameRewardDto>>(emptyList()) }
     var amountEurInput by remember { mutableStateOf("") }
@@ -90,12 +86,8 @@ fun MemberDetailScreen(
                     name = m.name
                     email = m.email
                     points = m.points
-                    selectedCategoryIds = m.categoryIds?.toSet() ?: emptySet()
                 }
                 .onFailure { error = it.message }
-            runCatching {
-                allCategories = repository.businessCategories(slug).categories
-            }
             runCatching {
                 val t = repository.memberTickets(slug, memberId)
                 ticketBalance = t.ticketBalance
@@ -285,46 +277,6 @@ fun MemberDetailScreen(
                         }
                     }
                 }
-                Spacer(Modifier.height(16.dp))
-            }
-            if (allCategories.isNotEmpty()) {
-                Text("Catégories", style = MaterialTheme.typography.titleSmall)
-                Spacer(Modifier.height(6.dp))
-                allCategories.forEach { cat ->
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Checkbox(
-                            checked = cat.id in selectedCategoryIds,
-                            onCheckedChange = { on ->
-                                selectedCategoryIds =
-                                    if (on) selectedCategoryIds + cat.id else selectedCategoryIds - cat.id
-                            },
-                        )
-                        Text(cat.name, style = MaterialTheme.typography.bodyMedium)
-                    }
-                }
-                Spacer(Modifier.height(8.dp))
-                Button(
-                    onClick = {
-                        if (slug == null) return@Button
-                        scope.launch {
-                            runCatching {
-                                repository.updateMemberCategories(
-                                    slug,
-                                    memberId,
-                                    selectedCategoryIds.toList(),
-                                )
-                                snackbar.showSnackbar("Catégories mises à jour")
-                                reload()
-                            }.onFailure {
-                                snackbar.showSnackbar(it.message ?: "Erreur")
-                            }
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                ) { Text("Enregistrer les catégories") }
                 Spacer(Modifier.height(16.dp))
             }
             Spacer(Modifier.height(8.dp))

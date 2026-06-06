@@ -49,33 +49,6 @@ data class TransactionDto(
 )
 
 @Serializable
-data class BusinessCategoriesResponse(
-    val categories: List<CategoryDto> = emptyList(),
-)
-
-@Serializable
-data class CategoryDto(
-    val id: String,
-    val name: String,
-    @SerialName("color_hex") val colorHex: String? = null,
-    @SerialName("sort_order") val sortOrder: Int? = null,
-)
-
-@Serializable
-data class CreateCategoryRequest(
-    val name: String,
-    @SerialName("color_hex") val colorHex: String? = null,
-    @SerialName("sort_order") val sortOrder: Int? = null,
-)
-
-@Serializable
-data class UpdateCategoryRequest(
-    val name: String? = null,
-    @SerialName("color_hex") val colorHex: String? = null,
-    @SerialName("sort_order") val sortOrder: Int? = null,
-)
-
-@Serializable
 data class BusinessCheckoutSessionRequest(
     @SerialName("business_slug") val businessSlug: String? = null,
     val interval: String? = null,

@@ -184,10 +184,10 @@ final class DataService: ObservableObject {
         return b
     }
 
-    /// Vide toutes les données locales CoreData (Business, CardTemplate, ClientCard, Stamp, MemberCategory).
+    /// Vide toutes les données locales CoreData (Business, CardTemplate, ClientCard, Stamp).
     /// À appeler lors du logout / suppression de compte pour éviter qu'un ancien commerce réapparaisse.
     static func clearAllLocalData(context: NSManagedObjectContext) {
-        let entities = ["Stamp", "ClientCard", "MemberCategory", "CardTemplate", "Business"]
+        let entities = ["Stamp", "ClientCard", "CardTemplate", "Business"]
         for entityName in entities {
             let request = NSFetchRequest<NSFetchRequestResult>(entityName: entityName)
             let batchDelete = NSBatchDeleteRequest(fetchRequest: request)
@@ -603,38 +603,6 @@ final class DataService: ObservableObject {
     func totalStampsAcrossMembers() -> Int {
         guard let template = currentCardTemplate() else { return 0 }
         return uniqueClientCards(for: template).reduce(0) { $0 + Int($1.stampsCount) }
-    }
-
-    // MARK: - Catégories de membres
-
-    /// Toutes les catégories du template (carte fidélité du commerce), triées par sortOrder puis nom.
-    func categories(for template: CardTemplate) -> [MemberCategory] {
-        let request = MemberCategory.fetchRequest()
-        request.predicate = NSPredicate(format: "template == %@", template)
-        request.sortDescriptors = [
-            NSSortDescriptor(keyPath: \MemberCategory.sortOrder, ascending: true),
-            NSSortDescriptor(keyPath: \MemberCategory.name, ascending: true)
-        ]
-        return (try? viewContext.fetch(request)) ?? []
-    }
-
-    /// Membres appartenant à une catégorie donnée.
-    func clientCards(in category: MemberCategory) -> [ClientCard] {
-        guard let members = category.members?.allObjects as? [ClientCard] else { return [] }
-        return members.sorted { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) }
-    }
-
-    /// Nombre de membres dans une catégorie.
-    func memberCount(for category: MemberCategory) -> Int {
-        category.members?.count ?? 0
-    }
-
-    /// Catégorie par identifiant serveur (pour mise à jour locale après API).
-    func category(byServerId serverId: String, template: CardTemplate) -> MemberCategory? {
-        let request = MemberCategory.fetchRequest()
-        request.predicate = NSPredicate(format: "serverId == %@ AND template == %@", serverId, template)
-        request.fetchLimit = 1
-        return try? viewContext.fetch(request).first
     }
 
     /// Après suppression serveur : retire la fiche membre locale (tampons en cascade).

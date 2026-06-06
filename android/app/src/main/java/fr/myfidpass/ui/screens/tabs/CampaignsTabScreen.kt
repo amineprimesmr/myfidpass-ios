@@ -258,7 +258,6 @@ fun CampaignsTabScreen(
                 repository.sendNotification(
                     s,
                     bodyText.trim(),
-                    null,
                     title.trim().takeIf { it.isNotEmpty() },
                     selectedSegment,
                 )

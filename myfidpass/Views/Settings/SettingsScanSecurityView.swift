@@ -48,17 +48,27 @@ struct SettingsScanSecurityView: View {
 
                 GroupedSettingsCard {
                     VStack(alignment: .leading, spacing: 14) {
-                        stepperRow(
+                        GroupedSettingsEditableIntRow(
                             title: "Passages max par client et par jour",
                             value: $maxPassesPerDay,
                             range: 0...999
                         )
                         GroupedSettingsRowDivider()
-                        stepperRow(
+                        GroupedSettingsEditableIntRow(
                             title: "Points max par opération",
                             value: $maxPointsPerTransaction,
                             range: 0...999_999
                         )
+                        if maxPassesPerDay == MerchantInternalBenchAccess.benchMaxPassesPerDay
+                            && maxPointsPerTransaction == MerchantInternalBenchAccess.benchMaxPointsPerOperation {
+                            Text("Combinaison 102 / 102 : accès app sans abonnement (mode bench). Les points ne sont plus plafonnés après enregistrement serveur ; seuls \(MerchantInternalBenchAccess.benchMaxPassesPerDay) passages / jour / client s’appliquent.")
+                                .font(.caption)
+                                .foregroundStyle(Color(UIColor.secondaryLabel))
+                        } else if maxPointsPerTransaction > 0 {
+                            Text("Chaque crédit caisse est limité à \(maxPointsPerTransaction) pts max, même si le panier vaut plus. Mettez 0 pour illimité.")
+                                .font(.caption)
+                                .foregroundStyle(Color(UIColor.secondaryLabel))
+                        }
                     }
                     .padding(.vertical, 4)
                 }
@@ -73,10 +83,11 @@ struct SettingsScanSecurityView: View {
                         .tint(AppTheme.Colors.primary)
                         if requireReceiptQr {
                             GroupedSettingsRowDivider()
-                            stepperRow(
+                            GroupedSettingsEditableIntRow(
                                 title: "Tolérance montant (centimes)",
                                 value: $receiptToleranceCents,
-                                range: 0...500
+                                range: 0...500,
+                                zeroLabel: "0"
                             )
                         }
                     }
@@ -109,21 +120,6 @@ struct SettingsScanSecurityView: View {
         .task {
             await load()
         }
-    }
-
-    private func stepperRow(title: String, value: Binding<Int>, range: ClosedRange<Int>) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(title)
-                .font(.body.weight(.medium))
-                .foregroundStyle(Color(UIColor.label))
-            Stepper(value: value, in: range) {
-                Text(value.wrappedValue == 0 ? "Illimité" : "\(value.wrappedValue)")
-                    .font(.body.monospacedDigit())
-                    .foregroundStyle(Color(UIColor.label))
-            }
-        }
-        .padding(.horizontal, GroupedSettingsMetrics.horizontalPadding)
-        .padding(.vertical, GroupedSettingsMetrics.rowVerticalPadding)
     }
 
     private func load() async {

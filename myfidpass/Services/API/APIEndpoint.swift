@@ -118,11 +118,6 @@ enum APIEndpoint {
     )
     /// JSON : pack multi-CSV pour bilan / CAC (voir `MerchantAccountingPackResponse`).
     case businessAccountingPack(slug: String, days: Int?, dateFrom: String?, dateTo: String?, limit: Int?)
-    case businessCategories(slug: String)
-    case createCategory(slug: String, name: String, colorHex: String?, sortOrder: Int?)
-    case updateCategory(slug: String, categoryId: String, name: String?, colorHex: String?, sortOrder: Int?)
-    case deleteCategory(slug: String, categoryId: String)
-    case updateMemberCategories(slug: String, memberId: String, categoryIds: [String])
     /// Supprime un membre et les données associées (pass, historique).
     case deleteDashboardMember(slug: String, memberId: String)
     /// Supprime tous les membres du commerce (confirmation côté serveur).
@@ -153,7 +148,7 @@ enum APIEndpoint {
 
     case walletPass(slug: String, memberId: String, design: WalletPassDesign?)
 
-    case notifyClients(slug: String, message: String, categoryIds: [String]?)
+    case notifyClients(slug: String, message: String)
 
     case patchDashboardSettings(slug: String, patch: FullDashboardSettingsPatch)
     /// Préférences flyer QR (sync avec le SaaS).
@@ -269,11 +264,6 @@ enum APIEndpoint {
             return "/api/businesses/\(pathSegment(slug))/dashboard/transactions/export"
         case .businessAccountingPack(let slug, _, _, _, _):
             return "/api/businesses/\(pathSegment(slug))/dashboard/accounting-pack"
-        case .businessCategories(let slug): return "/api/businesses/\(pathSegment(slug))/dashboard/categories"
-        case .createCategory(let slug, _, _, _): return "/api/businesses/\(pathSegment(slug))/dashboard/categories"
-        case .updateCategory(let slug, let categoryId, _, _, _): return "/api/businesses/\(pathSegment(slug))/dashboard/categories/\(pathSegment(categoryId))"
-        case .deleteCategory(let slug, let categoryId): return "/api/businesses/\(pathSegment(slug))/dashboard/categories/\(pathSegment(categoryId))"
-        case .updateMemberCategories(let slug, let memberId, _): return "/api/businesses/\(pathSegment(slug))/dashboard/members/\(pathSegment(memberId))/categories"
         case .deleteDashboardMember(let slug, let memberId): return "/api/businesses/\(pathSegment(slug))/dashboard/members/\(pathSegment(memberId))"
         case .deleteAllDashboardMembers(let slug): return "/api/businesses/\(pathSegment(slug))/dashboard/members/delete-all"
         case .dashboardGames(let slug): return "/api/businesses/\(pathSegment(slug))/dashboard/games"
@@ -384,7 +374,7 @@ enum APIEndpoint {
         case .authLogin, .authCheckEmail, .authCheckGooglePlace, .authCheckIdentifier, .authRegister, .authForgotPassword, .authResetPassword, .authGoogle, .authApple,
              .authPhoneSendCode, .authPhoneVerify, .authEmailSendCode, .authEmailVerify,
              .authRefresh, .authLogout,
-             .scan, .integrationRewardRedeem, .deviceRegister, .notifyClients, .createCategory, .updateMemberCategories, .creditMember,
+             .scan, .integrationRewardRedeem, .deviceRegister, .notifyClients, .creditMember,
              .dashboardReceiptChallenge,
              .removeMemberPoints, .redeemReward, .createBusiness, .createBusinessFromPlace, .paymentCheckout, .paymentReconcileSubscription, .paymentPortalSession, .dashboardNotificationSend, .dashboardRemoveTestDevice,
              .paymentBusinessCheckoutSession, .paymentAppleSyncTransaction, .paymentAppleReconcileSubscription,
@@ -395,9 +385,9 @@ enum APIEndpoint {
              .dashboardSocialMetricsRefresh, .dashboardSocialMetricsManual, .dashboardMatchPredictionsSetResult,
              .businessTeamInvite, .businessTeamStaffAccount, .businessTeamMemberResendAccess:
             return "POST"
-        case .patchDashboardSettings, .updateCategory, .updateLocationSettings, .dashboardPatchGame, .dashboardSocialMissionsPatch, .dashboardMatchPredictionsConfig, .businessTeamMemberPatch, .authMePatch:
+        case .patchDashboardSettings, .updateLocationSettings, .dashboardPatchGame, .dashboardSocialMissionsPatch, .dashboardMatchPredictionsConfig, .businessTeamMemberPatch, .authMePatch:
             return "PATCH"
-        case .deleteCategory, .authDeleteAccount, .deleteDashboardMember, .businessTeamRevoke:
+        case .authDeleteAccount, .deleteDashboardMember, .businessTeamRevoke:
             return "DELETE"
         case .dashboardGameRewardsPut, .dashboardFlyerPut:
             return "PUT"
@@ -616,14 +606,8 @@ enum APIEndpoint {
             bodyData = try encoder.encode(ReceiptChallengeRequestBody(amountEur: amountEur))
         case .deviceRegister(let token):
             bodyData = try encoder.encode(DeviceRegisterPayload(deviceToken: token))
-        case .notifyClients(_, let message, let categoryIds):
-            bodyData = try encoder.encode(NotifyClientsPayload(message: message, categoryIds: categoryIds))
-        case .createCategory(_, let name, let colorHex, let sortOrder):
-            bodyData = try encoder.encode(CreateCategoryPayload(name: name, colorHex: colorHex, sortOrder: sortOrder))
-        case .updateCategory(_, _, let name, let colorHex, let sortOrder):
-            bodyData = try encoder.encode(UpdateCategoryPayload(name: name, colorHex: colorHex, sortOrder: sortOrder))
-        case .updateMemberCategories(_, _, let categoryIds):
-            bodyData = try encoder.encode(UpdateMemberCategoriesPayload(categoryIds: categoryIds))
+        case .notifyClients(_, let message):
+            bodyData = try encoder.encode(NotifyClientsPayload(message: message))
         case .creditMember(_, _, let points, let amountEur, let visit, let receiptValidationToken):
             bodyData = try encoder.encode(CreditMemberBody(points: points, amountEur: amountEur, visit: visit, receiptValidationToken: receiptValidationToken))
         case .removeMemberPoints(_, _, let points):
@@ -831,23 +815,6 @@ private struct DeviceRegisterPayload: Encodable {
 
 private struct NotifyClientsPayload: Encodable {
     let message: String
-    let categoryIds: [String]?
-}
-
-private struct CreateCategoryPayload: Encodable {
-    let name: String
-    let colorHex: String?
-    let sortOrder: Int?
-}
-
-private struct UpdateCategoryPayload: Encodable {
-    let name: String?
-    let colorHex: String?
-    let sortOrder: Int?
-}
-
-private struct UpdateMemberCategoriesPayload: Encodable {
-    let categoryIds: [String]
 }
 
 private struct CreditMemberBody: Encodable {

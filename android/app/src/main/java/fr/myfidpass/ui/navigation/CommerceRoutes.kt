@@ -10,7 +10,6 @@ object CommerceRoutes {
     const val STATS = "commerce_stats"
     const val ACCOUNTING = "commerce_accounting"
     const val TRACEABILITY = "commerce_traceability"
-    const val CATEGORIES = "commerce_categories"
     const val ADMIN = "commerce_admin"
     const val PROGRAM = "commerce_program"
     const val GAMES = "commerce_games"

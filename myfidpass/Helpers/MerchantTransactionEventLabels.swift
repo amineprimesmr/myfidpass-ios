@@ -91,9 +91,6 @@ enum MerchantTransactionEventLabels {
         case "reward_redeem":
             return "Récompense utilisée"
         case "welcome_bonus":
-            if let p = points, p > 0 {
-                return p == 1 ? "Nouveau membre · +1 pt" : "Nouveau membre · +\(p) pts"
-            }
             return "Nouveau membre"
         case "points_correction":
             if let p = points, p < 0 {
@@ -132,21 +129,28 @@ enum MerchantTransactionEventLabels {
             return "Récompense"
         }
         if normalized == "welcome_bonus" {
-            if let p = points, p > 0 { return "+\(p) pts" }
-            return "Inscription"
+            return "Nouveau membre"
         }
         if normalized == "points_correction" {
             if let p = points, p < 0 { return "−\(abs(p)) pts" }
             return "Correction"
         }
         if isVisit || (!isPointsProgram && normalized == "points_add") {
-            return "+ Visite"
+            return isPointsProgram ? "+ Visite" : stampCreditAmountLine(points: points)
         }
         if let p = points, isPointsProgram {
             if p > 0 { return "+\(p) pts" }
             if p < 0 { return "−\(abs(p)) pts" }
         }
-        return "+ Visite"
+        return isPointsProgram ? "+ Visite" : stampCreditAmountLine(points: points)
+    }
+
+    /// Libellé droit du fil d’activité en mode tampons (remplace « Visite »).
+    private static func stampCreditAmountLine(points: Int?) -> String {
+        if let p = points, p > 0 {
+            return p == 1 ? "+ 1 tampon" : "+ \(p) tampons"
+        }
+        return "+ tampons"
     }
 
     // MARK: - Metadata API

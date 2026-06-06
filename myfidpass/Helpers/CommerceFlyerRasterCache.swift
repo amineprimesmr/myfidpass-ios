@@ -58,7 +58,20 @@ enum CommerceFlyerRasterCache {
     private static let decodedBg = NSCache<NSString, UIImage>()
     private static let publicBgBySlug = NSCache<NSString, UIImage>()
     private static let compositeByToken = NSCache<NSString, UIImage>()
+    private static let nativePreviewByFingerprint = NSCache<NSString, UIImage>()
     private static let inFlight = CommerceFlyerRasterInFlightCoordinator()
+
+    static func image(forNativePreviewFingerprint fingerprint: String) -> UIImage? {
+        let t = fingerprint.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return nil }
+        return nativePreviewByFingerprint.object(forKey: t as NSString)
+    }
+
+    static func setNativePreviewImage(_ image: UIImage, fingerprint: String) {
+        let t = fingerprint.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return }
+        nativePreviewByFingerprint.setObject(image, forKey: t as NSString)
+    }
 
     static func image(forCustomBgDataURL key: String) -> UIImage? {
         decodedBg.object(forKey: key as NSString)
@@ -153,6 +166,7 @@ enum CommerceFlyerRasterCache {
         decodedBg.removeAllObjects()
         publicBgBySlug.removeAllObjects()
         compositeByToken.removeAllObjects()
+        nativePreviewByFingerprint.removeAllObjects()
         purgeCompositeSnapshotsDisk()
         purgeFlyerTransientCacheFilesInCachesDirectory()
     }

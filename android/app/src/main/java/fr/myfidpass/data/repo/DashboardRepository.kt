@@ -4,13 +4,11 @@ import fr.myfidpass.data.dto.AdminBusinessesListResponse
 import fr.myfidpass.data.dto.AdminEventsListResponse
 import fr.myfidpass.data.dto.AdminOverviewResponse
 import fr.myfidpass.data.dto.AdminUsersListResponse
-import fr.myfidpass.data.dto.BusinessCategoriesResponse
 import fr.myfidpass.data.dto.BusinessMembersResponse
 import fr.myfidpass.data.dto.BusinessSettingsResponse
 import fr.myfidpass.data.dto.BusinessStatsResponse
 import fr.myfidpass.data.dto.BusinessTransactionsResponse
 import fr.myfidpass.data.dto.CheckoutUrlResponse
-import fr.myfidpass.data.dto.CreateCategoryRequest
 import fr.myfidpass.data.dto.CreateMemberRequest
 import fr.myfidpass.data.dto.CreateMemberResponse
 import fr.myfidpass.data.dto.CreditMemberRequest
@@ -44,14 +42,12 @@ import fr.myfidpass.data.dto.RedeemRequest
 import fr.myfidpass.data.dto.RedeemResponseDto
 import fr.myfidpass.data.dto.RemovePointsRequest
 import fr.myfidpass.data.dto.TicketsConvertRequest
-import fr.myfidpass.data.dto.UpdateMemberCategoriesRequest
 import fr.myfidpass.data.dto.DeviceRegisterRequest
 import fr.myfidpass.data.dto.RewardRedeemScanRequest
 import fr.myfidpass.data.dto.RewardRedeemScanResponse
 import fr.myfidpass.data.dto.ScanLookupEnvelope
 import fr.myfidpass.data.dto.ScanRequest
 import fr.myfidpass.data.dto.ScanResponse
-import fr.myfidpass.data.dto.UpdateCategoryRequest
 import fr.myfidpass.data.dto.WorkspaceTeamInviteRequest
 import fr.myfidpass.data.dto.WorkspaceTeamMemberPatchRequest
 import fr.myfidpass.data.dto.WorkspaceTeamStaffAccountRequest
@@ -144,29 +140,9 @@ class DashboardRepository(
     suspend fun businessSettings(slug: String): BusinessSettingsResponse =
         api.businessSettings(slug)
 
-    suspend fun businessCategories(slug: String): BusinessCategoriesResponse =
-        api.businessCategories(slug)
-
-    suspend fun createCategory(slug: String, name: String, colorHex: String? = null, sortOrder: Int? = null) =
-        api.createCategory(slug, CreateCategoryRequest(name = name, colorHex = colorHex, sortOrder = sortOrder))
-
-    suspend fun updateCategory(
-        slug: String,
-        categoryId: String,
-        name: String? = null,
-        colorHex: String? = null,
-        sortOrder: Int? = null,
-    ) = api.updateCategory(slug, categoryId, UpdateCategoryRequest(name, colorHex, sortOrder))
-
-    suspend fun deleteCategory(slug: String, categoryId: String) =
-        api.deleteCategory(slug, categoryId)
-
     suspend fun patchDashboardSettings(slug: String, patch: JsonObject) {
         api.patchDashboardSettings(slug, patch)
     }
-
-    suspend fun updateMemberCategories(slug: String, memberId: String, categoryIds: List<String>) =
-        api.updateMemberCategories(slug, memberId, UpdateMemberCategoriesRequest(categoryIds))
 
     suspend fun deleteAllDashboardMembers(slug: String) =
         api.deleteAllDashboardMembers(slug, emptyPostBody())
@@ -301,8 +277,8 @@ class DashboardRepository(
     suspend fun dashboardRemoveTestDevice(slug: String) =
         api.dashboardRemoveTestDevice(slug, emptyPostBody())
 
-    suspend fun notifyClients(slug: String, message: String, categoryIds: List<String>? = null) =
-        api.notifyClients(slug, NotifyClientsRequest(message = message, categoryIds = categoryIds))
+    suspend fun notifyClients(slug: String, message: String) =
+        api.notifyClients(slug, NotifyClientsRequest(message = message))
 
     suspend fun deviceRegister(fcmToken: String) =
         api.deviceRegister(DeviceRegisterRequest(deviceToken = fcmToken))
@@ -339,12 +315,11 @@ class DashboardRepository(
     suspend fun sendNotification(
         slug: String,
         message: String,
-        categoryIds: List<String>? = null,
         title: String? = null,
         segment: String? = null,
     ): JsonObject = api.notificationSend(
         slug,
-        NotificationSendRequest(message = message, title = title, categoryIds = categoryIds, segment = segment),
+        NotificationSendRequest(message = message, title = title, segment = segment),
     )
 
     suspend fun paymentCheckout(planId: String? = null): CheckoutUrlResponse =

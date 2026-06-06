@@ -33,7 +33,6 @@ object IosParityChecklist {
         "Google Business hub complet ✓",
         "Programme, flyer (hub éditeur complet), social, jeux, pronostics ✓",
         "Stats, compta, traçabilité ✓",
-        "Catégories membres (réglages) ✓",
     )
     val misc = listOf(
         "AppUpdate Play Store ✓",

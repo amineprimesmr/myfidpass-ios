@@ -68,7 +68,6 @@ fun CommerceTabNavHost(
                 isAdmin = container.sessionStore.isAdminUser,
                 onOpenSettings = { nav.navigate(CommerceRoutes.SETTINGS_HUB) },
                 onOpenStats = { nav.navigate(CommerceRoutes.STATS) },
-                onOpenCategories = { nav.navigate(CommerceRoutes.CATEGORIES) },
                 onOpenProgram = { nav.navigate(CommerceRoutes.PROGRAM) },
                 onOpenFlyer = { nav.navigate(CommerceRoutes.FLYER) },
                 onOpenTeam = { nav.navigate(CommerceRoutes.TEAM) },
@@ -93,7 +92,6 @@ fun CommerceTabNavHost(
                 onAccounting = { nav.navigate(CommerceRoutes.ACCOUNTING) },
                 onOpenFlyerHub = { nav.navigate(CommerceRoutes.FLYER) },
                 showFlyerShortcuts = true,
-                onCategories = { nav.navigate(CommerceRoutes.CATEGORIES) },
             )
         }
         composable(CommerceRoutes.SETTINGS_APP) {
@@ -170,13 +168,6 @@ fun CommerceTabNavHost(
             MerchantTraceabilityExportScreen(
                 repository = container.dashboardRepository,
                 snackbar = snackbarHostState,
-                onBack = { nav.popBackStack() },
-            )
-        }
-        composable(CommerceRoutes.CATEGORIES) {
-            CategoriesScreen(
-                repository = container.dashboardRepository,
-                snackbarHostState = snackbarHostState,
                 onBack = { nav.popBackStack() },
             )
         }

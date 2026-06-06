@@ -329,8 +329,8 @@ struct FintechHomeLoyaltyCardBlock: View {
                     stripDisplayMode: model.stripDisplayMode,
                     stripText: model.stripText.isEmpty ? nil : model.stripText,
                     stampEmoji: model.stampEmoji,
-                    cardBackgroundImagePath: CardLogoStorage.resolvedDisplayPath(forStoredPath: model.cardBackgroundImagePath),
-                    cardBackgroundRemoteURL: model.cardBackgroundRemoteURL,
+                    cardBackgroundImagePath: nil,
+                    cardBackgroundRemoteURL: nil,
                     labelColorHex: model.labelHex.trimmingCharacters(in: .whitespaces).isEmpty ? nil : model.labelHex,
                     headerRightText: model.headerRightText,
                     memberPreviewText: model.memberPreviewText,
@@ -415,7 +415,7 @@ struct FintechTransactionRow: View {
                 isVisit: entry.isVisit,
                 isPointsProgram: isPointsProgram
             )
-        case .newCard: return "Inscription"
+        case .newCard: return "Nouveau membre"
         }
     }
 
@@ -424,7 +424,7 @@ struct FintechTransactionRow: View {
         let d = entry.date
         let cal = Calendar.current
         if cal.isDateInToday(d) {
-            return "Aujourd’hui · \(Self.timeOnlyFormatter.string(from: d))"
+            return Self.timeOnlyFormatter.string(from: d)
         }
         if cal.isDateInYesterday(d) {
             return "Hier · \(Self.timeOnlyFormatter.string(from: d))"
@@ -443,34 +443,32 @@ struct FintechTransactionRow: View {
                     .foregroundStyle(palette.onCanvasPrimary.opacity(0.72))
             }
 
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text(entry.clientName)
                     .font(.body.weight(.bold))
                     .foregroundStyle(palette.onCanvasPrimary)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.82)
-                Text(entry.eventTitle)
-                    .font(.subheadline)
-                    .foregroundStyle(palette.secondaryText)
-                    .lineLimit(1)
+                    .minimumScaleFactor(0.88)
+                    .layoutPriority(-1)
                 Text(activityDateSubtitle)
                     .font(.caption)
                     .foregroundStyle(palette.tertiaryText)
+                    .lineLimit(1)
             }
-
-            Spacer(minLength: 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             HStack(spacing: 6) {
                 Text(amountLine)
-                    .font(.body.weight(.semibold))
+                    .font(.subheadline.weight(.semibold))
                     .foregroundStyle(palette.onCanvasPrimary)
                     .monospacedDigit()
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.85)
+                    .multilineTextAlignment(.trailing)
+                    .fixedSize(horizontal: true, vertical: false)
                 Image(systemName: "chevron.right")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(palette.tertiaryText)
             }
+            .layoutPriority(1)
         }
         .padding(.vertical, 16)
         .padding(.horizontal, 18)

@@ -18,7 +18,7 @@ struct FlyerNativePreviewView: View {
     /// Image composite rendue (preview) — pour partage sans WebView.
     var onRenderedImage: ((UIImage) -> Void)?
 
-    @State private var overlayImage: UIImage?
+    @State private var compositeImage: UIImage?
     @State private var renderTask: Task<Void, Never>?
 
     private var renderRequest: FlyerNativeRenderRequest {
@@ -28,22 +28,18 @@ struct FlyerNativePreviewView: View {
             logoImage: logoImage,
             underlayImage: underlayImage,
             canvasSize: FlyerCanvasPreset.preview,
-            overlayOnly: underlayImage != nil
+            overlayOnly: false
         )
     }
 
     var body: some View {
         GeometryReader { geo in
             ZStack {
-                if let underlayImage {
-                    FlyerNativeUnderlayStack(state: state, image: underlayImage)
-                }
-                if let overlayImage {
-                    Image(uiImage: overlayImage)
+                if let compositeImage {
+                    Image(uiImage: compositeImage)
                         .resizable()
-                        .scaledToFill()
+                        .scaledToFit()
                         .frame(width: geo.size.width, height: geo.size.height)
-                        .clipped()
                 } else if isLoading {
                     ProgressView()
                         .controlSize(.small)
@@ -62,24 +58,39 @@ struct FlyerNativePreviewView: View {
     private func scheduleRender() {
         renderTask?.cancel()
         let request = renderRequest
-        isLoading = true
+        let fingerprint = renderFingerprint
+
+        if let cached = CommerceFlyerRasterCache.image(forNativePreviewFingerprint: fingerprint) {
+            compositeImage = cached
+            isLoading = false
+            onRenderedImage?(cached)
+            return
+        }
+
+        let spinnerDelayNs: UInt64 = compositeImage == nil ? 120_000_000 : 0
+        isLoading = false
+
         renderTask = Task {
-            try? await Task.sleep(nanoseconds: 40_000_000)
-            guard !Task.isCancelled else { return }
-            let scale = UIScreen.main.scale
-            let image: UIImage? = await Task.detached(priority: .userInitiated) {
-                if request.overlayOnly {
-                    return FlyerNativeCanvasRenderer.renderOverlay(request, scale: scale)
+            if spinnerDelayNs > 0 {
+                try? await Task.sleep(nanoseconds: spinnerDelayNs)
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    if compositeImage == nil { isLoading = true }
                 }
-                return FlyerNativeCanvasRenderer.renderFullComposite(request, scale: scale)
+            }
+            guard !Task.isCancelled else { return }
+            let scale = min(UIScreen.main.scale, 2.0)
+            let image: UIImage? = await Task.detached(priority: .userInitiated) {
+                FlyerNativeCanvasRenderer.renderFullComposite(request, scale: scale)
             }.value
             guard !Task.isCancelled else { return }
             await MainActor.run {
-                overlayImage = image
-                isLoading = false
                 if let image {
+                    CommerceFlyerRasterCache.setNativePreviewImage(image, fingerprint: fingerprint)
+                    compositeImage = image
                     onRenderedImage?(image)
                 }
+                isLoading = false
             }
         }
     }
