@@ -25,6 +25,7 @@ struct SocialMissionsSheet: View {
     var onSaved: (() -> Void)?
 
     @State private var networks: [NetworkModel] = Self.defaultNetworks()
+    @State private var isStampsProgram = false
     @State private var isLoading = true
     @State private var isSaving = false
     @State private var errorMessage: String?
@@ -35,7 +36,9 @@ struct SocialMissionsSheet: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 16) {
-                    Text("Les clients voient une mission « nous suivre » sur leur carte (comme le profil complet). Choisissez le @ de votre commerce et les points offerts par réseau.")
+                    Text(isStampsProgram
+                         ? "Les clients voient une mission « nous suivre » sur leur carte. Choisissez le @ de chaque réseau : 1 tampon offert au total (tous réseaux confondus), pas de points."
+                         : "Les clients voient une mission « nous suivre » sur leur carte (comme le profil complet). Choisissez le @ de votre commerce et les points offerts par réseau.")
                         .font(.subheadline)
                         .foregroundStyle(AppTheme.Colors.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -142,32 +145,39 @@ struct SocialMissionsSheet: View {
             )
 
             HStack {
-                Image(systemName: "star.fill")
+                Image(systemName: isStampsProgram ? "seal.fill" : "star.fill")
                     .font(.caption)
                     .foregroundStyle(.yellow)
-                Text("Points offerts au client")
+                Text(isStampsProgram ? "Tampon offert au client" : "Points offerts au client")
                     .font(.caption)
                     .foregroundStyle(AppTheme.Colors.textSecondary)
                 Spacer()
-                HStack(spacing: 0) {
-                    Button {
-                        if net.points.wrappedValue > 5 { net.points.wrappedValue -= 5 }
-                    } label: {
-                        Image(systemName: "minus.circle.fill")
-                            .foregroundStyle(AppTheme.Colors.textSecondary)
-                    }
-                    Text("\(network.points) pts")
+                if isStampsProgram {
+                    Text("1 tampon")
                         .font(.caption.weight(.semibold))
                         .frame(minWidth: 56)
                         .multilineTextAlignment(.center)
-                    Button {
-                        if net.points.wrappedValue < 200 { net.points.wrappedValue += 5 }
-                    } label: {
-                        Image(systemName: "plus.circle.fill")
-                            .foregroundStyle(AppTheme.Colors.primary)
+                } else {
+                    HStack(spacing: 0) {
+                        Button {
+                            if net.points.wrappedValue > 5 { net.points.wrappedValue -= 5 }
+                        } label: {
+                            Image(systemName: "minus.circle.fill")
+                                .foregroundStyle(AppTheme.Colors.textSecondary)
+                        }
+                        Text("\(network.points) pts")
+                            .font(.caption.weight(.semibold))
+                            .frame(minWidth: 56)
+                            .multilineTextAlignment(.center)
+                        Button {
+                            if net.points.wrappedValue < 200 { net.points.wrappedValue += 5 }
+                        } label: {
+                            Image(systemName: "plus.circle.fill")
+                                .foregroundStyle(AppTheme.Colors.primary)
+                        }
                     }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
 
             if !network.username.isEmpty {
@@ -210,10 +220,27 @@ struct SocialMissionsSheet: View {
 
     private func load() async {
         await MainActor.run { isLoading = true; errorMessage = nil }
+        if let cached = ScanFlowSettingsCache.cached(for: slug) {
+            await MainActor.run {
+                isStampsProgram = CommerceStatsProgramKind.isStamps(cached.programType)
+            }
+        }
         do {
+            if ScanFlowSettingsCache.cached(for: slug) == nil {
+                let settings: BusinessSettingsResponse = try await APIClient.shared.request(.businessSettings(slug: slug))
+                ScanFlowSettingsCache.store(settings, for: slug)
+                await MainActor.run {
+                    isStampsProgram = CommerceStatsProgramKind.isStamps(settings.programType)
+                }
+            }
             let resp: SocialMissionsResponse = try await APIClient.shared.request(.dashboardSocialMissions(slug: slug))
             await MainActor.run {
                 applyResponse(resp)
+                if isStampsProgram {
+                    for i in networks.indices {
+                        networks[i].points = 1
+                    }
+                }
                 isLoading = false
             }
         } catch {
@@ -323,7 +350,8 @@ struct SocialMissionsSheet: View {
 
     private func buildPayload() -> SocialMissionsPatchPayload {
         func item(_ net: NetworkModel) -> SocialMissionsPatchItem {
-            SocialMissionsPatchItem(username: net.username, enabled: net.enabled && !net.username.isEmpty, points: net.points)
+            let pts = isStampsProgram ? 1 : net.points
+            return SocialMissionsPatchItem(username: net.username, enabled: net.enabled && !net.username.isEmpty, points: pts)
         }
         return SocialMissionsPatchPayload(
             instagram: item(networks[0]),

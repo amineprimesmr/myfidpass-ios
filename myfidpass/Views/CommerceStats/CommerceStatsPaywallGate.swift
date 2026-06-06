@@ -2,13 +2,13 @@
 //  CommerceStatsPaywallGate.swift
 //  myfidpass
 //
-//  Voile paywall sans `.blur` (coûteux pendant le scroll vertical).
+//  Voile paywall avec flou léger (compositingGroup pour limiter le coût repaint).
 //
 
 import SwiftUI
 
 extension View {
-    /// Masque le contenu Pro derrière un voile léger + bouton déverrouillage (pas de flou dynamique).
+    /// Masque le contenu Pro derrière un flou + voile + bouton déverrouillage.
     func commerceStatsPaywallGated(
         locked: Bool,
         glassOverlayMode: Bool,
@@ -17,12 +17,14 @@ extension View {
     ) -> some View {
         ZStack {
             self
-                .opacity(locked ? 0.38 : 1)
+                .compositingGroup()
+                .blur(radius: locked ? 7 : 0, opaque: false)
+                .opacity(locked ? 0.42 : 1)
                 .allowsHitTesting(!locked)
 
             if locked {
                 RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .fill(Color.white.opacity(glassOverlayMode ? 0.74 : 0.82))
+                    .fill(Color.white.opacity(glassOverlayMode ? 0.58 : 0.68))
                     .allowsHitTesting(false)
 
                 MerchantProUnlockTeaserButton(preferDarkGlassTint: glassOverlayMode) {

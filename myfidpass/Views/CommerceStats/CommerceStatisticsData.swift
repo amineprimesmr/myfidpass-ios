@@ -7,6 +7,25 @@
 
 import SwiftUI
 
+enum CommerceStatsProgramKind {
+    static func normalized(_ raw: String?) -> String {
+        let t = (raw ?? "points").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return t == "stamps" ? "stamps" : "points"
+    }
+
+    static func isStamps(_ programType: String?) -> Bool {
+        normalized(programType) == "stamps"
+    }
+
+    static func loyaltyUnitLabel(programType: String?) -> String {
+        isStamps(programType) ? "Tampons" : "Points"
+    }
+
+    static func attributedTitle(programType: String?) -> String {
+        isStamps(programType) ? "Tampons attribués" : "Points attribués"
+    }
+}
+
 struct CommerceDonutSegment: Identifiable, Hashable {
     let id: String
     let fraction: Double
@@ -73,6 +92,8 @@ struct CommerceCategoryRowData: Identifiable, Hashable {
     let googleReviewsDetail: CommerceGoogleReviewsDetail?
     /// Carte dédiée réseau social (Instagram / TikTok / Facebook / X).
     let socialFollowsDetail: CommerceSocialFollowsDetail?
+    /// Pseudo configuré (@…) — affiché sur la carte réseau.
+    let socialHandle: String?
 
     init(
         id: String,
@@ -87,7 +108,8 @@ struct CommerceCategoryRowData: Identifiable, Hashable {
         pointsAttributedDetail: CommercePointsAttributedDetail? = nil,
         rewardsUsedDetail: CommerceRewardsUsedDetail? = nil,
         googleReviewsDetail: CommerceGoogleReviewsDetail? = nil,
-        socialFollowsDetail: CommerceSocialFollowsDetail? = nil
+        socialFollowsDetail: CommerceSocialFollowsDetail? = nil,
+        socialHandle: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -102,6 +124,7 @@ struct CommerceCategoryRowData: Identifiable, Hashable {
         self.rewardsUsedDetail = rewardsUsedDetail
         self.googleReviewsDetail = googleReviewsDetail
         self.socialFollowsDetail = socialFollowsDetail
+        self.socialHandle = socialHandle
     }
 }
 
@@ -148,8 +171,13 @@ enum CommerceStatisticsDataBuilder {
     static func build(
         stats: BusinessStatsResponse?,
         evolution: [EvolutionWeekDTO],
-        panierRepereEuro: Double? = nil
+        panierRepereEuro: Double? = nil,
+        programType: String = "points",
+        configuredSocialHandles: [String: String] = [:]
     ) -> CommerceStatisticsPresentation {
+        let isStamps = CommerceStatsProgramKind.isStamps(programType)
+        let loyaltyLabel = CommerceStatsProgramKind.loyaltyUnitLabel(programType: programType)
+        let attributedTitle = CommerceStatsProgramKind.attributedTitle(programType: programType)
         let members = max(0, stats?.membersCount ?? 0)
         let inactive30Raw = max(0, stats?.inactiveMembers30Days ?? 0)
         let inactive30 = members > 0 ? min(members, inactive30Raw) : 0
@@ -166,7 +194,7 @@ enum CommerceStatisticsDataBuilder {
 
         let colors = CommerceStatisticsTheme.segmentColors
         let donut: [CommerceDonutSegment] = [
-            .init(id: "pts", fraction: fPts / fracSum, color: colors[1], label: "Points"),
+            .init(id: "pts", fraction: fPts / fracSum, color: colors[1], label: loyaltyLabel),
             .init(id: "new", fraction: fNew / fracSum, color: colors[2], label: "Nouveaux"),
             .init(id: "act", fraction: fAct / fracSum, color: colors[3], label: "Actifs"),
         ]
@@ -210,11 +238,11 @@ enum CommerceStatisticsDataBuilder {
             ),
             .init(
                 id: "pts",
-                title: "Points attribués",
-                subtitle: "Fidélité",
+                title: attributedTitle,
+                subtitle: isStamps ? "Passages tampons" : "Fidélité",
                 rightPrimary: "+\(StatsFR.formatInt(ptsI))",
                 rightSecondary: weightPctIndicator(wPts),
-                iconName: "star.fill",
+                iconName: isStamps ? "seal.fill" : "star.fill",
                 swatch: colors[1],
                 audienceSplit: nil,
                 pointsAttributedDetail: .init(
@@ -244,7 +272,7 @@ enum CommerceStatisticsDataBuilder {
         let googleReviewRow = CommerceCategoryRowData(
             id: "grev",
             title: "Google",
-            subtitle: "Clients ayant validé la mission avis",
+            subtitle: "Nouveaux avis Google",
             rightPrimary: "+\(StatsFR.formatInt(googleRev))",
             rightSecondary: weightPctGoogle(wG),
             iconName: "star.bubble.fill",
@@ -288,19 +316,22 @@ enum CommerceStatisticsDataBuilder {
         let (dPanier, dFreq) = trendDeltas(evolution: evolution, stats: stats)
 
         let socialEngagementRows: [CommerceCategoryRowData] = {
-            guard let sf = stats?.socialFollowsClaimed else { return [] }
+            guard !configuredSocialHandles.isEmpty, let sf = stats?.socialFollowsClaimed else { return [] }
             let nets: [(id: String, label: String, icon: String, count: Int)] = [
                 ("social-instagram", "Instagram", "camera.fill",      sf.instagram ?? 0),
                 ("social-tiktok",    "TikTok",    "music.note",       sf.tiktok    ?? 0),
                 ("social-facebook",  "Facebook",  "person.2.fill",    sf.facebook  ?? 0),
                 ("social-twitter",   "X",         "bubble.left.fill", sf.twitter   ?? 0),
             ]
-            return nets.map { net in
+            return nets.compactMap { net in
+                guard let handle = configuredSocialHandles[net.id]?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      !handle.isEmpty else { return nil }
                 let spark = Self.syntheticSocialSparkline(total: net.count)
+                let atLabel = handle.hasPrefix("@") ? handle : "@\(handle)"
                 return CommerceCategoryRowData(
                     id: net.id,
-                    title: "\(net.label)",
-                    subtitle: "Nouveaux abonnés via mission",
+                    title: net.label,
+                    subtitle: atLabel,
                     rightPrimary: "+\(StatsFR.formatInt(net.count))",
                     rightSecondary: "",
                     iconName: net.icon,
@@ -310,13 +341,13 @@ enum CommerceStatisticsDataBuilder {
                         sparkline: spark,
                         trendPct: nil,
                         trendIsPositive: true
-                    )
+                    ),
+                    socialHandle: handle.trimmingCharacters(in: CharacterSet(charactersIn: "@"))
                 )
             }
         }()
 
         let engagementRows = [googleReviewRow] + socialEngagementRows
-
 
         return CommerceStatisticsPresentation(
             panierMoyenEuro: panier,

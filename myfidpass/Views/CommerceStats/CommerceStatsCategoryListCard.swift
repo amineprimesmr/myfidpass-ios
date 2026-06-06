@@ -5,6 +5,7 @@
 
 import Foundation
 import SwiftUI
+import UIKit
 
 struct CommerceStatsCategoryListCard: View {
     @Environment(\.commerceStatsGlassOverlay) private var commerceStatsGlassOverlay
@@ -272,7 +273,7 @@ private struct CommerceStatsGoogleReviewsCard: View {
                 Text(row.title)
                     .font(CommerceStatisticsTheme.kpiTileTitleFont())
                     .foregroundStyle(CommerceStatisticsTheme.kpiTileTitleGradient(forGlassOverlay: g))
-                Text("Missions avis validées sur la période")
+                Text("Nouveaux avis Google")
                     .font(CommerceStatisticsTheme.statsText(size: 12, weight: .medium))
                     .foregroundStyle(CommerceStatisticsTheme.onCardSecondary(forGlassOverlay: g))
             }
@@ -317,27 +318,16 @@ private struct CommerceStatsGoogleReviewsCard: View {
     }
 
     private var impactBars: some View {
-        let hist = cachedMonthHistory
-        let key = normalizedMonthKey(detail.monthKey)
         let monthValue = max(0, detail.newReviewsInPeriod)
-        let maxMonth = max(monthValue, hist.values.max() ?? 0, 1)
-        let cumulative = max(0, hist.values.reduce(0, +))
-        let cumulativeDenom = max(1, cumulative + 12)
+        let maxMonth = max(monthValue, 1)
 
         return VStack(alignment: .leading, spacing: 10) {
             impactMetricRow(
-                label: "Validations ce mois",
+                label: "Nouveaux avis Google",
                 valueText: "+\(StatsFR.formatInt(monthValue))",
                 ratio: CGFloat(Double(monthValue) / Double(maxMonth)),
                 reveal: 1,
                 tint: accent
-            )
-            impactMetricRow(
-                label: "Cumul depuis \(monthLabelFromFirstHistory(defaultKey: key))",
-                valueText: StatsFR.formatInt(cumulative),
-                ratio: CGFloat(Double(cumulative) / Double(cumulativeDenom)),
-                reveal: 1,
-                tint: Color(red: 0.64, green: 0.7, blue: 1.0)
             )
         }
     }
@@ -673,55 +663,109 @@ struct CommerceStatsConnectNetworksButton: View {
 
     let subtitle: String
     var glassOverlayMode: Bool = false
+    var isStampsProgram: Bool = false
     let action: () -> Void
 
     private var g: Bool { commerceStatsGlassOverlay || glassOverlayMode }
     private let cornerRadius = CommerceStatsIndicatorLiquidGlass.kpiCornerRadius
 
+    private static let networkAssets: [(id: String, asset: String?, symbol: String, color: Color)] = [
+        ("social-instagram", "SocialInstagram", "camera.fill", Color(red: 0.87, green: 0.17, blue: 0.48)),
+        ("social-tiktok", "SocialTikTok", "music.note", Color(red: 0.41, green: 0.79, blue: 0.82)),
+        ("social-facebook", "SocialFacebook", "person.2.fill", Color(red: 0.24, green: 0.47, blue: 0.95)),
+        ("social-twitter", nil, "bubble.left.fill", Color(red: 0.10, green: 0.10, blue: 0.10)),
+    ]
+
     var body: some View {
-        HStack(alignment: .center, spacing: 14) {
-            networkIconBadge
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Connecter mes réseaux")
-                    .font(CommerceStatisticsTheme.statsText(size: 16, weight: .semibold))
-                    .foregroundStyle(CommerceStatisticsTheme.onCardPrimary(forGlassOverlay: g))
-                Text(subtitle)
-                    .font(CommerceStatisticsTheme.statsText(size: 13, weight: .medium))
-                    .foregroundStyle(CommerceStatisticsTheme.onCardSecondary(forGlassOverlay: g))
-                    .lineLimit(2)
-                    .multilineTextAlignment(.leading)
+        ZStack {
+            networkPreviewBackdrop
+                .blur(radius: 5, opaque: false)
+                .opacity(0.72)
+                .allowsHitTesting(false)
+
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 10) {
+                    ForEach(Self.networkAssets, id: \.id) { net in
+                        networkMiniIcon(net)
+                    }
+                    Spacer(minLength: 0)
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(subtitle)
+                        .font(CommerceStatisticsTheme.statsText(size: 13, weight: .medium))
+                        .foregroundStyle(CommerceStatisticsTheme.onCardSecondary(forGlassOverlay: g))
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                    if isStampsProgram {
+                        Text("1 tampon offert au total pour tous les réseaux")
+                            .font(CommerceStatisticsTheme.statsText(size: 12, weight: .semibold))
+                            .foregroundStyle(CommerceStatisticsTheme.onCardPrimary(forGlassOverlay: g).opacity(0.82))
+                    }
+                }
+
+                Button(action: action) {
+                    Text("Connecter mes réseaux")
+                        .font(CommerceStatisticsTheme.statsText(size: 16, weight: .bold))
+                        .foregroundStyle(CommerceStatisticsTheme.onCardPrimary(forGlassOverlay: g))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                }
+                .buttonStyle(.plain)
+                .background {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .fill(Color.white.opacity(g ? 0.12 : 0.18))
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.22), lineWidth: 0.5)
+                }
             }
-            Spacer(minLength: 8)
-            Image(systemName: "chevron.right")
-                .font(CommerceStatisticsTheme.statsText(size: 13, weight: .bold))
-                .foregroundStyle(CommerceStatisticsTheme.onCardSecondary(forGlassOverlay: g).opacity(0.85))
+            .padding(.horizontal, 18)
+            .padding(.vertical, 16)
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .commerceStatsKpiLiquidGlassButton(action: action, cornerRadius: cornerRadius, controlSize: .large)
+        .frame(maxWidth: .infinity, minHeight: 200, alignment: .topLeading)
+        .commerceStatsLiquidGlassTileButton(
+            cornerRadius: cornerRadius,
+            controlSize: .large,
+            useStatic3DSurface: true
+        )
         .accessibilityLabel("Connecter mes réseaux")
         .accessibilityHint(subtitle)
     }
 
-    private var networkIconBadge: some View {
+    private var networkPreviewBackdrop: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(Self.networkAssets.prefix(2), id: \.id) { net in
+                HStack(spacing: 10) {
+                    networkMiniIcon(net)
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(Color.white.opacity(0.14))
+                        .frame(height: 10)
+                    Spacer()
+                }
+            }
+        }
+        .padding(.horizontal, 18)
+        .padding(.top, 18)
+    }
+
+    @ViewBuilder
+    private func networkMiniIcon(_ net: (id: String, asset: String?, symbol: String, color: Color)) -> some View {
         ZStack {
             Circle()
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            CommerceStatisticsTheme.accentBlue.opacity(g ? 0.35 : 0.22),
-                            CommerceStatisticsTheme.accentBlue.opacity(g ? 0.12 : 0.08),
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-            Image(systemName: "link.circle.fill")
-                .font(.system(size: 22, weight: .semibold))
-                .symbolRenderingMode(.hierarchical)
-                .foregroundStyle(CommerceStatisticsTheme.accentBlue)
+                .fill(net.color.opacity(g ? 0.28 : 0.18))
+            if let asset = net.asset, UIImage(named: asset) != nil {
+                Image(asset)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 18, height: 18)
+            } else {
+                Image(systemName: net.symbol)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(net.color)
+            }
         }
-        .frame(width: 44, height: 44)
+        .frame(width: 36, height: 36)
     }
 }

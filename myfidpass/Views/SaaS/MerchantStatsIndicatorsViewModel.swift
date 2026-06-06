@@ -60,6 +60,10 @@ final class MerchantStatsIndicatorsViewModel: ObservableObject {
     @Published private(set) var lastSuccessfullyLoadedPeriod: String?
     /// Panier moyen « repère » commerçant (€) — aligné sur `GET …/dashboard/stats` puis saisie locale / PATCH.
     @Published private(set) var baselinePanierRepereEUR: Double?
+    /// `points` ou `stamps` — pilote libellés stats et KPI (panier vs tampons).
+    @Published private(set) var loyaltyProgramType: String = "points"
+    /// Réseaux sociaux configurés (`social-instagram` → pseudo sans @).
+    @Published private(set) var configuredSocialHandles: [String: String] = [:]
 
     /// Prévisualisation locale : glissement mois par mois sans rappeler l’API.
     @Published private(set) var isDemoSixMonthPreviewActive: Bool = false
@@ -163,6 +167,7 @@ final class MerchantStatsIndicatorsViewModel: ObservableObject {
         if let c = ScanFlowSettingsCache.cached(for: slug) {
             let u = c.notificationIconUrl?.trimmingCharacters(in: .whitespacesAndNewlines)
             statsNotificationIconURL = (u?.isEmpty == false) ? u : nil
+            loyaltyProgramType = CommerceStatsProgramKind.normalized(c.programType)
             return
         }
         do {
@@ -170,9 +175,14 @@ final class MerchantStatsIndicatorsViewModel: ObservableObject {
             ScanFlowSettingsCache.store(s, for: slug)
             let u = s.notificationIconUrl?.trimmingCharacters(in: .whitespacesAndNewlines)
             statsNotificationIconURL = (u?.isEmpty == false) ? u : nil
+            loyaltyProgramType = CommerceStatsProgramKind.normalized(s.programType)
         } catch {
             statsNotificationIconURL = nil
         }
+    }
+
+    func updateConfiguredSocialHandles(_ handles: [String: String]) {
+        configuredSocialHandles = handles
     }
 
     private func normalizedMonthlyAudience(from s: BusinessStatsResponse) -> (members: Int, active: Int, inactive30: Int)? {
@@ -787,16 +797,42 @@ extension MerchantStatsIndicatorsViewModel {
 
     func presentationForMonthCarousel(monthKey: String) -> CommerceStatisticsPresentation {
         let rep = baselinePanierRepereEUR
+        let program = loyaltyProgramType
+        let social = configuredSocialHandles
         if isDemoSixMonthPreviewActive, let p = demoPayloadsByMonth[monthKey] {
-            return CommerceStatisticsDataBuilder.build(stats: p.stats, evolution: p.evolution, panierRepereEuro: rep)
+            return CommerceStatisticsDataBuilder.build(
+                stats: p.stats,
+                evolution: p.evolution,
+                panierRepereEuro: rep,
+                programType: program,
+                configuredSocialHandles: social
+            )
         }
         if let snap = monthSnapshots[monthKey] {
-            return CommerceStatisticsDataBuilder.build(stats: snap.stats, evolution: snap.evolution, panierRepereEuro: rep)
+            return CommerceStatisticsDataBuilder.build(
+                stats: snap.stats,
+                evolution: snap.evolution,
+                panierRepereEuro: rep,
+                programType: program,
+                configuredSocialHandles: social
+            )
         }
         if let s = stats, Self.monthKey(s, matches: monthKey) {
-            return CommerceStatisticsDataBuilder.build(stats: s, evolution: evolution, panierRepereEuro: rep)
+            return CommerceStatisticsDataBuilder.build(
+                stats: s,
+                evolution: evolution,
+                panierRepereEuro: rep,
+                programType: program,
+                configuredSocialHandles: social
+            )
         }
-        return CommerceStatisticsDataBuilder.build(stats: nil, evolution: [], panierRepereEuro: rep)
+        return CommerceStatisticsDataBuilder.build(
+            stats: nil,
+            evolution: [],
+            panierRepereEuro: rep,
+            programType: program,
+            configuredSocialHandles: social
+        )
     }
 
     func businessStats(forMonthKey monthKey: String) -> BusinessStatsResponse? {
