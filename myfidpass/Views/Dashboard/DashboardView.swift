@@ -618,7 +618,6 @@ struct DashboardView: View {
                 tabRouter.isHomeSidebarExpanded = isHomeSidebarExpanded
                 tabRouter.isDashboardSetupMode = isHomeSetupMode
                 tabRouter.hasResolvedDashboardSetupMode = true
-                FlyerEmbedWarmup.startIfNeeded()
                 refreshHomeFlyerAvailability()
                 Task { await refreshHomeNotificationIconStatusIfNeeded() }
                 scheduleMerchantFlyerPromoSheetIfEligible()

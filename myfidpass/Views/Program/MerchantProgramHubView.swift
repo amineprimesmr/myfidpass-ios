@@ -9,7 +9,6 @@
 import SwiftUI
 import CoreData
 import UIKit
-import WebKit
 import Combine
 import PhotosUI
 import ImageIO
@@ -109,7 +108,6 @@ struct MerchantProgramHubView: View {
             navigateToMyCard = true
         }
         .onAppear {
-            FlyerEmbedWarmup.startIfNeeded()
             if seedOpenMyCard, !didApplyOpenMyCardSeed {
                 didApplyOpenMyCardSeed = true
                 navigateToMyCard = true
@@ -2152,7 +2150,7 @@ private struct FlyerAIGeneratorSheet: View {
     /// `false` = dernière image générée ; `true` = version conservée d’avant le « Recréer ».
     @State private var showRecreateStashedVersion = false
     @State private var showUnsavedChangesOnBackAlert = false
-    @State private var flyerSnapshotSourceWebView: WKWebView?
+    @State private var flyerLastRenderedPreview: UIImage?
     /// Vue mode : flyer enregistré et pas en édition active — affiche « Modifier » au lieu de « Sauvegarder ».
     @State private var flyerIsViewMode: Bool = false
     /// Vrai dès que l'utilisateur a explicitement touché « Modifier » — empêche le retour automatique en vue mode après chargement serveur.
@@ -2483,19 +2481,14 @@ private struct FlyerAIGeneratorSheet: View {
         let b64 = flyerModel.bootstrapPreviewBase64?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !b64.isEmpty else { return }
         guard let token = CommerceFlyerRasterCache.compositeSnapshotToken(slug: slug, bootstrapB64: b64) else { return }
-        guard let webView = flyerSnapshotSourceWebView else { return }
-        let size = webView.bounds.size
-        guard size.width > 2, size.height > 2 else { return }
-        let config = WKSnapshotConfiguration()
-        config.rect = CGRect(origin: .zero, size: size)
-        let snap = try? await webView.takeSnapshot(configuration: config)
-        guard let snap else { return }
         let underlayBase = flyerModel.flyerWebUnderlayUIImage ?? flyerAiBackgroundUnderlayUIImage
-        let flat = FlyerSnapshotCompositeExport.exportImage(
-            webSnapshot: snap,
-            underlayBase: underlayBase,
-            state: flyerModel.state
-        )
+        let logo = flyerPreviewLogoUIImage
+        guard let flat = FlyerSnapshotCompositeExport.exportImage(
+            state: flyerModel.state,
+            shareURL: flyerModel.shareUrl,
+            logoImage: logo,
+            underlayBase: underlayBase
+        ) else { return }
         CommerceFlyerRasterCache.setCompositeImage(flat, token: token)
     }
 
@@ -2746,26 +2739,21 @@ private struct FlyerAIGeneratorSheet: View {
 
     @MainActor
     private func shareFlyerSnapshot() async {
-        guard let webView = flyerSnapshotSourceWebView else {
+        let underlayBase = flyerModel.flyerWebUnderlayUIImage ?? flyerAiBackgroundUnderlayUIImage
+        if let flat = FlyerSnapshotCompositeExport.exportImage(
+            state: flyerModel.state,
+            shareURL: flyerModel.shareUrl,
+            logoImage: flyerPreviewLogoUIImage,
+            underlayBase: underlayBase
+        ) {
+            flyerShareItems = [flat]
             isShareFlyerSheetPresented = true
-            flyerShareItems = flyerShareURLItems()
             return
         }
-        let size = webView.bounds.size
-        if size.width > 2, size.height > 2 {
-            let config = WKSnapshotConfiguration()
-            config.rect = CGRect(origin: .zero, size: size)
-            if let snap = try? await webView.takeSnapshot(configuration: config) {
-                let underlayBase = flyerModel.flyerWebUnderlayUIImage ?? flyerAiBackgroundUnderlayUIImage
-                let flat = FlyerSnapshotCompositeExport.exportImage(
-                    webSnapshot: snap,
-                    underlayBase: underlayBase,
-                    state: flyerModel.state
-                )
-                flyerShareItems = [flat]
-                isShareFlyerSheetPresented = true
-                return
-            }
+        if let preview = flyerLastRenderedPreview {
+            flyerShareItems = [preview]
+            isShareFlyerSheetPresented = true
+            return
         }
         flyerShareItems = flyerShareURLItems()
         isShareFlyerSheetPresented = true
@@ -4011,49 +3999,77 @@ private struct FlyerAIGeneratorSheet: View {
 
     @ViewBuilder
     private var flyerPostGenerationMainPreview: some View {
-        if let rawBootstrap = effectiveFlyerPreviewBootstrap, !rawBootstrap.isEmpty {
-            /// Un seul `bootstrap` que le JSON (pas de bascule strip/plein) + underlay recalculé dans le modèle → un seul `APPLY` stable.
-            let under = flyerModel.flyerWebUnderlayUIImage
-            let hasBgDataURL = !(flyerModel.flyerCustomBgDataURLForNativeUnderlay?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
-            let skip = flyerModel.flyerWebSkipCanvasSolidBackground || hasBgDataURL
-            ZStack {
-                ZStack {
-                    if let u = under {
-                        FlyerNativeUnderlayStack(state: flyerModel.state, image: u)
-                    }
-                    FlyerPreviewWebView(
-                        bootstrapBase64: rawBootstrap,
-                        statePatchJSON: flyerModel.previewStatePatchJSON,
-                        isLoading: $flyerInteractiveWebLoading,
-                        skipCanvasSolidBackground: skip,
-                        onWebViewCreated: { webView in
-                            DispatchQueue.main.async {
-                                flyerSnapshotSourceWebView = webView
-                            }
-                        },
-                        onNavigationFailure: { _ in flyerEmbedNavigationFailed = true }
-                    )
-                }
-                .allowsHitTesting(true)
-                if showInteractiveWebLoader {
-                    ProgressView()
-                        .controlSize(.small)
-                        .tint(.white)
-                        .padding(10)
-                        .background(.ultraThinMaterial, in: Capsule())
-                        .padding(10)
-                }
-            }
-            .aspectRatio(Self.flyerCanvasAspect, contentMode: .fit)
-            .frame(maxWidth: Self.flyerHeroMaxWidth)
-            .flyerPreviewDepthChrome(cornerRadius: 20, variant: .hub)
-            .matchedGeometryEffect(id: "flyerValidateHero", in: flyerValidateMorph)
-            .transition(.opacity)
+        if effectiveFlyerPreviewBootstrap?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            flyerNativeInteractivePreview(maxWidth: Self.flyerHeroMaxWidth, cornerRadius: 20, variant: .hub)
+                .matchedGeometryEffect(id: "flyerValidateHero", in: flyerValidateMorph)
+                .transition(.opacity)
         } else {
             flyerGenerationHeroCard
                 .matchedGeometryEffect(id: "flyerValidateHero", in: flyerValidateMorph)
                 .transition(.opacity)
         }
+    }
+
+    private var flyerPreviewLogoUIImage: UIImage? {
+        if let logoPreview { return logoPreview }
+        if let s = flyerModel.cachedPublicLogoDataUrl,
+           let u = FlyerDataURLImageDecode.uiImage(fromDataURLString: s) {
+            return u
+        }
+        if let s = flyerModel.serverLogoDataUrl,
+           let u = FlyerDataURLImageDecode.uiImage(fromDataURLString: s) {
+            return u
+        }
+        return nil
+    }
+
+    private var flyerNativeRenderFingerprint: String {
+        let s = flyerModel.state
+        return [
+            flyerModel.shareUrl,
+            s.headline,
+            s.ctaBanner,
+            s.colorPrimary,
+            s.colorBgTop,
+            s.colorBgBottom,
+            s.wheelColorOdd,
+            s.wheelColorEven,
+            String(s.wheelSegmentOffsetDeg),
+            logoPreview != nil ? "logo-local" : "logo-remote",
+            flyerModel.flyerWebUnderlayUIImage != nil ? "underlay-web" : "underlay-none",
+            String(displayedAIBgBase64?.prefix(24) ?? ""),
+        ].joined(separator: "|")
+    }
+
+    @ViewBuilder
+    private func flyerNativeInteractivePreview(
+        maxWidth: CGFloat,
+        cornerRadius: CGFloat,
+        variant: FlyerPreviewChromeVariant
+    ) -> some View {
+        let under = flyerModel.flyerWebUnderlayUIImage ?? flyerAiBackgroundUnderlayUIImage
+        ZStack {
+            FlyerNativePreviewView(
+                state: flyerModel.state,
+                shareURL: flyerModel.shareUrl,
+                underlayImage: under,
+                logoImage: flyerPreviewLogoUIImage,
+                renderFingerprint: flyerNativeRenderFingerprint,
+                isLoading: $flyerInteractiveWebLoading,
+                onRenderedImage: { flyerLastRenderedPreview = $0 }
+            )
+            if showInteractiveWebLoader {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(.white)
+                    .padding(10)
+                    .background(.ultraThinMaterial, in: Capsule())
+                    .padding(10)
+            }
+        }
+        .aspectRatio(Self.flyerCanvasAspect, contentMode: .fit)
+        .frame(maxWidth: maxWidth)
+        .flyerPreviewDepthChrome(cornerRadius: cornerRadius, variant: variant)
     }
 
     private var generatedUIImage: UIImage? {
@@ -4073,54 +4089,15 @@ private struct FlyerAIGeneratorSheet: View {
         return nil
     }
 
-    /// JSON sans `custom_bg_data_url` + image native : charge beaucoup plus vite que le bootstrap complet dans WKWebView.
-    private func strippedBootstrapAndUnderlayPair(rawBootstrap: String) -> (bootstrap: String, underlay: UIImage)? {
-        guard let u = flyerAiBackgroundUnderlayUIImage,
-              let stripped = FlyerPreviewWebView.stripCustomBgFromBootstrapBase64(rawBootstrap) else {
-            return nil
-        }
-        return (stripped, u)
-    }
-
     private static let flyerCanvasAspect: CGFloat = 2400.0 / 3600.0
     private static let flyerHeroMaxWidth: CGFloat = 300
 
     private var flyerGenerationHeroCard: some View {
         let corner: CGFloat = 20
         return Group {
-            if let b64 = flyerHeroCompositeBootstrap {
-                let heroPair = strippedBootstrapAndUnderlayPair(rawBootstrap: b64)
-                let webB64 = heroPair?.bootstrap ?? b64
-                let heroUnder = heroPair?.underlay
-                let hasBgDataURL = !(flyerModel.flyerCustomBgDataURLForNativeUnderlay?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
-                ZStack(alignment: .topTrailing) {
-                    ZStack {
-                        if let u = heroUnder {
-                            FlyerNativeUnderlayStack(state: flyerModel.state, image: u)
-                        }
-                        FlyerPreviewWebView(
-                            bootstrapBase64: webB64,
-                            statePatchJSON: flyerModel.previewStatePatchJSON,
-                            isLoading: $heroCompositePreviewLoading,
-                            skipCanvasSolidBackground: (heroUnder != nil) || hasBgDataURL,
-                            onWebViewCreated: { webView in
-                                DispatchQueue.main.async {
-                                    flyerSnapshotSourceWebView = webView
-                                }
-                            },
-                            onNavigationFailure: { _ in flyerEmbedNavigationFailed = true }
-                        )
-                    }
+            if flyerHeroCompositeBootstrap != nil || displayedAIBgBase64 != nil {
+                flyerNativeInteractivePreview(maxWidth: Self.flyerHeroMaxWidth, cornerRadius: corner, variant: .hub)
                     .allowsHitTesting(false)
-                    if showHeroCompositeLoader {
-                        ProgressView()
-                            .controlSize(.small)
-                            .tint(.white)
-                            .padding(10)
-                            .background(.ultraThinMaterial, in: Capsule())
-                            .padding(10)
-                    }
-                }
             } else if let image = generatedUIImage {
                 Image(uiImage: image)
                     .resizable()
