@@ -263,7 +263,13 @@ struct RevolutActivityRow: View {
                     .foregroundStyle(palette.secondaryText)
             }
             Spacer(minLength: 0)
-            Text(entry.kind == .newCard ? "Inscription" : (entry.scanPointsGranted.map { "\($0) pts" } ?? "Activité"))
+            Text(entry.kind == .newCard ? "Inscription" : MerchantTransactionEventLabels.dashboardAmountLine(
+                type: entry.transactionType,
+                points: entry.scanPointsGranted,
+                isVisit: entry.isVisit,
+                isPointsProgram: true,
+                rewardLabel: entry.rewardLabel
+            ))
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(palette.tertiaryText)
         }

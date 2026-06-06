@@ -66,6 +66,8 @@ struct CafeDesArtsCardPreview: View {
     var completionHighlightZones: Set<CardPreviewEditZone> = []
     /// Mode scanner: n'affiche que la grille de tampons.
     var stampsOnly: Bool = false
+    /// Tampons seuls sans enveloppe colorée (écran scan tampon).
+    var stampsOnlyBare: Bool = false
 
     private var primaryColor: Color { Color(hex: primaryColorHex) }
     private var bandeauColor: Color { stripColorHex.flatMap { Color(hex: $0) } ?? primaryColor }
@@ -158,16 +160,22 @@ struct CafeDesArtsCardPreview: View {
     }
 
     /// Hauteur d’affichage **serrée** pour le mode scan (`stampsOnly`) : uniquement la grille + marges, pas toute la carte Wallet.
-    static func stampsOnlyDisplayHeight(cardWidth: CGFloat, requiredStamps: Int32, compact: Bool) -> CGFloat {
+    static func stampsOnlyDisplayHeight(
+        cardWidth: CGFloat,
+        requiredStamps: Int32,
+        compact: Bool,
+        bare: Bool = false
+    ) -> CGFloat {
         let cols = 5
         let total = max(1, Int(requiredStamps))
         let rows = max(1, (total + cols - 1) / cols)
         let horizontalInset = compact ? 14.0 : 18.0
-        let verticalPad: CGFloat = compact ? 10 : 12
-        let gap: CGFloat = compact ? 4 : 5
+        let verticalPad: CGFloat = bare ? 6 : (compact ? 10 : 12)
+        let gap: CGFloat = bare ? 8 : (compact ? 4 : 5)
         let innerW = max(1, cardWidth - horizontalInset * 2)
         let cellW = (innerW - CGFloat(max(0, cols - 1)) * gap) / CGFloat(cols)
-        let cellSize = min(cellW * 0.92, compact ? 40 : 44)
+        let cellCap: CGFloat = bare ? (compact ? 62 : 72) : (compact ? 40 : 44)
+        let cellSize = min(cellW * (bare ? 1 : 0.92), cellCap)
         let gridH = CGFloat(rows) * cellSize + CGFloat(max(0, rows - 1)) * gap
         return gridH + verticalPad * 2
     }
@@ -175,13 +183,19 @@ struct CafeDesArtsCardPreview: View {
     /// Ratio largeur / hauteur pour `aspectRatio` — calé sur une largeur de référence (le contenu scale de façon cohérente).
     private var stampsOnlyLayoutAspect: CGFloat {
         let ref: CGFloat = 375
-        let h = Self.stampsOnlyDisplayHeight(cardWidth: ref, requiredStamps: requiredStamps, compact: compact)
+        let h = Self.stampsOnlyDisplayHeight(
+            cardWidth: ref,
+            requiredStamps: requiredStamps,
+            compact: compact,
+            bare: stampsOnlyBare
+        )
         return ref / max(h, 1)
     }
 
     var body: some View {
         let corner: CGFloat = compact ? 9 : 14
         let layoutAspect = stampsOnly ? stampsOnlyLayoutAspect : walletCardAspectRatio
+        let bareStamps = stampsOnly && stampsOnlyBare
 
         Color.clear
             .aspectRatio(layoutAspect, contentMode: .fit)
@@ -190,30 +204,37 @@ struct CafeDesArtsCardPreview: View {
                     let w = max(1, geo.size.width.isFinite ? geo.size.width : 1)
                     let h = max(1, geo.size.height.isFinite ? geo.size.height : 1)
 
-                    cardContent(cardWidth: w)
-                        .transaction { $0.disablesAnimations = true }
-                        .frame(width: w, height: h)
-                        .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
-                        .overlay {
-                            if !completionHighlightZones.isEmpty, let onTap = onEditZoneTap {
-                                CardPreviewCompletionPillsOverlay(
-                                    cardWidth: w,
-                                    totalHeight: h,
-                                    compact: compact,
-                                    zones: completionHighlightZones,
-                                    layoutStyle: hasCardBackground ? .walletPoints : .stampGridInBanner,
-                                    onTapZone: onTap
+                    Group {
+                        let core = cardContent(cardWidth: w)
+                            .transaction { $0.disablesAnimations = true }
+                            .frame(width: w, height: h)
+                        if bareStamps {
+                            core
+                        } else {
+                            core
+                                .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
+                                .overlay {
+                                    if !completionHighlightZones.isEmpty, let onTap = onEditZoneTap {
+                                        CardPreviewCompletionPillsOverlay(
+                                            cardWidth: w,
+                                            totalHeight: h,
+                                            compact: compact,
+                                            zones: completionHighlightZones,
+                                            layoutStyle: hasCardBackground ? .walletPoints : .stampGridInBanner,
+                                            onTapZone: onTap
+                                        )
+                                        .allowsHitTesting(true)
+                                    }
+                                }
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: corner, style: .continuous)
+                                        .strokeBorder(.white.opacity(0.35), lineWidth: 1)
                                 )
-                                .allowsHitTesting(true)
-                            }
+                                .shadow(color: .black.opacity(0.32), radius: compact ? 12 : 20, x: 0, y: compact ? 6 : 10)
                         }
-                        .overlay(
-                            RoundedRectangle(cornerRadius: corner, style: .continuous)
-                                .strokeBorder(.white.opacity(0.35), lineWidth: 1)
-                        )
-                        .shadow(color: .black.opacity(0.32), radius: compact ? 12 : 20, x: 0, y: compact ? 6 : 10)
-                        .frame(width: w, height: h, alignment: .topLeading)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    }
+                    .frame(width: w, height: h, alignment: .topLeading)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 }
             }
     }
@@ -226,7 +247,8 @@ struct CafeDesArtsCardPreview: View {
                 envelopeHeight: Self.stampsOnlyDisplayHeight(
                     cardWidth: cardWidth,
                     requiredStamps: requiredStamps,
-                    compact: compact
+                    compact: compact,
+                    bare: stampsOnlyBare
                 )
             )
         } else {
@@ -247,16 +269,23 @@ struct CafeDesArtsCardPreview: View {
 
     private func stampsOnlySection(cardWidth: CGFloat, envelopeHeight: CGFloat) -> some View {
         let insetH: CGFloat = compact ? 14 : 18
-        return ZStack {
-            primaryColor
-            stampGridBannerFitted(
-                cardWidth: cardWidth,
-                bannerHeight: max(40, envelopeHeight),
-                horizontalInset: insetH
-            )
+        let grid = stampGridBannerFitted(
+            cardWidth: cardWidth,
+            bannerHeight: max(40, envelopeHeight),
+            horizontalInset: insetH
+        )
+        return Group {
+            if stampsOnlyBare {
+                grid
+            } else {
+                ZStack {
+                    primaryColor
+                    grid
+                }
+                .clipped()
+            }
         }
         .frame(width: cardWidth, height: envelopeHeight)
-        .clipped()
     }
 
     private func cafeBannerHeight(cardWidth: CGFloat) -> CGFloat {
@@ -370,14 +399,16 @@ struct CafeDesArtsCardPreview: View {
         let cols = 5
         let rows = max(1, (total + cols - 1) / cols)
         /// Marges un peu resserrées pour laisser plus de place aux pictos (rendu plus proche du pass Wallet).
-        let verticalPad: CGFloat = compact ? 8 : 12
-        let gap: CGFloat = compact ? 4 : 5
+        let bare = stampsOnly && stampsOnlyBare
+        let verticalPad: CGFloat = bare ? 6 : (compact ? 8 : 12)
+        let gap: CGFloat = bare ? 8 : (compact ? 4 : 5)
         let innerW = max(1, cardWidth - horizontalInset * 2)
         let innerH = max(1, bannerHeight - verticalPad * 2)
         let cellW = (innerW - CGFloat(max(0, cols - 1)) * gap) / CGFloat(cols)
         let cellH = (innerH - CGFloat(max(0, rows - 1)) * gap) / CGFloat(rows)
         /// Plafond relevé : les tampons paraissaient petits vs la grille réelle.
-        let cellSize = max(10, min(cellW, cellH, compact ? 48 : 58))
+        let cellCap: CGFloat = bare ? (compact ? 62 : 72) : (compact ? 48 : 58)
+        let cellSize = max(10, min(cellW, cellH, cellCap))
 
         return VStack(spacing: gap) {
             ForEach(0..<rows, id: \.self) { row in
@@ -469,8 +500,15 @@ struct CafeDesArtsCardPreview: View {
     }
 
     private func emptyStampSquare(size: CGFloat) -> some View {
-        RoundedRectangle(cornerRadius: size * 0.12, style: .continuous)
-            .fill(Color.black.opacity(0.38))
+        let bare = stampsOnly && stampsOnlyBare
+        return RoundedRectangle(cornerRadius: size * 0.12, style: .continuous)
+            .fill(bare ? Color.white.opacity(0.08) : Color.black.opacity(0.38))
+            .overlay {
+                if bare {
+                    RoundedRectangle(cornerRadius: size * 0.12, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.18), lineWidth: 1)
+                }
+            }
             .frame(width: size, height: size)
     }
 

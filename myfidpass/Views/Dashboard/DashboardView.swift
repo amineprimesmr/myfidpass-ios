@@ -852,7 +852,7 @@ struct DashboardView: View {
             scheduleDebouncedPostScanSync()
             return nil
         } catch {
-            return (error as? APIError)?.errorDescription ?? "Impossible d’accorder la récompense."
+            return APIError.merchantFacingMessage(from: error) ?? "Impossible d’accorder la récompense."
         }
     }
 
@@ -1803,6 +1803,7 @@ struct DashboardView: View {
                     .scan(slug: slug, barcode: walletBarcode, visit: true, points: nil, amountEur: nil, receiptValidationToken: nil)
                 )
                 await MainActor.run {
+                    applyScanBalanceLocally(barcode: walletBarcode, response: response)
                     successToast = Toast.scanStampSuccess(
                         memberName: response.member?.name ?? memberName,
                         pointsCapped: response.pointsCapped == true,
@@ -1819,13 +1820,43 @@ struct DashboardView: View {
                     appState.showError(scanError ?? "Code non reconnu.")
                 }
             } catch {
-                let msg = (error as? APIError)?.errorDescription ?? "Erreur lors du scan."
                 await MainActor.run {
-                    scanError = msg
-                    appState.showError(msg)
+                    presentScanFailure(error, fallback: "Erreur lors du scan.")
                 }
             }
         }
+    }
+
+    @MainActor
+    private func presentScanFailure(_ error: Error, fallback: String) {
+        let msg = APIError.merchantFacingMessage(from: error) ?? fallback
+        scanError = msg
+        appState.showError(msg)
+    }
+
+    @MainActor
+    private func applyScanBalanceLocally(barcode: String, response: ScanResponse) {
+        guard let template = dataService.currentCardTemplate() else { return }
+        let bc = barcode.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !bc.isEmpty else { return }
+        let card = dataService.clientCard(byQRCodeValue: bc)
+            ?? dataService.findOrCreateClientCard(
+                qrCodeValue: bc,
+                template: template,
+                clientDisplayName: response.member?.name
+            )
+        if let bal = response.newBalance {
+            card.stampsCount = Int32(bal)
+        } else if let p = response.member?.points {
+            card.stampsCount = Int32(p)
+        } else if let added = response.pointsAdded {
+            card.stampsCount += Int32(added)
+        }
+        card.updatedAt = Date()
+        if let name = response.member?.name?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
+            card.clientDisplayName = name
+        }
+        try? viewContext.save()
     }
 
     private func submitStampVisit(slug: String, barcode: String) async -> ScanResponse? {
@@ -1835,12 +1866,15 @@ struct DashboardView: View {
             let response: ScanResponse = try await APIClient.shared.request(
                 .scan(slug: slug, barcode: barcode, visit: true, points: nil, amountEur: nil, receiptValidationToken: nil)
             )
+            await MainActor.run {
+                applyScanBalanceLocally(barcode: barcode, response: response)
+            }
             scheduleDebouncedPostScanSync()
             return response
         } catch {
+            scheduleDebouncedPostScanSync()
             await MainActor.run {
-                scanError = (error as? APIError)?.errorDescription ?? "Erreur lors de l’enregistrement du tampon."
-                appState.showError(scanError ?? "Erreur")
+                presentScanFailure(error, fallback: "Erreur lors de l’enregistrement du tampon.")
             }
             return nil
         }
@@ -1897,8 +1931,7 @@ struct DashboardView: View {
             return true
         } catch {
             await MainActor.run {
-                scanError = (error as? APIError)?.errorDescription ?? "Erreur lors de l'enregistrement."
-                appState.showError(scanError ?? "Erreur")
+                presentScanFailure(error, fallback: "Erreur lors de l'enregistrement.")
             }
             return false
         }
@@ -1924,7 +1957,7 @@ struct DashboardView: View {
             scheduleDebouncedPostScanSync()
             return nil
         } catch {
-            let msg = (error as? APIError)?.errorDescription ?? "Validation impossible."
+            let msg = APIError.merchantFacingMessage(from: error) ?? "Validation impossible."
             await MainActor.run {
                 scanError = msg
                 appState.showError(msg)
@@ -2037,7 +2070,7 @@ struct DashboardView: View {
             return nil
         } catch {
             await MainActor.run {
-                let msg = (error as? APIError)?.errorDescription ?? "Impossible d’appliquer la récompense."
+                let msg = APIError.merchantFacingMessage(from: error) ?? "Impossible d’appliquer la récompense."
                 scanError = msg
                 appState.showError(msg)
             }

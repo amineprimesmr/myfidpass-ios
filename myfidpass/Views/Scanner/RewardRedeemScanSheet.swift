@@ -2,7 +2,7 @@
 //  RewardRedeemScanSheet.swift
 //  myfidpass
 //
-//  Validation caisse d’un QR « Utiliser en magasin » — plein écran opaque, une seule source de vérité (lookup API).
+//  Validation caisse d’un QR « Utiliser en magasin » — plein écran aligné sur AddStampVisitSheet.
 //
 
 import SwiftUI
@@ -19,6 +19,7 @@ struct ScanRewardRedeemSheetData: Identifiable {
     let eligible: Bool
     let mode: String
     let tierIndex: Int?
+    let tierImageURL: String?
 }
 
 /// Parse le payload `MYFIDPASS_REDEEM` (aligné backend `reward-redeem-qr.js`).
@@ -124,7 +125,8 @@ enum ScanRewardRedeemSheetDataBuilder {
             pointsBalance: balance,
             eligible: eligible,
             mode: preview.mode ?? "points",
-            tierIndex: preview.tierIndex
+            tierIndex: preview.tierIndex,
+            tierImageURL: preview.tierImageURL
         )
     }
 }
@@ -138,284 +140,173 @@ struct RewardRedeemScanSheet: View {
     @State private var loading = false
     @State private var errorMessage: String?
     @State private var validated = false
+    @State private var slideResetID = UUID()
 
-    private var displayMemberName: String {
-        let n = data.memberName.trimmingCharacters(in: .whitespacesAndNewlines)
-        return n.isEmpty ? "Client" : n
+    private let topChrome = MerchantScanSheetTopChrome()
+
+    private var memberFirstName: String {
+        MerchantScanSheetCopy.memberFirstName(from: data.memberName)
     }
 
-    private var qrPayload: RewardRedeemQRPayload? {
-        RewardRedeemQRPayload.parse(data.barcode)
+    private var balanceCaption: String {
+        if data.mode == "stamps" {
+            if data.pointsRequired == 0 {
+                return "Début du jeu · offert"
+            }
+            return "\(data.pointsBalance) tampon\(data.pointsBalance > 1 ? "s" : "") · objectif \(data.pointsRequired)"
+        }
+        return "Coût : \(data.pointsRequired) pts · Solde : \(data.pointsBalance) pts"
+    }
+
+    private var heroLeadLine: String {
+        if validated { return "RÉCOMPENSE VALIDÉE" }
+        if !data.eligible { return "NON ÉLIGIBLE" }
+        return "À VALIDER EN CAISSE"
+    }
+
+    private var canSlideToRedeem: Bool {
+        data.eligible
+            && !validated
+            && !loading
+            && (data.mode == "stamps" || data.pointsRequired > 0)
+    }
+
+    private var qrTierIndex: Int? {
+        guard let qrPayload else { return nil }
+        if case .points(_, let tier, _) = qrPayload { return tier }
+        return nil
     }
 
     var body: some View {
-        NavigationStack {
-            ZStack {
-                Color(.systemGroupedBackground)
-                    .ignoresSafeArea()
+        ZStack(alignment: .top) {
+            GeometryReader { proxy in
+                merchantScanDarkRadialBackground(
+                    width: merchantScanSanitizeDimension(proxy.size.width),
+                    height: merchantScanSanitizeDimension(proxy.size.height)
+                )
+            }
+            .ignoresSafeArea()
+            .allowsHitTesting(false)
+
+            GeometryReader { geo in
+                let headerTopInset = merchantScanHeaderTopInset(from: geo)
+                let bottomPad = max(geo.safeAreaInsets.bottom, 12)
 
                 VStack(spacing: 0) {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 20) {
-                            memberHeader
-                            rewardHeroCard
-                            balanceRow
-                            if let errorMessage {
-                                errorBanner(errorMessage)
-                            }
-                            if validated {
-                                successBanner
-                            }
-                            qrVerificationSection
-                            if !data.eligible {
-                                ineligibleBanner
-                            }
-                        }
-                        .padding(.horizontal, 20)
+                    MerchantScanSheetHeaderBar(
+                        title: memberFirstName,
+                        subtitle: balanceCaption,
+                        onDismiss: onDismiss,
+                        chrome: topChrome
+                    )
+                    .padding(.horizontal, 16)
+                    .padding(.top, headerTopInset + 10)
+                    .disabled(loading)
+
+                    rewardGiftIcon
+                        .padding(.top, 24)
+
+                    MerchantScanRewardHero(
+                        leadLine: heroLeadLine,
+                        rewardLabel: data.rewardLabel,
+                        emphasizeLead: data.eligible && !validated,
+                        chrome: topChrome
+                    )
+
+                    if let errorMessage {
+                        statusMessage(errorMessage, tint: .red)
+                            .padding(.horizontal, 24)
+                            .padding(.top, 8)
+                    } else if !data.eligible {
+                        statusMessage(ineligibleMessage, tint: topChrome.secondary)
+                            .padding(.horizontal, 24)
+                            .padding(.top, 8)
+                    } else if data.pointsRequired <= 0, data.mode != "stamps" {
+                        statusMessage(
+                            "Coût invalide (0 pts). Demandez au client de régénérer le QR depuis sa carte.",
+                            tint: Color.orange
+                        )
+                        .padding(.horizontal, 24)
                         .padding(.top, 8)
-                        .padding(.bottom, 24)
                     }
 
-                    if data.eligible, !validated {
+                    Spacer(minLength: 8)
+
+                    if canSlideToRedeem {
                         slideFooter
                             .padding(.horizontal, 20)
-                            .padding(.bottom, 12)
-                            .background {
-                                Rectangle()
-                                    .fill(.ultraThinMaterial)
-                                    .ignoresSafeArea(edges: .bottom)
-                            }
+                            .padding(.bottom, bottomPad + 8)
                     }
                 }
+                .frame(width: geo.size.width, height: geo.size.height, alignment: .top)
             }
-            .navigationTitle("Récompense")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Fermer", action: onDismiss)
-                        .disabled(loading)
+            .ignoresSafeArea(edges: [.top, .bottom])
+
+            if loading {
+                ZStack {
+                    Color.black.opacity(0.45)
+                        .ignoresSafeArea()
+                    ProgressView()
+                        .scaleEffect(1.35)
+                        .tint(.white)
                 }
+                .allowsHitTesting(true)
             }
         }
-        .presentationBackground(Color(.systemGroupedBackground))
-        .interactiveDismissDisabled(loading || validated)
+        .merchantScanFullScreenChrome()
     }
 
-    // MARK: - Sections
-
-    private var memberHeader: some View {
-        HStack(spacing: 14) {
-            ZStack {
-                Circle()
-                    .fill(AppTheme.Colors.primary.opacity(0.14))
-                    .frame(width: 52, height: 52)
-                Text(memberInitials)
-                    .font(.system(size: 18, weight: .bold, design: .rounded))
-                    .foregroundStyle(AppTheme.Colors.primary)
-            }
-            VStack(alignment: .leading, spacing: 4) {
-                Text(displayMemberName)
-                    .font(.title2.weight(.bold))
-                Text("Récompense à valider en caisse")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer(minLength: 0)
+    private var ineligibleMessage: String {
+        if data.mode == "stamps" {
+            return "Pas assez de tampons pour valider cette récompense."
         }
+        return "Solde insuffisant : il manque \(max(0, data.pointsRequired - data.pointsBalance)) pts."
     }
 
-    private var memberInitials: String {
-        let parts = displayMemberName.split(separator: " ").prefix(2)
-        let letters = parts.compactMap { $0.first }.map { String($0).uppercased() }
-        if letters.isEmpty { return "?" }
-        return letters.joined()
+    private var rewardGiftIcon: some View {
+        RewardGiftImageView(
+            tierIndex: data.tierIndex,
+            mode: data.mode,
+            pointsRequired: data.pointsRequired,
+            qrTierIndex: qrTierIndex,
+            customImageURL: data.tierImageURL,
+            size: 96
+        )
+        .shadow(color: Color.black.opacity(0.35), radius: 10, y: 5)
+        .accessibilityLabel(data.rewardLabel)
     }
 
-    private var rewardHeroCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Label {
-                Text(data.rewardLabel)
-                    .font(.title3.weight(.semibold))
-                    .fixedSize(horizontal: false, vertical: true)
-            } icon: {
-                Image(systemName: "gift.fill")
-                    .font(.title2)
-                    .foregroundStyle(Color(red: 1, green: 0.55, blue: 0.2))
-            }
-
-            if data.mode == "stamps" {
-                Text("Programme tampons")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                if data.pointsRequired == 0 {
-                    Text("Début du jeu · offert")
-                        .font(.title3.weight(.bold))
-                } else {
-                    Text("\(data.pointsBalance) tampon\(data.pointsBalance > 1 ? "s" : "") · objectif \(data.pointsRequired)")
-                        .font(.title3.weight(.bold))
-                        .monospacedDigit()
-                }
-            } else {
-                HStack(spacing: 0) {
-                    costColumn(title: "Coût", value: data.pointsRequired, suffix: "pts")
-                    Divider().frame(height: 44)
-                    costColumn(title: "Solde client", value: data.pointsBalance, suffix: "pts")
-                }
-            }
-        }
-        .padding(20)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-    }
-
-    private func costColumn(title: String, value: Int, suffix: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-            HStack(alignment: .firstTextBaseline, spacing: 4) {
-                Text("\(value)")
-                    .font(.system(size: 28, weight: .bold, design: .rounded))
-                    .monospacedDigit()
-                    .foregroundStyle(value > 0 ? Color.primary : Color.orange)
-                Text(suffix)
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var balanceRow: some View {
-        Group {
-            if data.pointsRequired <= 0, data.mode != "stamps" {
-                HStack(spacing: 10) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
-                    Text("Le coût en points est invalide (0). Demandez au client de régénérer le QR depuis sa carte.")
-                        .font(.footnote)
-                }
-                .padding(12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var qrVerificationSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("QR scanné")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.secondary)
-            HStack(spacing: 16) {
-                if let img = QRCodeGenerator.generateQR(from: data.barcode, size: 88) {
-                    Image(uiImage: img)
-                        .interpolation(.none)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: 88, height: 88)
-                        .padding(8)
-                        .background(Color.white, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                }
-                VStack(alignment: .leading, spacing: 6) {
-                    if let qrPayload {
-                        switch qrPayload {
-                        case .points(_, let tier, let pts):
-                            Text("Palier #\(tier + 1) · \(pts) pts encodés")
-                                .font(.footnote.weight(.medium))
-                        case .stamps(_, let th):
-                            if th == 0 {
-                                Text("Récompense · Début du jeu")
-                                    .font(.footnote.weight(.medium))
-                            } else if let th, th > 0 {
-                                Text("Palier tampons · \(th) tampon\(th > 1 ? "s" : "") encodés")
-                                    .font(.footnote.weight(.medium))
-                            } else {
-                                Text("Récompense tampons (carte complète)")
-                                    .font(.footnote.weight(.medium))
-                            }
-                        }
-                    } else {
-                        Text("Format QR non reconnu — utilisez « Utiliser en magasin » sur la carte client.")
-                            .font(.footnote)
-                            .foregroundStyle(.orange)
-                    }
-                    Text("Une seule validation par scan.")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                }
-            }
-            .padding(14)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(.tertiarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        }
-    }
-
-    private var ineligibleBanner: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "lock.fill")
-                .foregroundStyle(.secondary)
-            Text(
-                data.mode == "stamps"
-                    ? "Pas assez de tampons pour valider cette récompense."
-                    : "Solde insuffisant : il manque \(max(0, data.pointsRequired - data.pointsBalance)) pts."
-            )
-            .font(.subheadline)
-        }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-    }
-
-    private func errorBanner(_ text: String) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: "xmark.circle.fill")
-                .foregroundStyle(.red)
-            Text(text)
-                .font(.footnote)
-        }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-    }
-
-    private var successBanner: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "checkmark.circle.fill")
-                .font(.title2)
-                .foregroundStyle(.green)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Récompense validée")
-                    .font(.headline)
-                Text("\(displayMemberName) — \(data.rewardLabel)")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.green.opacity(0.1), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    private func statusMessage(_ text: String, tint: Color) -> some View {
+        Text(text)
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(tint)
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: .infinity)
     }
 
     private var slideFooter: some View {
+        let idle = "Glisser pour valider la récompense"
         let cfg = SlideToConfirm.Config(
-            idleText: "Glisser pour valider la récompense",
+            idleText: idle,
             onSwipeText: "Valider",
             confirmationText: "Récompense validée",
-            tint: AppTheme.Colors.primary,
+            tint: AppTheme.Colors.success,
             foregroundColor: .white,
-            height: 56,
-            disabled: loading || (data.pointsRequired <= 0 && data.mode != "stamps") || (data.mode == "stamps" && data.pointsRequired < 0)
+            height: MerchantScanSheetTheme.slideHeight,
+            knobPadding: 6,
+            disabled: !canSlideToRedeem
         )
         return SlideToConfirm(config: cfg) {
-            guard !loading else { return }
+            guard canSlideToRedeem else { return }
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
             Task {
                 loading = true
                 errorMessage = nil
                 if let err = await onRedeem() {
                     errorMessage = err
                     loading = false
+                    slideResetID = UUID()
+                    UINotificationFeedbackGenerator().notificationOccurred(.error)
                 } else {
                     validated = true
                     loading = false
@@ -424,6 +315,6 @@ struct RewardRedeemScanSheet: View {
                 }
             }
         }
-        .padding(.top, 12)
+        .id(slideResetID)
     }
 }

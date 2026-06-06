@@ -9,7 +9,7 @@
 import Foundation
 
 enum MerchantTransactionEventLabels {
-    // MARK: - Encodage note (`txn:<id>|t:<type>|p:<n>|v:1`)
+    // MARK: - Encodage note (`txn:<id>|t:<type>|p:<n>|v:1|l:<récompense>`)
 
     static func encodeStampNote(txnId: String, type: String?, points: Int?, metadata: String?) -> String {
         var segments = ["txn:\(txnId.trimmingCharacters(in: .whitespacesAndNewlines))"]
@@ -22,6 +22,9 @@ enum MerchantTransactionEventLabels {
         }
         if metadataIndicatesVisit(metadata) {
             segments.append("v:1")
+        }
+        if let label = parseRewardLabel(fromMetadata: metadata), !label.isEmpty {
+            segments.append("l:\(encodeSegmentValue(label))")
         }
         return segments.joined(separator: "|")
     }
@@ -59,6 +62,14 @@ enum MerchantTransactionEventLabels {
         segmentValue(in: note, prefix: "v:") == "1"
     }
 
+    static func parseRewardLabel(fromStampNote note: String?) -> String? {
+        if let raw = segmentValue(in: note, prefix: "l:") {
+            let label = decodeSegmentValue(raw).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !label.isEmpty { return label }
+        }
+        return parseRewardLabel(fromMetadata: note)
+    }
+
     private static func segmentValue(in note: String?, prefix: String) -> String? {
         let raw = note?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard raw.hasPrefix("txn:") else { return nil }
@@ -83,12 +94,15 @@ enum MerchantTransactionEventLabels {
         type: String?,
         points: Int?,
         isVisit: Bool,
+        rewardLabel: String? = nil,
         context: DisplayContext = .memberHistory
     ) -> String {
         let normalized = type?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
 
         switch normalized {
         case "reward_redeem":
+            let label = rewardLabel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !label.isEmpty { return "Récompense · \(label)" }
             return "Récompense utilisée"
         case "welcome_bonus":
             return "Nouveau membre"
@@ -122,9 +136,17 @@ enum MerchantTransactionEventLabels {
         }
     }
 
-    static func dashboardAmountLine(type: String?, points: Int?, isVisit: Bool, isPointsProgram: Bool) -> String {
+    static func dashboardAmountLine(
+        type: String?,
+        points: Int?,
+        isVisit: Bool,
+        isPointsProgram: Bool,
+        rewardLabel: String? = nil
+    ) -> String {
         let normalized = type?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
         if normalized == "reward_redeem" {
+            let label = rewardLabel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !label.isEmpty { return "− \(label)" }
             if let p = points, p < 0 { return "−\(abs(p)) pts" }
             return "Récompense"
         }
@@ -154,6 +176,23 @@ enum MerchantTransactionEventLabels {
     }
 
     // MARK: - Metadata API
+
+    static func parseRewardLabel(fromMetadata metadata: String?) -> String? {
+        let raw = metadata?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !raw.isEmpty,
+              let data = raw.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        let label = (obj["reward_label"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return label.isEmpty ? nil : label
+    }
+
+    private static func encodeSegmentValue(_ value: String) -> String {
+        value.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? value
+    }
+
+    private static func decodeSegmentValue(_ value: String) -> String {
+        value.removingPercentEncoding ?? value
+    }
 
     private static func metadataIndicatesVisit(_ metadata: String?) -> Bool {
         let raw = metadata?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""

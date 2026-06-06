@@ -32,6 +32,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import fr.myfidpass.data.dto.TransactionDto
 import fr.myfidpass.ui.theme.DashboardFintechPalette
+import fr.myfidpass.util.MerchantTransactionEventLabels
 import fr.myfidpass.ui.theme.MerchantDesignSystem
 import fr.myfidpass.util.MerchantActivityDateFormat
 import fr.myfidpass.ui.theme.FintechLightPalette
@@ -130,12 +131,13 @@ fun FintechTransactionPill(
         ?: transaction.memberEmail
         ?: transaction.type
         ?: "Opération"
-    val pts = transaction.points
-    val ptsLabel = when {
-        pts == null -> ""
-        isPointsProgram -> if (pts >= 0) "+$pts pts" else "$pts pts"
-        else -> if (pts >= 0) "+$pts" else "$pts"
-    }
+    val rewardLabel = MerchantTransactionEventLabels.rewardLabelFromMetadata(transaction.metadata)
+    val ptsLabel = MerchantTransactionEventLabels.dashboardAmountLine(
+        type = transaction.type,
+        points = transaction.points,
+        isPointsProgram = isPointsProgram,
+        rewardLabel = rewardLabel,
+    )
     Row(
         modifier = modifier
             .fillMaxWidth()

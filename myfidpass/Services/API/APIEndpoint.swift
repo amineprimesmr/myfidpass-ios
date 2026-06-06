@@ -283,7 +283,7 @@ enum APIEndpoint {
         case .integrationRewardRedeem(let slug, _): return "/api/businesses/\(pathSegment(slug))/integration/reward-redeem"
         case .deviceRegister: return "/api/device/register"
         case .walletPass(let slug, let memberId, _): return "/api/businesses/\(pathSegment(slug))/members/\(pathSegment(memberId))/pass"
-        case .notifyClients(let slug, _, _): return "/api/businesses/\(pathSegment(slug))/notify"
+        case .notifyClients(let slug, _): return "/api/businesses/\(pathSegment(slug))/notify"
         case .patchDashboardSettings(let slug, _): return "/api/businesses/\(pathSegment(slug))/dashboard/settings"
         case .dashboardFlyerGet(let slug): return "/api/businesses/\(pathSegment(slug))/dashboard/flyer"
         case .dashboardFlyerPut(let slug, _): return "/api/businesses/\(pathSegment(slug))/dashboard/flyer"

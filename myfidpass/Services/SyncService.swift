@@ -290,7 +290,7 @@ final class SyncService: ObservableObject {
                 ? "Synchronisation du commerce incomplète. Réessayez dans un instant."
                 : (api.errorDescription ?? "Connexion instable. Réessayez.")
         } else {
-            lastError = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            lastError = APIError.merchantFacingMessage(from: error) ?? error.localizedDescription
             if let api = error as? APIError, case let .decoding(underlying) = api {
                 syncServiceLog.error("Decoding sync: \(String(reflecting: underlying))")
             } else {

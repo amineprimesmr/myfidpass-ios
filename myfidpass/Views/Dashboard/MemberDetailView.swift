@@ -2,7 +2,7 @@
 //  MemberDetailView.swift
 //  myfidpass
 //
-//  Fiche membre : infos (nom, email, points, dernière visite, catégories), actions (catégoriser, ajouter des points).
+//  Fiche membre : infos, historique, actions (crédit / correction points, tampons, cadeaux roue).
 //
 
 import SwiftUI
@@ -14,18 +14,14 @@ struct MemberDetailView: View {
     @FetchRequest private var stamps: FetchedResults<Stamp>
     @EnvironmentObject private var syncService: SyncService
     @EnvironmentObject private var dataService: DataService
-    @Environment(\.dismiss) private var dismiss
     /// Même UX plein écran que après scan QR (`AddPointsAmountSheet`).
     @State private var memberPointsAmountFlow: MemberPointsAmountFlow?
     @State private var isMemberPointsAmountSubmitting = false
     @StateObject private var receiptCoordinator = ReceiptValidationCoordinator()
     @State private var isRedeeming = false
-    @State private var pointsToRedeem = ""
     @State private var errorMessage: String?
     @State private var successMessage: String?
     @State private var successAlertTitle = "Succès"
-    @State private var showDeleteMemberConfirm = false
-    @State private var isDeletingMember = false
     @State private var grantedRewards: [MemberGameRewardDTO] = []
     @State private var isLoadingRewards = false
     @State private var claimingGrantId: String?
@@ -138,24 +134,14 @@ struct MemberDetailView: View {
                 Text("Actions")
             }
 
-            if template != nil {
-                let required = Int(template!.requiredStamps)
-                let hasEnoughStamps = Int(card.stampsCount) >= required && required > 0
+            if let template, Int(template.requiredStamps) > 0, Int(card.stampsCount) >= Int(template.requiredStamps) {
                 Section {
-                    if hasEnoughStamps {
-                        Button {
-                            redeemStamps()
-                        } label: {
-                            Label("Utiliser la récompense (tampons)", systemImage: "gift.fill")
-                        }
-                        .disabled(isRedeeming)
+                    Button {
+                        redeemStamps()
+                    } label: {
+                        Label("Utiliser la récompense (tampons)", systemImage: "gift.fill")
                     }
-                    HStack {
-                        TextField("Points à déduire", text: $pointsToRedeem)
-                            .keyboardType(.numberPad)
-                        Button("Utiliser") { redeemPoints() }
-                            .disabled(isRedeeming || pointsToRedeem.trimmingCharacters(in: .whitespaces).isEmpty)
-                    }
+                    .disabled(isRedeeming)
                 } header: {
                     Text("Utiliser une récompense")
                 }
@@ -214,18 +200,6 @@ struct MemberDetailView: View {
                 }
             }
 
-            Section {
-                Button(role: .destructive) {
-                    showDeleteMemberConfirm = true
-                } label: {
-                    Label("Supprimer ce membre et sa carte", systemImage: "trash")
-                }
-                .disabled(isDeletingMember)
-            } header: {
-                Text("Zone de danger")
-            } footer: {
-                Text("Supprime le client sur le serveur (carte Wallet, points, historique). Irréversible.")
-            }
         }
         .listStyle(.insetGrouped)
         .navigationTitle(card.clientDisplayName ?? "Membre")
@@ -253,14 +227,6 @@ struct MemberDetailView: View {
         .task {
             await syncMemberHistoryAndDashboard()
             await loadGiftRewards()
-        }
-        .alert("Supprimer définitivement ce membre ?", isPresented: $showDeleteMemberConfirm) {
-            Button("Annuler", role: .cancel) {}
-            Button("Supprimer", role: .destructive) {
-                Task { await deleteMemberOnServer() }
-            }
-        } message: {
-            Text("La carte Wallet du client ne sera plus valide. Action irréversible.")
         }
     }
 
@@ -291,28 +257,6 @@ struct MemberDetailView: View {
         let data = flow.data
         return { tier, amount in
             await redeemOrCreditAndRedeem(tier: tier, amountEur: amount, data: data)
-        }
-    }
-
-    private func deleteMemberOnServer() async {
-        guard let slug = AuthStorage.currentBusinessSlug,
-              let raw = resolvedMemberId, !raw.isEmpty else {
-            await MainActor.run { errorMessage = "Identifiant membre manquant." }
-            return
-        }
-        await MainActor.run { isDeletingMember = true }
-        defer { Task { @MainActor in isDeletingMember = false } }
-        do {
-            _ = try await APIClient.shared.request(.deleteDashboardMember(slug: slug, memberId: raw)) as EmptyResponse
-            await MainActor.run {
-                dataService.deleteClientCard(card)
-                dismiss()
-            }
-            await syncMemberHistoryAndDashboard()
-        } catch {
-            await MainActor.run {
-                errorMessage = (error as? APIError)?.errorDescription ?? "Suppression impossible."
-            }
         }
     }
 
@@ -613,35 +557,6 @@ struct MemberDetailView: View {
         }
     }
 
-    private func redeemPoints() {
-        guard let slug = AuthStorage.currentBusinessSlug, let memberId = resolvedMemberId else { return }
-        let value = pointsToRedeem.trimmingCharacters(in: .whitespaces)
-        guard let points = Int(value), points > 0 else {
-            errorMessage = "Saisissez un nombre de points à déduire."
-            return
-        }
-        isRedeeming = true
-        Task {
-            do {
-                let response = try await APIClient.shared.request(.redeemReward(slug: slug, memberId: memberId, type: .points(pointsToDeduct: points))) as RedeemResponse
-                await MainActor.run {
-                    if let newPts = response.newPoints {
-                        card.stampsCount = Int32(newPts)
-                        card.updatedAt = Date()
-                        try? context.save()
-                    }
-                    pointsToRedeem = ""
-                    successAlertTitle = "Récompense"
-                    successMessage = "Points utilisés."
-                }
-                await syncMemberHistoryAndDashboard()
-            } catch {
-                await MainActor.run { errorMessage = (error as? APIError)?.errorDescription ?? "Impossible d'utiliser les points." }
-            }
-            await MainActor.run { isRedeeming = false }
-        }
-    }
-
     private func loadGiftRewards() async {
         guard let slug = AuthStorage.currentBusinessSlug, let memberId = resolvedMemberId else { return }
         await MainActor.run { isLoadingRewards = true }
@@ -677,7 +592,7 @@ struct MemberDetailView: View {
     }
 }
 
-// MARK: - Sync historique (fiche membre + sheet catégories)
+// MARK: - Sync historique fiche membre
 
 @MainActor
 private func performMemberHistoryAndDashboardSync(

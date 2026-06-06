@@ -413,7 +413,8 @@ struct FintechTransactionRow: View {
                 type: entry.transactionType,
                 points: entry.scanPointsGranted,
                 isVisit: entry.isVisit,
-                isPointsProgram: isPointsProgram
+                isPointsProgram: isPointsProgram,
+                rewardLabel: entry.rewardLabel
             )
         case .newCard: return "Nouveau membre"
         }

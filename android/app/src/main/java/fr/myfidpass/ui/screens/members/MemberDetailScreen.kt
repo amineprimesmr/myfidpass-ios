@@ -11,7 +11,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.foundation.layout.Row
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -68,7 +67,6 @@ fun MemberDetailScreen(
     var ticketBalance by remember { mutableStateOf<Int?>(null) }
     var ticketsMode by remember { mutableStateOf<String?>(null) }
     var pointsPerTicket by remember { mutableStateOf<Int?>(null) }
-    var showDelete by remember { mutableStateOf(false) }
     var convertPointsInput by remember { mutableStateOf("50") }
     var rewards by remember { mutableStateOf<List<MemberGameRewardDto>>(emptyList()) }
     var amountEurInput by remember { mutableStateOf("") }
@@ -414,39 +412,6 @@ fun MemberDetailScreen(
                 },
                 modifier = Modifier.fillMaxWidth(),
             ) { Text("Ajouter au Google Wallet (client)") }
-            Spacer(Modifier.height(24.dp))
-            OutlinedButton(
-                onClick = { showDelete = true },
-                modifier = Modifier.fillMaxWidth(),
-            ) { Text("Supprimer ce membre", color = MaterialTheme.colorScheme.error) }
         }
-    }
-
-    if (showDelete) {
-        AlertDialog(
-            onDismissRequest = { showDelete = false },
-            title = { Text("Supprimer le membre ?") },
-            text = { Text("Pass, historique et données associés seront supprimés côté serveur.") },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        if (slug == null) return@TextButton
-                        scope.launch {
-                            runCatching {
-                                repository.deleteDashboardMember(slug, memberId)
-                                snackbar.showSnackbar("Membre supprimé")
-                                showDelete = false
-                                onBack()
-                            }.onFailure {
-                                snackbar.showSnackbar(it.message ?: "Erreur")
-                            }
-                        }
-                    },
-                ) { Text("Supprimer", color = MaterialTheme.colorScheme.error) }
-            },
-            dismissButton = {
-                TextButton(onClick = { showDelete = false }) { Text("Annuler") }
-            },
-        )
     }
 }

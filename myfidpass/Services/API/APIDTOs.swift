@@ -1089,6 +1089,7 @@ struct ScanRewardRedeemPreviewDTO: Decodable {
     let mode: String?
     let label: String?
     let tierIndex: Int?
+    let tierImageURL: String?
     let pointsRequired: Int?
     let pointsBalance: Int?
     let eligible: Bool?
@@ -1097,6 +1098,7 @@ struct ScanRewardRedeemPreviewDTO: Decodable {
         case mode
         case label
         case tierIndex = "tier_index"
+        case tierImageURL = "tier_image_url"
         case pointsRequired = "points_required"
         case pointsBalance = "points_balance"
         case eligible

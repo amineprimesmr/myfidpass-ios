@@ -63,6 +63,8 @@ struct DashboardActivityEntry: Identifiable, Equatable {
     let transactionType: String?
     /// Passage / visite (`metadata.visit` → `|v:1` dans la note).
     let isVisit: Bool
+    /// Libellé récompense (`reward_redeem` → `|l:` dans la note).
+    let rewardLabel: String?
 
     var eventTitle: String {
         switch kind {
@@ -73,6 +75,7 @@ struct DashboardActivityEntry: Identifiable, Equatable {
                 type: transactionType,
                 points: scanPointsGranted,
                 isVisit: isVisit,
+                rewardLabel: rewardLabel,
                 context: .dashboardFeed
             )
         }
@@ -439,6 +442,7 @@ final class DataService: ObservableObject {
                 type: MerchantTransactionEventLabels.parseType(fromStampNote: note),
                 points: MerchantTransactionEventLabels.parsePoints(fromStampNote: note),
                 isVisit: MerchantTransactionEventLabels.parseVisit(fromStampNote: note),
+                rewardLabel: MerchantTransactionEventLabels.parseRewardLabel(fromStampNote: note),
                 context: .memberHistory
             )
         }
@@ -485,7 +489,8 @@ final class DataService: ObservableObject {
                 cardObjectID: card.objectID,
                 scanPointsGranted: Self.scanPointsFromStampNote(s.note),
                 transactionType: txnType,
-                isVisit: isVisit
+                isVisit: isVisit,
+                rewardLabel: MerchantTransactionEventLabels.parseRewardLabel(fromStampNote: s.note)
             ))
         }
 
@@ -511,7 +516,8 @@ final class DataService: ObservableObject {
                     cardObjectID: firstCard.objectID,
                     scanPointsGranted: nil,
                     transactionType: nil,
-                    isVisit: false
+                    isVisit: false,
+                    rewardLabel: nil
                 ))
             }
         }
