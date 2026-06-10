@@ -19,6 +19,10 @@ struct MerchantSubscriptionGateView: View {
     var requiredCommerceSlots: Int? = nil
     /// Nom du commerce affiché sous le titre (post-inscription).
     var signupCommerceDisplayName: String? = nil
+    /// Ouverture depuis « Ajouter un commerce » (quota plein).
+    var addingAnotherCommerce: Bool = false
+    /// Nom du futur commerce (établissement sélectionné avant paywall).
+    var pendingCommerceName: String? = nil
 
     /// Croix affichée sur le paywall **obligatoire** (post-inscription) — jamais sur la sheet.
     private var showsPaywallCloseButton: Bool {
@@ -33,7 +37,9 @@ struct MerchantSubscriptionGateView: View {
                 headerExtraTopPadding: isMandatory ? 10 : 4,
                 closeButtonRevealDelay: (isMandatory && showsPaywallCloseButton) ? 0 : 5,
                 requiredCommerceSlots: requiredCommerceSlots,
-                signupCommerceDisplayName: signupCommerceDisplayName
+                signupCommerceDisplayName: signupCommerceDisplayName,
+                addingAnotherCommerce: addingAnotherCommerce,
+                pendingCommerceName: pendingCommerceName
             )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task {

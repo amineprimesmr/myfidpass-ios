@@ -268,7 +268,8 @@ struct RevolutActivityRow: View {
                 points: entry.scanPointsGranted,
                 isVisit: entry.isVisit,
                 isPointsProgram: true,
-                rewardLabel: entry.rewardLabel
+                rewardLabel: entry.rewardLabel,
+                amountEur: entry.scanAmountEur
             ))
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(palette.tertiaryText)

@@ -41,6 +41,9 @@ enum APIError: LocalizedError {
                 if !trimmed.isEmpty { return trimmed }
                 return "Ce contenu n’est pas disponible pour le moment. Vérifiez le commerce sélectionné ou synchronisez depuis l’écran Compte."
             }
+            if let friendly = Self.friendlyServerDescription(statusCode: code, message: msg) {
+                return friendly
+            }
             return msg ?? "Erreur serveur (\(code))."
         case .network(let e):
             if let url = e as? URLError, url.code == .cancelled { return nil }
@@ -118,6 +121,47 @@ enum APIError: LocalizedError {
             }
         }
         return "Une erreur réseau est survenue. Vérifiez la connexion puis réessayez."
+    }
+
+    /// 502/503/504 Railway ou proxy (« Application failed to respond ») — réessai possible.
+    static func isTransientInfrastructureFailure(_ error: Error) -> Bool {
+        if isBenignRequestCancellation(error) { return false }
+        if let api = error as? APIError {
+            switch api {
+            case .sessionRefreshTransient, .network:
+                return true
+            case .server(let code, let msg):
+                if [502, 503, 504].contains(code) { return true }
+                let raw = msg?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                return raw.localizedCaseInsensitiveContains("failed to respond")
+                    || raw.localizedCaseInsensitiveContains("bad gateway")
+                    || raw.localizedCaseInsensitiveContains("service unavailable")
+            default:
+                return false
+            }
+        }
+        if let url = error as? URLError {
+            switch url.code {
+            case .timedOut, .networkConnectionLost, .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed:
+                return true
+            default:
+                return false
+            }
+        }
+        return false
+    }
+
+    /// Texte lisible pour pannes infra (Railway 502, etc.) — pas le message brut anglais du proxy.
+    private static func friendlyServerDescription(statusCode: Int, message: String?) -> String? {
+        let raw = message?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let isGateway = [502, 503, 504].contains(statusCode)
+        if isGateway
+            || raw.localizedCaseInsensitiveContains("failed to respond")
+            || raw.localizedCaseInsensitiveContains("bad gateway")
+            || raw.localizedCaseInsensitiveContains("service unavailable") {
+            return "Le serveur MyFidpass est momentanément indisponible. Attendez quelques secondes puis réessayez le scan."
+        }
+        return nil
     }
 
     /// Annulation iOS (nouvelle requête, fermeture d’écran) — ne pas traiter comme une vraie erreur métier.

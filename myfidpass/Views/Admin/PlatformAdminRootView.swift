@@ -2,7 +2,7 @@
 //  PlatformAdminRootView.swift
 //  myfidpass
 //
-//  Hub unique **Commerces** (recherche + pilotage) ; pages dédiées : Statistiques, Comptes, Paiements.
+//  Console admin — fond app standard, pastilles commerce noires, recherche native.
 //
 
 import SwiftUI
@@ -10,603 +10,433 @@ import SwiftUI
 // MARK: - Navigation
 
 private enum AdminRoute: Hashable {
-    case statistics
-    case accounts
-    case payments
     case commerce(AdminBusinessRow)
 }
 
-/// Racine admin : une pile de navigation, page d’accueil = liste des commerces.
-struct PlatformAdminRootView: View {
-    @EnvironmentObject private var authService: AuthService
-
-    var body: some View {
-        NavigationStack {
-            PlatformAdminCommerceHubView()
-                .navigationDestination(for: AdminRoute.self) { route in
-                    switch route {
-                    case .statistics:
-                        PlatformAdminStatisticsPage()
-                    case .accounts:
-                        PlatformAdminAccountsPage()
-                    case .payments:
-                        PlatformAdminPaymentsPage()
-                    case .commerce(let business):
-                        PlatformAdminCommerceDetailPage(business: business)
-                    }
-                }
-        }
-        .tint(AppTheme.Colors.primary)
-    }
+/// Style réservé aux pastilles commerce (fond noir, texte blanc).
+private enum AdminCommercePillStyle {
+    static let fill = Color.black
+    static let stroke = Color.white.opacity(0.12)
+    static let primaryText = Color.white
+    static let secondaryText = Color.white.opacity(0.58)
+    static let iconDisc = Color.white.opacity(0.14)
+    static let activeLogoRing = Color(red: 0.42, green: 0.88, blue: 0.58)
 }
 
-// MARK: - Hub (page principale)
-
-private struct PlatformAdminCommerceHubView: View {
+struct PlatformAdminRootView: View {
     @EnvironmentObject private var authService: AuthService
-    @State private var businesses: [AdminBusinessRow] = []
+    @State private var navPath = NavigationPath()
     @State private var overview: AdminOverviewResponse?
     @State private var search = ""
     @State private var loadError: String?
     @State private var isLoading = true
+    @State private var pilotingSlug: String?
+    @State private var showCreateMerchantOnboarding = false
+    @State private var createSuccessMessage: String?
 
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                hubHeader
-                statsStrip
-                quickLinksSection
-                commerceSectionHeader
-                if isLoading && businesses.isEmpty {
-                    ProgressView("Chargement des commerces…")
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 40)
-                } else if let loadError {
-                    Text(loadError)
-                        .font(.subheadline)
-                        .foregroundStyle(AppTheme.Colors.error)
-                } else {
-                    LazyVStack(spacing: 12) {
-                        ForEach(filteredBusinesses) { b in
-                            commerceCard(b)
-                        }
-                    }
-                }
-            }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 28)
-        }
-        .background(AppTheme.Colors.background)
-        .navigationTitle("Administration")
-        .navigationBarTitleDisplayMode(.large)
-        .searchable(text: $search, prompt: "Rechercher un commerce, slug, e-mail…")
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    Task { await authService.openMerchantWorkspaceFromAdmin() }
-                } label: {
-                    Label("Mode commerçant", systemImage: "briefcase.fill")
-                }
-            }
-            ToolbarItem(placement: .topBarLeading) {
-                Menu {
-                    Button(role: .destructive) {
-                        authService.logout()
-                    } label: {
-                        Label("Déconnexion", systemImage: "rectangle.portrait.and.arrow.right")
-                    }
-                } label: {
-                    Image(systemName: "ellipsis.circle")
-                }
-            }
-        }
-        .task { await loadAll() }
-        .refreshable { await loadAll() }
-    }
-
-    private var hubHeader: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Tous les commerces")
-                .font(.title2.weight(.bold))
-                .foregroundStyle(AppTheme.Colors.textPrimary)
-            Text("Recherchez, ouvrez la fiche ou pilotez le tableau de bord comme le commerçant (carte, notifs, flyer).")
-                .font(.subheadline)
-                .foregroundStyle(AppTheme.Colors.textSecondary)
-        }
-        .padding(.top, 4)
-    }
-
-    private var statsStrip: some View {
-        HStack(spacing: 10) {
-            statPill(title: "Comptes", value: overview?.usersCount)
-            statPill(title: "Commerces", value: overview?.businessesCount)
-            statPill(title: "Abos actifs", value: overview?.activeSubscriptionsCount)
-        }
-    }
-
-    private func statPill(title: String, value: Int?) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.caption2.weight(.medium))
-                .foregroundStyle(AppTheme.Colors.textSecondary)
-            Text(value.map(String.init) ?? "—")
-                .font(.headline.weight(.bold))
-                .foregroundStyle(AppTheme.Colors.primary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .background(AppTheme.Colors.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .appCardShadowLight()
-    }
-
-    private var quickLinksSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Données plateforme")
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(AppTheme.Colors.textSecondary)
-                .textCase(.uppercase)
-
-            VStack(spacing: 0) {
-                adminNavRow(
-                    route: .statistics,
-                    icon: "chart.bar.doc.horizontal.fill",
-                    title: "Statistiques",
-                    subtitle: "Vue globale des comptes et abonnements"
-                )
-                Divider().padding(.leading, 52)
-                adminNavRow(
-                    route: .accounts,
-                    icon: "person.3.fill",
-                    title: "Comptes commerçants",
-                    subtitle: "Tous les utilisateurs inscrits"
-                )
-                Divider().padding(.leading, 52)
-                adminNavRow(
-                    route: .payments,
-                    icon: "creditcard.fill",
-                    title: "Paiements Stripe",
-                    subtitle: "Abonnements, packs flyer — journal admin"
-                )
-            }
-            .background(AppTheme.Colors.cardBackground)
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .appCardShadowLight()
-        }
-    }
-
-    private func adminNavRow(route: AdminRoute, icon: String, title: String, subtitle: String) -> some View {
-        NavigationLink(value: route) {
-            HStack(spacing: 14) {
-                Image(systemName: icon)
-                    .font(.title3)
-                    .foregroundStyle(AppTheme.Colors.primary)
-                    .frame(width: 36, alignment: .center)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .font(.body.weight(.semibold))
-                        .foregroundStyle(AppTheme.Colors.textPrimary)
-                    Text(subtitle)
-                        .font(.caption)
-                        .foregroundStyle(AppTheme.Colors.textSecondary)
-                }
-                Spacer(minLength: 0)
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.tertiary)
-            }
-            .padding(.vertical, 12)
-            .padding(.horizontal, 12)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-
-    private var commerceSectionHeader: some View {
-        HStack {
-            Text("Commerces")
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(AppTheme.Colors.textSecondary)
-                .textCase(.uppercase)
-            Spacer()
-            Text("\(filteredBusinesses.count)")
-                .font(.caption.weight(.bold))
-                .foregroundStyle(AppTheme.Colors.primary)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(AppTheme.Colors.primary.opacity(0.12))
-                .clipShape(Capsule())
-        }
-    }
-
-    private func commerceCard(_ b: AdminBusinessRow) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(b.organizationName ?? b.name ?? "Sans nom")
-                        .font(.headline)
-                        .foregroundStyle(AppTheme.Colors.textPrimary)
-                    Text(b.slug)
-                        .font(.caption.monospaced())
-                        .foregroundStyle(AppTheme.Colors.primary)
-                }
-                Spacer(minLength: 0)
-                subscriptionBadge(b)
-            }
-
-            if let em = b.ownerEmail, !em.isEmpty {
-                Label(em, systemImage: "envelope.fill")
-                    .font(.caption)
-                    .foregroundStyle(AppTheme.Colors.textSecondary)
-            }
-
-            HStack(spacing: 8) {
-                Label("\(b.memberCount ?? 0) membres", systemImage: "person.2.fill")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(AppTheme.Colors.textSecondary)
-                if let created = b.createdAt, !created.isEmpty {
-                    Text("·")
-                        .foregroundStyle(.tertiary)
-                    Text(created)
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                }
-            }
-
-            HStack(spacing: 10) {
-                NavigationLink(value: AdminRoute.commerce(b)) {
-                    Label("Fiche & réglages", systemImage: "doc.text.magnifyingglass")
-                        .font(.subheadline.weight(.semibold))
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-
-                Button {
-                    Task { await authService.openMerchantWorkspaceFromAdmin(preferredSlug: b.slug) }
-                } label: {
-                    Label("Piloter", systemImage: "arrow.right.circle.fill")
-                        .font(.subheadline.weight(.semibold))
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-            }
-        }
-        .padding(16)
-        .background(AppTheme.Colors.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .appCardShadowLight()
-    }
-
-    private func subscriptionBadge(_ b: AdminBusinessRow) -> some View {
-        let st = (b.ownerSubscriptionStatus ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let label: String = {
-            if st.isEmpty { return "Sans abo" }
-            if st == "active" || st == "trialing" { return st == "trialing" ? "Essai / actif" : "Abonné" }
-            if st == "past_due" { return "Paiement en retard" }
-            return st.replacingOccurrences(of: "_", with: " ")
-        }()
-        let color: Color = {
-            if st == "active" || st == "trialing" { return AppTheme.Colors.success }
-            if st == "past_due" { return AppTheme.Colors.warning }
-            if st.isEmpty { return AppTheme.Colors.textSecondary }
-            return AppTheme.Colors.textSecondary
-        }()
-        return Text(label)
-            .font(.caption2.weight(.bold))
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(color.opacity(0.18))
-            .foregroundStyle(color)
-            .clipShape(Capsule())
+    private var businesses: [AdminBusinessRow] {
+        authService.platformAdminBusinessRows
     }
 
     private var filteredBusinesses: [AdminBusinessRow] {
         let q = search.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !q.isEmpty else { return businesses }
         return businesses.filter { b in
-            [b.slug, b.name, b.organizationName, b.ownerEmail, b.ownerPlanId, b.ownerSubscriptionStatus]
+            [b.slug, b.name, b.organizationName, b.ownerEmail]
                 .compactMap { $0?.lowercased() }
                 .contains { $0.contains(q) }
         }
     }
 
-    private func loadAll() async {
-        isLoading = true
-        loadError = nil
-        defer { isLoading = false }
-        do {
-            async let o: AdminOverviewResponse = APIClient.shared.request(.adminOverview)
-            async let r: AdminBusinessesListResponse = APIClient.shared.request(
-                .adminBusinesses(q: nil, limit: 500, offset: 0)
-            )
-            overview = try await o
-            businesses = try await r.businesses
-        } catch {
-            loadError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-        }
-    }
-}
-
-// MARK: - Statistiques
-
-private struct PlatformAdminStatisticsPage: View {
-    @EnvironmentObject private var authService: AuthService
-    @State private var overview: AdminOverviewResponse?
-    @State private var loadError: String?
-    @State private var isLoading = true
-
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                Text("Vue agrégée de la base (comptes utilisateurs, fiches commerces, lignes d’abonnement Stripe actives / essai / période de grâce).")
-                    .font(.subheadline)
-                    .foregroundStyle(AppTheme.Colors.textSecondary)
-
-                if isLoading {
-                    ProgressView()
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 24)
-                } else if let loadError {
-                    Text(loadError).foregroundStyle(AppTheme.Colors.error)
-                } else if let o = overview {
-                    VStack(spacing: 12) {
-                        bigStatRow(title: "Comptes utilisateurs", value: o.usersCount, hint: "Inscriptions / connexions logiciel")
-                        bigStatRow(title: "Fiches commerce", value: o.businessesCount, hint: "Programmes fidélité créés")
-                        bigStatRow(
-                            title: "Abonnements actifs (Stripe)",
-                            value: o.activeSubscriptionsCount,
-                            hint: "Statuts : active, trialing, past_due"
-                        )
+        NavigationStack(path: $navPath) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    adminHeader
+                    commerceList
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 4)
+                .padding(.bottom, 28)
+            }
+            .background(AppTheme.Colors.background)
+            .scrollIndicators(.hidden)
+            .refreshable { await loadAll(forceBusinesses: true) }
+            .searchable(text: $search, prompt: "Commerce, slug, e-mail…")
+            .navigationTitle("Administration")
+            .navigationBarTitleDisplayMode(.large)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Menu {
+                        Button(role: .destructive) {
+                            authService.logout()
+                        } label: {
+                            Label("Déconnexion", systemImage: "rectangle.portrait.and.arrow.right")
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
                     }
                 }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        authService.beginAdminMerchantProvisioning()
+                        showCreateMerchantOnboarding = true
+                    } label: {
+                        Image(systemName: "plus.circle.fill")
+                            .symbolRenderingMode(.hierarchical)
+                    }
+                    .accessibilityLabel("Créer un compte commerçant")
+                }
             }
-            .padding(16)
-        }
-        .background(AppTheme.Colors.background)
-        .navigationTitle("Statistiques")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    Task { await authService.openMerchantWorkspaceFromAdmin() }
-                } label: {
-                    Image(systemName: "briefcase.fill")
+            .fullScreenCover(isPresented: $showCreateMerchantOnboarding) {
+                AdminMerchantProvisioningFlowView(
+                    onFinished: { message in
+                        showCreateMerchantOnboarding = false
+                        createSuccessMessage = message
+                        Task { await loadAll(forceBusinesses: true) }
+                    },
+                    onCancelled: {
+                        showCreateMerchantOnboarding = false
+                    }
+                )
+                .environmentObject(authService)
+            }
+            .alert("Compte créé", isPresented: .init(
+                get: { createSuccessMessage != nil },
+                set: { if !$0 { createSuccessMessage = nil } }
+            )) {
+                Button("OK", role: .cancel) { createSuccessMessage = nil }
+            } message: {
+                if let createSuccessMessage {
+                    Text(createSuccessMessage)
+                }
+            }
+            .navigationDestination(for: AdminRoute.self) { route in
+                if case .commerce(let business) = route {
+                    PlatformAdminCommerceDetailPage(business: business)
                 }
             }
         }
-        .task { await load() }
-        .refreshable { await load() }
+        .tint(AppTheme.Colors.primary)
+        .task { await loadAll(forceBusinesses: businesses.isEmpty) }
     }
 
-    private func bigStatRow(title: String, value: Int?, hint: String) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.subheadline.weight(.semibold))
-            Text(value.map(String.init) ?? "—")
-                .font(.system(size: 34, weight: .bold, design: .default))
+    // MARK: Header
+
+    private var adminHeader: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            bigStatsRow
+            if let overview {
+                adminStatsBreakdown(overview)
+            }
+
+            VStack(alignment: .leading, spacing: 0) {
+                Text("Tous les")
+                    .font(.system(.title2, design: .default).weight(.semibold))
+                    .foregroundStyle(AppTheme.Colors.textSecondary)
+                Text("Commerces")
+                    .font(.system(.largeTitle, design: .default).weight(.bold))
+                    .foregroundStyle(AppTheme.Colors.textPrimary)
+            }
+        }
+    }
+
+    private var bigStatsRow: some View {
+        HStack(spacing: 22) {
+            bigStat(value: overview?.businessesCount ?? businesses.count, label: "Commerces")
+            bigStat(value: overview?.usersCount ?? 0, label: "Comptes")
+            bigStat(value: overview?.activeSubscriptionsCount ?? 0, label: "Abos")
+        }
+    }
+
+    private func adminStatsBreakdown(_ overview: AdminOverviewResponse) -> some View {
+        let parts = [
+            overview.merchantOwnersCount.map { "\($0) proprio" },
+            overview.teamMemberAccountsCount.flatMap { $0 > 0 ? "\($0) équipe" : nil },
+            overview.platformAdminAccountsCount.flatMap { $0 > 0 ? "\($0) admin" : nil },
+            overview.orphanAccountsCount.flatMap { $0 > 0 ? "\($0) orphelin\($0 > 1 ? "s" : "")" : nil },
+        ].compactMap { $0 }
+
+        return Group {
+            if !parts.isEmpty {
+                Text(parts.joined(separator: " · "))
+                    .font(.caption)
+                    .foregroundStyle(AppTheme.Colors.textSecondary)
+            }
+            if let orphans = overview.orphanAccountsCount, orphans > 0 {
+                Text("Comptes orphelins : inscriptions abandonnées ou commerces supprimés sans effacer le compte propriétaire.")
+                    .font(.caption2)
+                    .foregroundStyle(AppTheme.Colors.textSecondary)
+            }
+        }
+    }
+
+    private func bigStat(value: Int, label: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("\(value)")
+                .font(.system(size: 34, weight: .bold, design: .rounded))
                 .foregroundStyle(AppTheme.Colors.primary)
-            Text(hint)
-                .font(.caption)
+                .contentTransition(.numericText())
+            Text(label)
+                .font(.caption.weight(.semibold))
                 .foregroundStyle(AppTheme.Colors.textSecondary)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(16)
-        .background(AppTheme.Colors.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .appCardShadowLight()
     }
 
-    private func load() async {
-        isLoading = true
+    // MARK: Liste
+
+    @ViewBuilder
+    private var commerceList: some View {
+        if isLoading && businesses.isEmpty {
+            hubProgress
+        } else if let loadError, businesses.isEmpty {
+            hubError(loadError)
+        } else if filteredBusinesses.isEmpty {
+            hubEmptySearch
+        } else {
+            LazyVStack(spacing: 10) {
+                ForEach(filteredBusinesses) { b in
+                    AdminCommercePillRow(
+                        business: b,
+                        isPiloting: pilotingSlug == b.slug,
+                        onPilot: { pilot(b) },
+                        onOpenSettings: { openCommerceSettings(b) }
+                    )
+                }
+            }
+        }
+    }
+
+    private var hubProgress: some View {
+        VStack(spacing: 12) {
+            ProgressView()
+            Text("Chargement…")
+                .font(.subheadline)
+                .foregroundStyle(AppTheme.Colors.textSecondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 48)
+    }
+
+    private func hubError(_ message: String) -> some View {
+        VStack(spacing: 8) {
+            Image(systemName: "wifi.exclamationmark")
+                .font(.title2)
+                .foregroundStyle(AppTheme.Colors.error)
+            Text(message)
+                .font(.subheadline)
+                .multilineTextAlignment(.center)
+                .foregroundStyle(AppTheme.Colors.error)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 36)
+    }
+
+    private var hubEmptySearch: some View {
+        Text("Aucun résultat")
+            .font(.subheadline.weight(.medium))
+            .foregroundStyle(AppTheme.Colors.textSecondary)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 32)
+    }
+
+    private func pilot(_ b: AdminBusinessRow) {
+        guard pilotingSlug == nil else { return }
+        pilotingSlug = b.slug
+        Task {
+            await authService.openMerchantWorkspaceFromAdmin(preferredSlug: b.slug)
+            pilotingSlug = nil
+        }
+    }
+
+    private func openCommerceSettings(_ b: AdminBusinessRow) {
+        navPath.append(AdminRoute.commerce(b))
+    }
+
+    private func loadAll(forceBusinesses: Bool) async {
+        let hadCache = !businesses.isEmpty
+        if !hadCache { isLoading = true }
         loadError = nil
         defer { isLoading = false }
         do {
-            overview = try await APIClient.shared.request(.adminOverview)
+            async let overviewTask: AdminOverviewResponse = APIClient.shared.request(.adminOverview)
+            let businessesOK = await authService.refreshPlatformAdminBusinesses(force: true)
+            overview = try await overviewTask
+            if !businessesOK, businesses.isEmpty {
+                loadError = "Impossible de charger la liste des commerces."
+            }
         } catch {
-            loadError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            if businesses.isEmpty {
+                loadError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            }
         }
     }
 }
 
-// MARK: - Comptes
+// MARK: - Ligne commerce
 
-private struct PlatformAdminAccountsPage: View {
-    @EnvironmentObject private var authService: AuthService
-    @State private var users: [AdminUserRow] = []
-    @State private var search = ""
-    @State private var loadError: String?
-    @State private var isLoading = true
+private struct AdminCommercePillRow: View {
+    let business: AdminBusinessRow
+    var isPiloting: Bool
+    let onPilot: () -> Void
+    let onOpenSettings: () -> Void
 
-    var body: some View {
-        List {
-            Section {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Tous les comptes ayant accès au logiciel. Les pastilles « admin » ont accès à cette console.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    if let loadError {
-                        Text(loadError)
-                            .font(.caption)
-                            .foregroundStyle(AppTheme.Colors.error)
-                    }
-                }
-                .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
-                .listRowBackground(Color.clear)
-            }
-            ForEach(filteredUsers) { u in
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack {
-                        Text(u.email ?? u.id)
-                            .font(.body.weight(.semibold))
-                        if u.isAdminFlag {
-                            Text("ADMIN")
-                                .font(.caption2.weight(.heavy))
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(AppTheme.Colors.primary.opacity(0.2))
-                                .foregroundStyle(AppTheme.Colors.primary)
-                                .clipShape(RoundedRectangle(cornerRadius: 4))
-                        }
-                    }
-                    if let n = u.name, !n.isEmpty {
-                        Text(n)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    }
-                    if let c = u.createdAt, !c.isEmpty {
-                        Text("Créé : \(c)")
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                    }
-                }
-                .padding(.vertical, 4)
-            }
-        }
-        .listStyle(.insetGrouped)
-        .navigationTitle("Comptes")
-        .navigationBarTitleDisplayMode(.inline)
-        .searchable(text: $search, prompt: "E-mail, nom…")
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    Task { await authService.openMerchantWorkspaceFromAdmin() }
-                } label: {
-                    Image(systemName: "briefcase.fill")
-                }
-            }
-        }
-        .task { await load() }
-        .refreshable { await load() }
-        .overlay {
-            if isLoading && users.isEmpty {
-                ProgressView()
-            }
-        }
-    }
-
-    private var filteredUsers: [AdminUserRow] {
-        let q = search.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !q.isEmpty else { return users }
-        return users.filter { u in
-            [u.email, u.name, u.id].compactMap { $0?.lowercased() }.contains { $0.contains(q) }
-        }
-    }
-
-    private func load() async {
-        isLoading = true
-        loadError = nil
-        defer { isLoading = false }
-        do {
-            let r: AdminUsersListResponse = try await APIClient.shared.request(.adminUsers(q: nil, limit: 500, offset: 0))
-            users = r.users
-        } catch {
-            loadError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-        }
-    }
-}
-
-// MARK: - Paiements
-
-private struct PlatformAdminPaymentsPage: View {
-    @EnvironmentObject private var authService: AuthService
-    @State private var events: [AdminEventRow] = []
-    @State private var loadError: String?
-    @State private var isLoading = true
+    @State private var isLongPressing = false
+    @State private var longPressHapticTick = 0
 
     var body: some View {
-        List {
-            Section {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Événements liés à Stripe (checkout abonnement, pack flyer). Les renouvellements automatiques peuvent apparaître selon la config serveur.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    if let loadError {
-                        Text(loadError)
-                            .font(.caption)
-                            .foregroundStyle(AppTheme.Colors.error)
-                    }
-                }
-                .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
-                .listRowBackground(Color.clear)
-            }
-            ForEach(events) { ev in
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Text(paymentKindTitle(ev.eventType))
-                            .font(.subheadline.weight(.semibold))
-                        Spacer()
-                        if let t = ev.createdAt {
-                            Text(t)
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
-                        }
-                    }
-                    if let detail = prettyPayload(ev.payloadJson), !detail.isEmpty {
-                        Text(detail)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                    }
-                    if let sid = ev.stripeEventId, !sid.isEmpty {
-                        Text("Stripe : \(sid)")
-                            .font(.caption2.monospaced())
-                            .foregroundStyle(.tertiary)
-                    }
-                }
-                .padding(.vertical, 4)
-            }
-        }
-        .listStyle(.insetGrouped)
-        .navigationTitle("Paiements")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    Task { await authService.openMerchantWorkspaceFromAdmin() }
-                } label: {
-                    Image(systemName: "briefcase.fill")
-                }
-            }
-        }
-        .task { await load() }
-        .refreshable { await load() }
-        .overlay {
-            if isLoading && events.isEmpty {
-                ProgressView()
-            }
-        }
-    }
-
-    private func paymentKindTitle(_ type: String) -> String {
-        let t = type.lowercased()
-        if t.contains("subscription") { return "Abonnement" }
-        if t.contains("flyer") { return "Pack flyer" }
-        return type
-    }
-
-    private func prettyPayload(_ json: String?) -> String? {
-        guard let json, let d = json.data(using: .utf8) else { return nil }
-        guard let obj = try? JSONSerialization.jsonObject(with: d) else {
-            return String(json.prefix(280))
-        }
-        guard let pretty = try? JSONSerialization.data(withJSONObject: obj, options: [.prettyPrinted, .sortedKeys]),
-              let s = String(data: pretty, encoding: .utf8) else { return nil }
-        return s.count > 1200 ? String(s.prefix(1200)) + "…" : s
-    }
-
-    private func load() async {
-        isLoading = true
-        loadError = nil
-        defer { isLoading = false }
-        do {
-            let r: AdminEventsListResponse = try await APIClient.shared.request(
-                .adminEvents(limit: 250, filter: "payments")
+        HStack(alignment: .center, spacing: 14) {
+            AdminCommerceLogoDisc(
+                business: business,
+                size: 44,
+                showsActiveSubscriptionRing: business.ownerHasActiveSubscription
             )
-            events = r.events
-        } catch {
-            loadError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(business.displayName)
+                    .font(.body.weight(.bold))
+                    .foregroundStyle(AdminCommercePillStyle.primaryText)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.88)
+                Text(emailLine)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(AdminCommercePillStyle.secondaryText)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
+                Text(memberLabel)
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(AdminCommercePillStyle.primaryText.opacity(0.82))
+                    .monospacedDigit()
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            HStack(spacing: 6) {
+                if isPiloting {
+                    ProgressView()
+                        .tint(.white)
+                        .scaleEffect(0.85)
+                }
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(AdminCommercePillStyle.secondaryText)
+            }
+            .layoutPriority(1)
+        }
+        .padding(.vertical, 16)
+        .padding(.horizontal, 18)
+        .background(
+            RoundedRectangle(cornerRadius: 32, style: .continuous)
+                .fill(AdminCommercePillStyle.fill)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 32, style: .continuous)
+                .strokeBorder(AdminCommercePillStyle.stroke, lineWidth: 1)
+        )
+        .scaleEffect(isLongPressing ? 0.94 : 1)
+        .brightness(isLongPressing ? 0.06 : 0)
+        .animation(.spring(response: 0.34, dampingFraction: 0.68), value: isLongPressing)
+        .contentShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
+        .onTapGesture {
+            guard !isPiloting else { return }
+            onPilot()
+        }
+        .onLongPressGesture(minimumDuration: 0.42, maximumDistance: 14, pressing: { pressing in
+            withAnimation(.spring(response: 0.34, dampingFraction: 0.68)) {
+                isLongPressing = pressing
+            }
+            if pressing {
+                MerchantUXFeedback.shared.playSelection()
+            }
+        }, perform: {
+            longPressHapticTick += 1
+            MerchantUXFeedback.shared.play(.tap)
+            onOpenSettings()
+            withAnimation(.spring(response: 0.38, dampingFraction: 0.78)) {
+                isLongPressing = false
+            }
+        })
+        .sensoryFeedback(.impact(weight: .medium, intensity: 0.85), trigger: longPressHapticTick)
+        .accessibilityHint("Appui court pour piloter. Appui long pour la fiche et les réglages.")
+    }
+
+    private var emailLine: String {
+        let em = business.ownerEmail?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !em.isEmpty { return em }
+        return "E-mail non renseigné"
+    }
+
+    private var memberLabel: String {
+        let n = max(0, business.memberCount ?? 0)
+        return n == 1 ? "1 membre" : "\(n) membres"
+    }
+}
+
+// MARK: - Logo commerce
+
+private struct AdminCommerceLogoDisc: View {
+    let business: AdminBusinessRow
+    let size: CGFloat
+    var showsActiveSubscriptionRing: Bool = false
+
+    @State private var image: UIImage?
+    @State private var loadGeneration = 0
+
+    private var candidates: [URL] {
+        AdminBusinessMediaURL.logoLoadCandidates(for: business)
+    }
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(AdminCommercePillStyle.iconDisc)
+                .frame(width: size, height: size)
+
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: size - 4, height: size - 4)
+                    .clipShape(Circle())
+            } else {
+                Image(systemName: "storefront.fill")
+                    .font(.system(size: size * 0.34, weight: .semibold))
+                    .foregroundStyle(AdminCommercePillStyle.primaryText.opacity(0.5))
+            }
+        }
+        .frame(width: size, height: size)
+        .overlay {
+            if showsActiveSubscriptionRing {
+                Circle()
+                    .strokeBorder(AdminCommercePillStyle.activeLogoRing.opacity(0.92), lineWidth: 2.5)
+                    .frame(width: size + 5, height: size + 5)
+            }
+        }
+        .accessibilityLabel(showsActiveSubscriptionRing ? "Abonnement actif" : "Logo commerce")
+        .task(id: business.slug) {
+            await loadFirstAvailableLogo()
+        }
+    }
+
+    @MainActor
+    private func loadFirstAvailableLogo() async {
+        loadGeneration += 1
+        let generation = loadGeneration
+        image = nil
+        guard AuthStorage.authToken?.isEmpty == false else { return }
+
+        for url in candidates {
+            if let cached = AuthenticatedMediaLoader.memoryCachedImage(for: url, maxPixelDimension: 160) {
+                image = cached
+                return
+            }
+            do {
+                let img = try await AuthenticatedMediaLoader.loadAuthenticatedImage(from: url, maxPixelDimension: 160)
+                guard generation == loadGeneration else { return }
+                image = img
+                return
+            } catch {
+                continue
+            }
         }
     }
 }
@@ -615,97 +445,220 @@ private struct PlatformAdminPaymentsPage: View {
 
 private struct PlatformAdminCommerceDetailPage: View {
     @EnvironmentObject private var authService: AuthService
+    @Environment(\.dismiss) private var dismiss
+
     let business: AdminBusinessRow
+
+    @State private var isPiloting = false
+    @State private var showDeleteSheet = false
+    @State private var isDeleting = false
+    @State private var deleteError: String?
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                Group {
-                    detailSection(title: "Identité") {
-                        detailRow("Nom affiché", business.organizationName ?? business.name ?? "—")
-                        detailRow("Slug", business.slug)
-                        detailRow("ID interne", business.id)
+                HStack(spacing: 14) {
+                    AdminCommerceLogoDisc(business: business, size: 64)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(business.displayName)
+                            .font(.title3.weight(.bold))
+                            .foregroundStyle(AppTheme.Colors.textPrimary)
+                        Text(business.slug)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(AppTheme.Colors.primary)
                     }
-                    detailSection(title: "Propriétaire") {
-                        detailRow("E-mail", business.ownerEmail ?? "—")
-                        detailRow("ID utilisateur", business.userId ?? "—")
-                        detailRow("Abonnement Stripe", (business.ownerSubscriptionStatus ?? "—").replacingOccurrences(of: "_", with: " "))
-                        detailRow("Formule", business.ownerPlanId ?? "—")
-                    }
-                    detailSection(title: "Activité") {
-                        detailRow("Membres (cartes)", "\(business.memberCount ?? 0)")
-                        detailRow("Créé le", business.createdAt ?? "—")
-                    }
+                    Spacer(minLength: 0)
                 }
 
-                VStack(spacing: 12) {
-                    Button {
-                        authService.selectBusiness(slug: business.slug, showSwitchingOverlay: false)
-                        Task { await authService.openMerchantWorkspaceFromAdmin(preferredSlug: business.slug) }
+                detailBlock("Propriétaire", rows: [
+                    ("E-mail", business.ownerEmail ?? "—"),
+                    ("Abonnement", (business.ownerSubscriptionStatus ?? "—").replacingOccurrences(of: "_", with: " ")),
+                ])
+
+                detailBlock("Activité", rows: [
+                    ("Membres", "\(business.memberCount ?? 0)"),
+                    ("Créé le", business.createdAt ?? "—"),
+                ])
+
+                Button {
+                    guard !isPiloting else { return }
+                    isPiloting = true
+                    authService.selectBusiness(slug: business.slug, showSwitchingOverlay: false)
+                    Task {
+                        await authService.openMerchantWorkspaceFromAdmin(preferredSlug: business.slug)
+                        isPiloting = false
+                    }
+                } label: {
+                    Group {
+                        if isPiloting {
+                            ProgressView().tint(.white).frame(maxWidth: .infinity)
+                        } else {
+                            Label("Piloter", systemImage: "arrow.right.circle.fill")
+                                .font(.headline.weight(.semibold))
+                                .frame(maxWidth: .infinity)
+                        }
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Suppression définitive")
+                        .font(.footnote.weight(.bold))
+                        .foregroundStyle(AppTheme.Colors.error)
+                    Button(role: .destructive) {
+                        deleteError = nil
+                        showDeleteSheet = true
                     } label: {
-                        Label("Ouvrir l’espace commerçant (réglages, carte, notifs, flyer)", systemImage: "slider.horizontal.3")
-                            .font(.subheadline.weight(.semibold))
+                        Label("Supprimer ce commerce", systemImage: "trash.fill")
                             .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-
-                    Text("Vous basculez sur l’interface habituelle avec ce commerce présélectionné. Le bandeau « Administration » permet d’en revenir.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    .buttonStyle(.bordered)
                 }
-                .padding(.top, 8)
+                .padding(14)
+                .background(AppTheme.Colors.error.opacity(0.1))
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
             .padding(16)
         }
         .background(AppTheme.Colors.background)
-        .navigationTitle("Fiche commerce")
+        .navigationTitle("Réglages")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    Task { await authService.openMerchantWorkspaceFromAdmin() }
-                } label: {
-                    Image(systemName: "briefcase.fill")
+        .sheet(isPresented: $showDeleteSheet) {
+            AdminDeleteCommerceSheet(
+                business: business,
+                isDeleting: isDeleting,
+                errorMessage: deleteError,
+                onCancel: { showDeleteSheet = false },
+                onConfirm: { Task { await deleteCommerce() } }
+            )
+        }
+    }
+
+    private func detailBlock(_ title: String, rows: [(String, String)]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title.uppercased())
+                .font(.caption.weight(.bold))
+                .foregroundStyle(AppTheme.Colors.textSecondary)
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(row.0)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(AppTheme.Colors.textSecondary)
+                        Text(row.1)
+                            .font(.body)
+                            .foregroundStyle(AppTheme.Colors.textPrimary)
+                            .textSelection(.enabled)
+                    }
+                    .padding(.vertical, 8)
                 }
             }
+            .padding(.horizontal, 12)
+            .background(AppTheme.Colors.cardBackground, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .shadow(color: AppTheme.Colors.shadow.opacity(0.12), radius: 6, x: 0, y: 2)
         }
     }
 
-    private func detailSection(title: String, @ViewBuilder content: () -> some View) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(title)
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(AppTheme.Colors.textSecondary)
-                .textCase(.uppercase)
-            VStack(alignment: .leading, spacing: 0) {
-                content()
-            }
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(AppTheme.Colors.cardBackground)
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .appCardShadowLight()
+    @MainActor
+    private func deleteCommerce() async {
+        isDeleting = true
+        deleteError = nil
+        defer { isDeleting = false }
+        do {
+            let _: AdminDeleteSuccessResponse = try await APIClient.shared.request(
+                .adminDeleteBusiness(businessId: business.id, body: .wipe)
+            )
+            authService.pruneAdminBusiness(id: business.id)
+            showDeleteSheet = false
+            dismiss()
+        } catch {
+            deleteError = APIError.merchantFacingMessage(from: error) ?? error.localizedDescription
         }
-    }
-
-    private func detailRow(_ k: String, _ v: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(k)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-            Text(v)
-                .font(.body)
-                .textSelection(.enabled)
-        }
-        .padding(.vertical, 8)
     }
 }
 
-// MARK: - Ombre
+// MARK: - Suppression commerce
 
-private extension View {
-    func appCardShadowLight() -> some View {
-        shadow(color: AppTheme.Colors.shadow.opacity(0.12), radius: 8, x: 0, y: 3)
+private struct AdminDeleteCommerceSheet: View {
+    let business: AdminBusinessRow
+    let isDeleting: Bool
+    let errorMessage: String?
+    let onCancel: () -> Void
+    let onConfirm: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 16) {
+                (Text("Suppression définitive de ") + Text(business.displayName).fontWeight(.semibold) + Text(". Irréversible : commerce, compte propriétaire (s’il n’a pas d’autre commerce), employés liés, membres, transactions, flyer et logos."))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+
+                if let errorMessage {
+                    Text(errorMessage)
+                        .font(.caption)
+                        .foregroundStyle(AppTheme.Colors.error)
+                }
+
+                SlideToConfirm(config: SlideToConfirm.Config(
+                    idleText: "Glisser pour supprimer",
+                    onSwipeText: "Effacer \(business.slug)",
+                    confirmationText: "Supprimé",
+                    tint: AppTheme.Colors.error,
+                    foregroundColor: .white,
+                    disabled: isDeleting
+                )) {
+                    onConfirm()
+                }
+
+                Spacer(minLength: 0)
+            }
+            .padding(20)
+            .navigationTitle("Supprimer le commerce")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Annuler", action: onCancel)
+                        .disabled(isDeleting)
+                }
+            }
+            .overlay {
+                if isDeleting {
+                    Color.black.opacity(0.12).ignoresSafeArea()
+                    ProgressView("Suppression…")
+                        .padding(20)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+                }
+            }
+        }
+        .presentationDetents([.medium])
+    }
+}
+
+// MARK: - Création compte commerçant (parcours onboarding standard)
+
+private struct AdminMerchantProvisioningFlowView: View {
+    @EnvironmentObject private var authService: AuthService
+
+    let onFinished: (String) -> Void
+    let onCancelled: () -> Void
+
+    var body: some View {
+        MyfidpassMerchantOnboardingRootView(
+            adminProvisioningMode: true,
+            onComplete: {},
+            onAdminProvisioningFinished: { email in
+                let label = email?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                    ? email!
+                    : "commerçant"
+                onFinished("Compte \(label) et commerce créés.")
+            },
+            onAdminProvisioningCancelled: {
+                authService.cancelAdminMerchantProvisioning()
+                onCancelled()
+            }
+        )
+        .environmentObject(authService)
+        .ignoresSafeArea()
     }
 }

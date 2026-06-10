@@ -6,6 +6,7 @@
 import SwiftUI
 
 private struct MerchantProUnlockFlowModifier: ViewModifier {
+    @EnvironmentObject private var authService: AuthService
     @ObservedObject private var presenter = MerchantProUnlockPresenter.shared
 
     func body(content: Content) -> some View {
@@ -17,7 +18,14 @@ private struct MerchantProUnlockFlowModifier: ViewModifier {
                 }
             )) {
                 MerchantProUnlockTeaserSheet(
-                    onContinue: { presenter.continueToPaywall() },
+                    onContinue: {
+                        presenter.dismissTeaser()
+                        NotificationCenter.default.postOpenMerchantSubscriptionFromSession(
+                            usedBusinesses: authService.usedBusinesses,
+                            allowedBusinesses: authService.allowedBusinesses,
+                            hasActiveSubscription: authService.hasEncashedMerchantSubscription
+                        )
+                    },
                     onLater: { presenter.dismissTeaser() }
                 )
                 .presentationDetents([.height(520), .large])

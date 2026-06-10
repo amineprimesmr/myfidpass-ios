@@ -1,5 +1,6 @@
 package fr.myfidpass.ui.screens.auth
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -21,10 +22,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CardGiftcard
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Notifications
-import androidx.compose.material.icons.filled.QrCodeScanner
+import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Redeem
-import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.ShowChart
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -39,28 +40,37 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import fr.myfidpass.R
 
 data class PaywallFeatureItem(
     val title: String,
     val subtitle: String,
     val icon: ImageVector,
     val tint: Color,
+    val iconDrawableRes: Int? = null,
+    val iconCornerRadiusDp: Float = 0f,
+    val iconSizeDp: Float = 28f,
 )
 
 object PaywallBevelFeatureCatalog {
     val primary = listOf(
         PaywallFeatureItem(
-            "Carte Wallet",
-            "Distribuez une carte fidélité Google Wallet pour vos clients.",
+            "Carte Apple & Google Wallet",
+            "Distribuez une carte fidélité sur iPhone et Android.",
             Icons.Default.CardGiftcard,
             Color(0xFFFA7268),
+            iconDrawableRes = R.drawable.paywall_apple_wallet_icon,
+            iconCornerRadiusDp = 8f,
+            iconSizeDp = 32f,
         ),
         PaywallFeatureItem(
-            "Campagnes push",
-            "Relancez vos clients au bon moment, depuis l'app.",
+            "Notifications push illimitées",
+            "Relancez vos clients au bon moment, sans limite.",
             Icons.Default.Notifications,
             Color(0xFFFA576B),
         ),
@@ -70,28 +80,37 @@ object PaywallBevelFeatureCatalog {
             Icons.Default.ShowChart,
             Color(0xFF4798FA),
         ),
-    )
-
-    val alsoIncluded = listOf(
         PaywallFeatureItem(
-            "Scan en caisse",
-            "Tampons ou points en un scan QR.",
-            Icons.Default.QrCodeScanner,
-            Color(0xFF38C787),
+            "Base clients centralisée",
+            "Retrouvez l'historique et les préférences de chaque membre.",
+            Icons.Default.People,
+            Color(0xFF6B78FA),
+        ),
+        PaywallFeatureItem(
+            "Avis Google boosté",
+            "Encouragez les avis Google Business après chaque visite.",
+            Icons.Default.Star,
+            Color(0xFFF28C2E),
+            iconDrawableRes = R.drawable.paywall_google_icon,
+        ),
+        PaywallFeatureItem(
+            "Engagement X boosté",
+            "Récompensez un follow sur votre compte X.",
+            Icons.Default.Star,
+            Color(0xFF101010),
+            iconDrawableRes = R.drawable.paywall_x_icon,
+            iconCornerRadiusDp = 8f,
+            iconSizeDp = 32f,
         ),
         PaywallFeatureItem(
             "Récompenses illimitées",
             "Fidélisez sans plafond sur vos offres.",
             Icons.Default.Redeem,
-            Color(0xFFF28C2E),
-        ),
-        PaywallFeatureItem(
-            "Notifications clients",
-            "Informez vos membres en direct sur leur téléphone.",
-            Icons.Default.Send,
-            Color(0xFF6178FA),
+            Color(0xFFE8A32E),
         ),
     )
+
+    val alsoIncluded = emptyList<PaywallFeatureItem>()
 }
 
 @Composable
@@ -121,15 +140,26 @@ fun PaywallBevelFeatureRow(item: PaywallFeatureItem, modifier: Modifier = Modifi
         horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         Box(
-            Modifier
-                .size(48.dp)
-                .shadow(4.dp, RoundedCornerShape(14.dp), spotColor = Color.Black.copy(0.07f))
-                .clip(RoundedCornerShape(14.dp))
-                .background(Color.White.copy(alpha = 0.82f))
-                .border(0.8.dp, Color.White.copy(0.65f), RoundedCornerShape(14.dp)),
+            Modifier.size(48.dp),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(item.icon, contentDescription = null, tint = item.tint, modifier = Modifier.size(24.dp))
+            if (item.iconDrawableRes != null) {
+                val iconShape = if (item.iconCornerRadiusDp > 0f) {
+                    RoundedCornerShape(item.iconCornerRadiusDp.dp)
+                } else {
+                    RoundedCornerShape(0.dp)
+                }
+                Image(
+                    painter = painterResource(item.iconDrawableRes),
+                    contentDescription = null,
+                    modifier = Modifier
+                        .size(item.iconSizeDp.dp)
+                        .clip(iconShape),
+                    contentScale = ContentScale.Fit,
+                )
+            } else {
+                Icon(item.icon, contentDescription = null, tint = item.tint, modifier = Modifier.size(26.dp))
+            }
         }
         Column(Modifier.weight(1f)) {
             Text(item.title, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = Color(0xFF141518))

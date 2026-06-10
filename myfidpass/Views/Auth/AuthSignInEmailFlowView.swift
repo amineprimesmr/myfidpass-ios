@@ -24,6 +24,7 @@ enum AuthSignInIdentifierValidation {
 private enum AuthSignInStep: Int, CaseIterable {
     case identifier = 0
     case otp = 1
+    case password = 2
 }
 
 private enum AuthSignInProgress {
@@ -42,6 +43,9 @@ private final class AuthSignInFlowViewModel: ObservableObject {
     @Published var otpError: String?
     @Published var otpShowSuccess = false
     @Published var otpSubmitInFlight = false
+    @Published var password = ""
+    @Published var passwordError: String?
+    @Published var isLoggingInWithPassword = false
 
     var normalizedIdentifier: String {
         AuthSignInIdentifierValidation.normalized(identifier)
@@ -54,7 +58,7 @@ private final class AuthSignInFlowViewModel: ObservableObject {
     func filledProgressSegments(for step: AuthSignInStep) -> Int {
         switch step {
         case .identifier: return 1
-        case .otp: return 2
+        case .otp, .password: return 2
         }
     }
 
@@ -64,6 +68,8 @@ private final class AuthSignInFlowViewModel: ObservableObject {
             return isIdentifierValid && !isCheckingIdentifier && !isSendingCode
         case .otp:
             return otpCode.filter(\.isNumber).count == 6 && !isVerifying
+        case .password:
+            return password.count >= 8 && !isLoggingInWithPassword
         }
     }
 }
@@ -121,7 +127,7 @@ struct AuthSignInEmailFlowView: View {
             }
             .zIndex(0)
 
-            if step == .identifier {
+            if step == .identifier || step == .password {
                 VStack {
                     Spacer()
 
@@ -211,11 +217,12 @@ struct AuthSignInEmailFlowView: View {
             Group {
                 if (viewModel.isCheckingIdentifier && step == .identifier)
                     || (viewModel.isSendingCode && step == .identifier)
-                    || (viewModel.isVerifying && step == .otp) {
+                    || (viewModel.isVerifying && step == .otp)
+                    || (viewModel.isLoggingInWithPassword && step == .password) {
                     ProgressView()
                         .tint(.black)
                 } else {
-                    Text(step == .otp ? "SE CONNECTER" : "CONTINUER")
+                    Text(step == .otp || step == .password ? "SE CONNECTER" : "CONTINUER")
                         .font(.system(size: 20, weight: .black))
                 }
             }
@@ -246,6 +253,8 @@ struct AuthSignInEmailFlowView: View {
             Task { await handleIdentifierContinue() }
         case .otp:
             Task { await handleOtpSubmit() }
+        case .password:
+            Task { await handlePasswordSubmit() }
         }
     }
 
@@ -254,22 +263,28 @@ struct AuthSignInEmailFlowView: View {
         viewModel.identifierError = nil
         FirstLaunchOnboarding.persistSignupEmail(viewModel.normalizedIdentifier)
 
-        if !skipExistenceCheck {
-            viewModel.isCheckingIdentifier = true
-            defer { viewModel.isCheckingIdentifier = false }
-            do {
-                let exists = try await authService.checkAccountExists(identifier: viewModel.normalizedIdentifier)
-                if !exists {
-                    viewModel.identifierError = "Aucun compte avec cet e-mail. Créez un compte pour continuer."
-                    return
-                }
-            } catch AuthError.apiMessage(let msg) {
-                viewModel.identifierError = msg
-                return
-            } catch {
-                viewModel.identifierError = "Impossible de vérifier l'e-mail. Réessayez."
+        var authMethod: AccountSignInAuthMethod = .emailOtp
+
+        viewModel.isCheckingIdentifier = true
+        defer { viewModel.isCheckingIdentifier = false }
+        do {
+            let probe = try await authService.checkAccountSignInProbe(identifier: viewModel.normalizedIdentifier)
+            if !skipExistenceCheck, !probe.accountExists {
+                viewModel.identifierError = "Aucun compte avec cet e-mail. Créez un compte pour continuer."
                 return
             }
+            authMethod = probe.authMethod
+        } catch AuthError.apiMessage(let msg) {
+            viewModel.identifierError = msg
+            return
+        } catch {
+            viewModel.identifierError = "Impossible de vérifier l'e-mail. Réessayez."
+            return
+        }
+
+        if authMethod == .password {
+            advanceToPasswordStep()
+            return
         }
 
         viewModel.isSendingCode = true
@@ -281,6 +296,35 @@ struct AuthSignInEmailFlowView: View {
             viewModel.identifierError = msg
         } catch {
             viewModel.identifierError = "Impossible d'envoyer le code. Réessayez."
+        }
+    }
+
+    private func advanceToPasswordStep() {
+        hapticManager.notification(.success)
+        viewModel.password = ""
+        viewModel.passwordError = nil
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        previousStep = viewModel.currentStep
+        withAnimation(.onboardingTransition) {
+            viewModel.currentStep = AuthSignInStep.password.rawValue
+        }
+    }
+
+    private func handlePasswordSubmit() async {
+        guard viewModel.password.count >= 8 else { return }
+        viewModel.passwordError = nil
+        viewModel.isLoggingInWithPassword = true
+        defer { viewModel.isLoggingInWithPassword = false }
+        do {
+            try await authService.login(email: viewModel.normalizedIdentifier, password: viewModel.password)
+            hapticManager.notification(.success)
+        } catch AuthError.invalidCredentials {
+            viewModel.passwordError = "Mot de passe incorrect."
+            viewModel.password = ""
+        } catch AuthError.apiMessage(let msg) {
+            viewModel.passwordError = msg
+        } catch {
+            viewModel.passwordError = "Connexion impossible. Réessayez."
         }
     }
 
@@ -316,21 +360,29 @@ struct AuthSignInEmailFlowView: View {
             hapticManager.notification(.success)
             try await Task.sleep(for: .milliseconds(820))
             authService.finalizeEmailOtpSignIn(response: response, isSignup: false)
+            viewModel.otpSubmitInFlight = false
         } catch AuthError.invalidCredentials {
             viewModel.isVerifying = false
+            viewModel.otpSubmitInFlight = false
             viewModel.otpShowSuccess = false
             viewModel.otpError = "Code incorrect ou expiré."
             viewModel.otpCode = ""
         } catch AuthError.apiMessage(let msg) {
             viewModel.isVerifying = false
+            viewModel.otpSubmitInFlight = false
             viewModel.otpShowSuccess = false
             viewModel.otpError = msg
+            if msg.localizedCaseInsensitiveContains("aucun code")
+                || msg.localizedCaseInsensitiveContains("expiré")
+                || msg.localizedCaseInsensitiveContains("trop de tentatives") {
+                viewModel.otpCode = ""
+            }
         } catch {
             viewModel.isVerifying = false
+            viewModel.otpSubmitInFlight = false
             viewModel.otpShowSuccess = false
             viewModel.otpError = error.localizedDescription
         }
-        viewModel.otpSubmitInFlight = false
     }
 
     private func goBack() {
@@ -343,6 +395,9 @@ struct AuthSignInEmailFlowView: View {
         viewModel.otpShowSuccess = false
         viewModel.otpSubmitInFlight = false
         viewModel.isVerifying = false
+        viewModel.passwordError = nil
+        viewModel.password = ""
+        viewModel.isLoggingInWithPassword = false
         previousStep = viewModel.currentStep
         withAnimation(.onboardingTransition) {
             viewModel.currentStep -= 1
@@ -362,6 +417,16 @@ struct AuthSignInEmailFlowView: View {
                     textContentType: .username,
                     isChecking: viewModel.isCheckingIdentifier || viewModel.isSendingCode,
                     errorMessage: viewModel.identifierError
+                )
+            }
+        case .password:
+            ProcessEmailCaptureLayout {
+                AuthSignInPasswordStepContent(
+                    password: $viewModel.password,
+                    identifierLabel: viewModel.normalizedIdentifier,
+                    helperText: "Saisissez le mot de passe de votre compte administrateur.",
+                    isLoading: viewModel.isLoggingInWithPassword,
+                    errorMessage: viewModel.passwordError
                 )
             }
         case .otp:

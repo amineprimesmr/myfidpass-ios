@@ -55,7 +55,7 @@ enum CardPreviewDisplaySnapshotStore {
         return try? JSONDecoder().decode(CardPreviewDisplaySnapshot.self, from: data)
     }
 
-    private static func missingRequirements(for snap: CardPreviewDisplaySnapshot) -> [CardMissingRequirement] {
+    private static func missingRequirements(for snap: CardPreviewDisplaySnapshot, slug: String) -> [CardMissingRequirement] {
         MyCardCompletionRequirements.missingRequirements(
             primaryHex: snap.primaryHex,
             accentHex: snap.accentHex,
@@ -65,7 +65,7 @@ enum CardPreviewDisplaySnapshotStore {
             displayName: snap.displayName,
             logoURL: snap.logoURL,
             programType: snap.programType,
-            cardBackgroundImagePath: snap.hasLocalCardBackground == true ? CardLogoStorage.relativeCardBackgroundPath : nil,
+            cardBackgroundImagePath: snap.hasLocalCardBackground == true ? CardLogoStorage.localCardBackgroundPathIfExists(for: slug) : nil,
             cardBackgroundRemoteURL: snap.cardBackgroundRemoteURL,
             cardBackgroundWasRemoved: false,
             stampEmoji: snap.stampEmoji,
@@ -90,17 +90,17 @@ enum CardPreviewDisplaySnapshotStore {
 
     static func missingRequirements(forSlug slug: String) -> [CardMissingRequirement] {
         if let snap = load(slug: slug) {
-            let missing = missingRequirements(for: snap)
+            let missing = missingRequirements(for: snap, slug: slug)
             if missing.isEmpty { return [] }
             if missing == [.recompenses], let settings = ScanFlowSettingsCache.cached(for: slug) {
                 let repaired = CardPreviewSnapshotBuilder.fromSettings(settings, slug: slug, preserving: snap)
-                if missingRequirements(for: repaired).isEmpty { return [] }
+                if missingRequirements(for: repaired, slug: slug).isEmpty { return [] }
             }
             return missing
         }
         if let settings = ScanFlowSettingsCache.cached(for: slug) {
             let snap = CardPreviewSnapshotBuilder.fromSettings(settings, slug: slug)
-            return missingRequirements(for: snap)
+            return missingRequirements(for: snap, slug: slug)
         }
         return [.recompenses]
     }
@@ -110,7 +110,7 @@ enum CardPreviewDisplaySnapshotStore {
         guard !slug.isEmpty, let settings = ScanFlowSettingsCache.cached(for: slug) else { return }
         let existing = load(slug: slug)
         let repaired = CardPreviewSnapshotBuilder.fromSettings(settings, slug: slug, preserving: existing)
-        guard missingRequirements(for: repaired).isEmpty else { return }
+        guard missingRequirements(for: repaired, slug: slug).isEmpty else { return }
         guard existing != repaired else { return }
         save(repaired, slug: slug)
     }

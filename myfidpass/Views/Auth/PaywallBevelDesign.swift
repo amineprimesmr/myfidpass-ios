@@ -15,6 +15,28 @@ struct PaywallFeatureItem: Identifiable, Equatable {
     let subtitle: String
     let symbol: String
     let symbolColors: [Color]
+    /// Image asset catalogue (ex. `AppleWalletAppIcon`, `GoogleGLogo`) — prioritaire sur `symbol`.
+    let assetName: String?
+    /// Coins arrondis pour les assets (ex. icône Apple Wallet).
+    let assetCornerRadius: CGFloat?
+
+    init(
+        id: String,
+        title: String,
+        subtitle: String,
+        symbol: String,
+        symbolColors: [Color],
+        assetName: String? = nil,
+        assetCornerRadius: CGFloat? = nil
+    ) {
+        self.id = id
+        self.title = title
+        self.subtitle = subtitle
+        self.symbol = symbol
+        self.symbolColors = symbolColors
+        self.assetName = assetName
+        self.assetCornerRadius = assetCornerRadius
+    }
 }
 
 // MARK: - Fond blanc + dégradé pastel (Bevel)
@@ -54,17 +76,28 @@ struct PaywallBevelFeatureRow: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 14) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(.white.opacity(0.82))
-                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    .shadow(color: .black.opacity(0.07), radius: 10, y: 4)
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .strokeBorder(Color.white.opacity(0.65), lineWidth: 0.8)
-                Image(systemName: item.symbol)
-                    .font(.system(size: 22, weight: .semibold))
-                    .symbolRenderingMode(.palette)
-                    .foregroundStyle(item.symbolColors.first ?? .blue, item.symbolColors.last ?? .cyan)
+            Group {
+                if let assetName = item.assetName, !assetName.isEmpty {
+                    Image(assetName)
+                        .resizable()
+                        .interpolation(.high)
+                        .scaledToFit()
+                        .frame(
+                            width: (item.assetCornerRadius ?? 0) > 0 ? 32 : 28,
+                            height: (item.assetCornerRadius ?? 0) > 0 ? 32 : 28
+                        )
+                        .clipShape(
+                            RoundedRectangle(
+                                cornerRadius: item.assetCornerRadius ?? 0,
+                                style: .continuous
+                            )
+                        )
+                } else {
+                    Image(systemName: item.symbol)
+                        .font(.system(size: 24, weight: .semibold))
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(item.symbolColors.first ?? .blue, item.symbolColors.last ?? .cyan)
+                }
             }
             .frame(width: 48, height: 48)
 
@@ -344,15 +377,17 @@ enum PaywallBevelFeatureCatalog {
     static let primary: [PaywallFeatureItem] = [
         PaywallFeatureItem(
             id: "wallet",
-            title: "Carte Apple Wallet",
-            subtitle: "Distribuez une carte fidélité dans le Wallet de vos clients.",
+            title: "Carte Apple & Google Wallet",
+            subtitle: "Distribuez une carte fidélité sur iPhone et Android.",
             symbol: "wallet.pass.fill",
-            symbolColors: [Color(red: 0.98, green: 0.45, blue: 0.38), Color(red: 1.0, green: 0.72, blue: 0.55)]
+            symbolColors: [Color(red: 0.98, green: 0.45, blue: 0.38), Color(red: 1.0, green: 0.72, blue: 0.55)],
+            assetName: "AppleWalletAppIcon",
+            assetCornerRadius: 8
         ),
         PaywallFeatureItem(
-            id: "campaigns",
-            title: "Campagnes push",
-            subtitle: "Relancez vos clients au bon moment, depuis l’app.",
+            id: "notifs",
+            title: "Notifications push illimitées",
+            subtitle: "Relancez vos clients au bon moment, sans limite.",
             symbol: "bell.badge.fill",
             symbolColors: [Color(red: 0.98, green: 0.34, blue: 0.42), Color(red: 1.0, green: 0.62, blue: 0.58)]
         ),
@@ -371,28 +406,21 @@ enum PaywallBevelFeatureCatalog {
             symbolColors: [Color(red: 0.42, green: 0.48, blue: 0.98), Color(red: 0.68, green: 0.72, blue: 1.0)]
         ),
         PaywallFeatureItem(
-            id: "dashboard",
-            title: "Tableau de bord en temps réel",
-            subtitle: "Visualisez vos performances d’un coup d’œil.",
-            symbol: "gauge.with.dots.needle.67percent",
-            symbolColors: [Color(red: 0.95, green: 0.55, blue: 0.18), Color(red: 0.28, green: 0.78, blue: 0.62)]
+            id: "google-reviews",
+            title: "Avis Google boosté",
+            subtitle: "Encouragez les avis Google Business après chaque visite.",
+            symbol: "star.bubble.fill",
+            symbolColors: [Color(red: 0.95, green: 0.55, blue: 0.18), Color(red: 0.28, green: 0.78, blue: 0.62)],
+            assetName: "GoogleGLogo"
         ),
         PaywallFeatureItem(
-            id: "multi",
-            title: "Multi-commerces",
-            subtitle: "Pilotez plusieurs établissements depuis un seul compte.",
-            symbol: "building.2.fill",
-            symbolColors: [Color(red: 0.72, green: 0.42, blue: 0.98), Color(red: 0.88, green: 0.68, blue: 1.0)]
-        ),
-    ]
-
-    static let alsoIncluded: [PaywallFeatureItem] = [
-        PaywallFeatureItem(
-            id: "scan",
-            title: "Scan en caisse",
-            subtitle: "Tampons ou points en un scan QR.",
-            symbol: "qrcode.viewfinder",
-            symbolColors: [Color(red: 0.22, green: 0.78, blue: 0.52), Color(red: 0.58, green: 0.92, blue: 0.72)]
+            id: "x-engagement",
+            title: "Engagement X boosté",
+            subtitle: "Récompensez un follow sur votre compte X.",
+            symbol: "xmark",
+            symbolColors: [Color.black, Color.black],
+            assetName: "SocialX",
+            assetCornerRadius: 8
         ),
         PaywallFeatureItem(
             id: "rewards",
@@ -401,26 +429,8 @@ enum PaywallBevelFeatureCatalog {
             symbol: "gift.fill",
             symbolColors: [Color(red: 0.95, green: 0.55, blue: 0.18), Color(red: 1.0, green: 0.78, blue: 0.42)]
         ),
-        PaywallFeatureItem(
-            id: "notifs",
-            title: "Notifications clients",
-            subtitle: "Informez vos membres en direct sur leur iPhone.",
-            symbol: "paperplane.fill",
-            symbolColors: [Color(red: 0.38, green: 0.48, blue: 0.98), Color(red: 0.62, green: 0.72, blue: 1.0)]
-        ),
-        PaywallFeatureItem(
-            id: "flyer",
-            title: "Flyers & visuels",
-            subtitle: "Créez vos supports en quelques minutes.",
-            symbol: "sparkles.rectangle.stack.fill",
-            symbolColors: [Color(red: 0.72, green: 0.42, blue: 0.98), Color(red: 0.88, green: 0.68, blue: 1.0)]
-        ),
-        PaywallFeatureItem(
-            id: "auto",
-            title: "Automatisations",
-            subtitle: "Campagnes récurrentes sans effort manuel.",
-            symbol: "arrow.triangle.2.circlepath",
-            symbolColors: [Color(red: 0.18, green: 0.72, blue: 0.78), Color(red: 0.48, green: 0.88, blue: 0.92)]
-        ),
     ]
+
+    static let alsoIncluded: [PaywallFeatureItem] = []
 }
+

@@ -85,8 +85,9 @@ struct MerchantHomeMenuSettingsView: View {
     @ViewBuilder
     private var commerceAndToolsCard: some View {
         let showsTeam = authService.canManageMerchantTeam
-        let showsAddAddress = !authService.isPlatformAdmin
-        if showsTeam || showsAddAddress {
+        let showsAddAddress = !authService.isPlatformAdmin || authService.adminShowsMerchantWorkspace
+        let showsLoyaltyNetwork = showsTeam
+        if showsTeam || showsAddAddress || showsLoyaltyNetwork {
             GroupedSettingsCard {
                 if showsTeam {
                     NavigationLink {
@@ -102,28 +103,46 @@ struct MerchantHomeMenuSettingsView: View {
                         )
                     }
                     .buttonStyle(.plain)
-
-                    if showsAddAddress {
-                        GroupedSettingsRowDivider()
-                    }
                 }
 
                 if showsAddAddress {
+                    if showsTeam { GroupedSettingsRowDivider() }
                     Button {
-                        if authService.canCreateBusiness {
-                            NotificationCenter.default.post(name: .myfidpassOpenAddCommerceSheet, object: nil)
-                        } else {
-                            NotificationCenter.default.postOpenMerchantSubscription(
-                                usedBusinesses: authService.usedBusinesses,
-                                allowedBusinesses: authService.allowedBusinesses,
-                                addingAnotherCommerce: true
-                            )
+                        Task { @MainActor in
+                            await authService.refreshMerchantBillingStateFromServer(force: true)
+                            if authService.canCreateBusiness {
+                                NotificationCenter.default.post(name: .myfidpassOpenAddCommerceSheet, object: nil)
+                            } else {
+                                NotificationCenter.default.postOpenMerchantSubscription(
+                                    usedBusinesses: authService.usedBusinesses,
+                                    allowedBusinesses: authService.allowedBusinesses,
+                                    addingAnotherCommerce: true
+                                )
+                            }
                         }
                     } label: {
                         GroupedSettingsNavigationRow(
                             icon: "plus.circle",
                             title: "Ajouter une adresse",
                             subtitle: nil,
+                            value: nil,
+                            showsChevron: true
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                if showsLoyaltyNetwork {
+                    if showsTeam || showsAddAddress { GroupedSettingsRowDivider() }
+                    NavigationLink {
+                        LoyaltyNetworkSettingsView()
+                    } label: {
+                        GroupedSettingsNavigationRow(
+                            icon: "link.circle",
+                            title: "Réseau fidélité",
+                            subtitle: authService.businesses.contains(where: \.isInLoyaltyNetwork)
+                                ? "Carte partagée active"
+                                : "Regrouper plusieurs adresses",
                             value: nil,
                             showsChevron: true
                         )

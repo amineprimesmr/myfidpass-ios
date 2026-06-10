@@ -381,6 +381,25 @@ struct GroupedSettingsLastSyncSection: View {
     }
 }
 
+/// Libellé de section au-dessus d’un groupe de cartes (aligné Android `GroupedSettingsSectionLabel`).
+struct GroupedSettingsSectionLabel: View {
+    let title: String
+
+    init(_ title: String) {
+        self.title = title
+    }
+
+    var body: some View {
+        Text(title.uppercased())
+            .font(.footnote.weight(.semibold))
+            .foregroundStyle(Color(UIColor.secondaryLabel))
+            .kerning(0.4)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 4)
+    }
+}
+
 /// Titre centré au-dessus de la première section (Compte, Paramètres…).
 struct GroupedSettingsPageTitle: View {
     var title: String = "Compte"

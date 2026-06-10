@@ -89,9 +89,15 @@ object CommerceFlyerStateCache {
     }
 
     fun flyerLooksCustomized(context: Context, slug: String): Boolean {
+        if (CommerceFlyerStore.isFlyerReady(context, slug)) return true
         val cached = load(context, slug) ?: return false
         val hasBootstrap = !cached.bootstrapPreviewB64.isNullOrBlank()
         val hasCustomBg = !cached.customBgDataURL.isNullOrBlank()
         return cached.flyerRegistered || hasBootstrap || hasCustomBg
+    }
+
+    fun clearAll(context: Context) {
+        val root = File(context.filesDir, "CommerceFlyerStateCache")
+        if (root.exists()) root.deleteRecursively()
     }
 }

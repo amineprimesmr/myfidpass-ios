@@ -17,6 +17,7 @@ struct CalendarScrollEffectHomeView: View {
     @State private var currentWeek: [CalendarScrollDay] = Date.calendarScrollCurrentWeek
     @State private var selectedDate: Date?
     @State private var activityByDay: [Date: [DashboardActivityEntry]] = [:]
+    @State private var memberDetailSheetItem: MemberDetailSheetItem?
     @Namespace private var namespace
 
     init(context: NSManagedObjectContext) {
@@ -123,6 +124,14 @@ struct CalendarScrollEffectHomeView: View {
         .onChange(of: dataService.updateTrigger) { _, _ in
             reloadActivity()
         }
+        .sheet(item: $memberDetailSheetItem) { item in
+            if let card = viewContext.object(with: item.objectID) as? ClientCard {
+                MemberDetailView(card: card, context: viewContext)
+                    .environmentObject(syncService)
+                    .environmentObject(dataService)
+                    .memberDetailSheetChrome()
+            }
+        }
         .refreshable {
             await syncService.syncAfterServerMutation()
             reloadActivity()
@@ -146,11 +155,9 @@ struct CalendarScrollEffectHomeView: View {
 
     @ViewBuilder
     private func row(for entry: DashboardActivityEntry) -> some View {
-        if let card = viewContext.object(with: entry.cardObjectID) as? ClientCard {
-            NavigationLink {
-                MemberDetailView(card: card, context: viewContext)
-                    .environmentObject(syncService)
-                    .environmentObject(dataService)
+        if viewContext.object(with: entry.cardObjectID) is ClientCard {
+            Button {
+                memberDetailSheetItem = MemberDetailSheetItem(objectID: entry.cardObjectID)
             } label: {
                 CalendarScrollActivityRow(entry: entry)
             }

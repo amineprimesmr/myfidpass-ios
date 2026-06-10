@@ -84,6 +84,8 @@ fun MainTabsScreen(
     var showSettings by remember { mutableStateOf(false) }
     var showAddCommerce by remember { mutableStateOf(false) }
     var showProPaywall by remember { mutableStateOf(false) }
+    var paywallAddingCommerce by remember { mutableStateOf(false) }
+    var paywallPendingCommerceName by remember { mutableStateOf<String?>(null) }
     var scanToast by remember { mutableStateOf<String?>(null) }
     var homeImmersiveMyCard by remember { mutableStateOf(false) }
     var homeSidebarExpanded by remember { mutableStateOf(false) }
@@ -129,10 +131,15 @@ fun MainTabsScreen(
         }
     }
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(slug) {
+        if (slug.isBlank()) return@LaunchedEffect
         PostCardFlyerPromoEligibility.resetSessionSuppressionForAppOpen()
-        PostCardFlyerPromoEligibility.dequeuePendingSlugIfEligible(context)?.let {
-            delay(800)
+        val promoSlug = PostCardFlyerPromoEligibility.dequeuePendingSlugIfEligible(context) ?: slug
+        container.syncService.syncIfNeeded(promoSlug, force = true)
+        delay(450)
+        if (container.syncService.hasCompletedFlyerHydration(promoSlug) &&
+            PostCardFlyerPromoEligibility.shouldOffer(context, promoSlug)
+        ) {
             showFlyerPromo = true
         }
     }
@@ -155,23 +162,31 @@ fun MainTabsScreen(
         ?: container.sessionStore.currentBusinessSlug
         ?: "Mon commerce"
 
+    fun openPaywall(addingCommerce: Boolean = false, pendingName: String? = null) {
+        paywallAddingCommerce = addingCommerce
+        paywallPendingCommerceName = pendingName
+        showProPaywall = true
+    }
+
     val onSubscribe: () -> Unit = {
-        scope.launch {
-            runCatching {
-                val slug = container.sessionStore.currentBusinessSlug?.trim().orEmpty()
-                val url = if (slug.isNotEmpty()) {
-                    container.dashboardRepository.paymentBusinessCheckout(slug, "month").url
-                } else {
-                    container.dashboardRepository.paymentCheckout(null).url
-                }
-                url?.takeIf { it.isNotBlank() }?.let { openInCustomTab(context, it) }
-            }
-        }
+        val slots = fr.myfidpass.util.MerchantMultiPricing.slotsToPurchase(
+            usedBusinesses = container.sessionStore.usedBusinesses,
+            allowedBusinesses = container.sessionStore.allowedBusinesses,
+            addingAnotherCommerce = false,
+        )
+        val url = fr.myfidpass.util.LegalURLs.merchantEmbeddedSaasPaymentPage(
+            prefilledEmail = container.sessionStore.userEmail,
+            planAnnual = false,
+            commerceSlots = slots,
+            accessToken = container.sessionStore.accessToken,
+            refreshToken = container.sessionStore.refreshToken,
+        )
+        openInCustomTab(context, url)
     }
 
     val onAddCommerce: () -> Unit = { showAddCommerce = true }
 
-    val onUnlockPro: () -> Unit = { showProPaywall = true }
+    val onUnlockPro: () -> Unit = { openPaywall() }
 
     LaunchedEffect(tab, fullLayout) {
         if (tab == 0) dashboardViewModel.refresh()
@@ -230,7 +245,10 @@ fun MainTabsScreen(
                                 onSubscribe = onSubscribe,
                                 isStaff = true,
                                 onOpenMerchantStats = { tab = 2 },
-                                onScanSuccessToast = { scanToast = it },
+                                onScanSuccessToast = {
+                                    HapticHelper.scan(view)
+                                    scanToast = it
+                                },
                                 openScanTrigger = openScanTrigger,
                                 onUnlockPro = onUnlockPro,
                                 onMyCardVisibilityChange = { homeImmersiveMyCard = it },
@@ -304,7 +322,10 @@ fun MainTabsScreen(
                                     onSubscribe = onSubscribe,
                                     isStaff = false,
                                     onOpenMerchantStats = { tab = 2 },
-                                    onScanSuccessToast = { scanToast = it },
+                                    onScanSuccessToast = {
+                                    HapticHelper.scan(view)
+                                    scanToast = it
+                                },
                                     openScanTrigger = openScanTrigger,
                                     onUnlockPro = onUnlockPro,
                                     onMyCardVisibilityChange = { homeImmersiveMyCard = it },
@@ -374,6 +395,7 @@ fun MainTabsScreen(
                         onLogout = onLogout,
                         embeddedRoot = true,
                         onUnlockPro = onUnlockPro,
+                        onCommerceQuotaBlocked = { name -> openPaywall(addingCommerce = true, pendingName = name) },
                         onCommerceStatsAtRootChange = { commerceStatsAtRoot = it },
                     )
                 }
@@ -441,11 +463,23 @@ fun MainTabsScreen(
                     authRepository = container.authRepository,
                     onLogout = onLogout,
                     onAccessGranted = {
+                        val wasAddingCommerce = paywallAddingCommerce
                         showProPaywall = false
+                        paywallAddingCommerce = false
+                        paywallPendingCommerceName = null
                         dashboardViewModel.load()
+                        if (wasAddingCommerce && container.sessionStore.canCreateBusiness) {
+                            showAddCommerce = true
+                        }
                     },
                     allowsClose = true,
-                    onClose = { showProPaywall = false },
+                    onClose = {
+                        showProPaywall = false
+                        paywallAddingCommerce = false
+                        paywallPendingCommerceName = null
+                    },
+                    addingAnotherCommerce = paywallAddingCommerce,
+                    pendingCommerceName = paywallPendingCommerceName,
                 )
             }
 
@@ -456,7 +490,7 @@ fun MainTabsScreen(
                     appScope = appScope,
                     onDismiss = { showSettings = false },
                     onLogout = onLogout,
-                    onOpenPaywall = { showProPaywall = true },
+                    onOpenPaywall = { adding, pending -> openPaywall(adding, pending) },
                     onOpenFlyerHub = {
                         showSettings = false
                         flyerHubStartCreateAssistant = false
@@ -492,6 +526,10 @@ fun MainTabsScreen(
                     onCreated = {
                         showAddCommerce = false
                         dashboardViewModel.load()
+                    },
+                    onQuotaBlocked = { name ->
+                        showAddCommerce = false
+                        openPaywall(addingCommerce = true, pendingName = name)
                     },
                 )
             }

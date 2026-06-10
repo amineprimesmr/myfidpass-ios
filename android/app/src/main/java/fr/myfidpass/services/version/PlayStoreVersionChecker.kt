@@ -31,11 +31,11 @@ object PlayStoreVersionChecker {
             if (!ignoreThrottle && !AppVersionUpdatePolicy.shouldRunStoreLookup(context)) {
                 return@withContext null
             }
-            AppVersionUpdatePolicy.recordStoreLookupAttempt(context)
 
             val installed = BuildConfig.VERSION_NAME.trim()
             val page = fetchPlayStorePage(packageName) ?: return@withContext null
             val storeVersion = parseStoreVersion(page) ?: return@withContext null
+            AppVersionUpdatePolicy.recordSuccessfulStoreLookup(context)
             if (!isStoreVersionStrictlyNewer(storeVersion, installed)) return@withContext null
             val dismissed = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .getString(KEY_DISMISSED, null)

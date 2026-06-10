@@ -36,6 +36,7 @@ import androidx.compose.ui.zIndex
 import fr.myfidpass.BuildConfig
 import fr.myfidpass.data.local.SessionStore
 import fr.myfidpass.data.repo.DashboardRepository
+import fr.myfidpass.ui.components.FintechLoadMoreTransactionsButton
 import fr.myfidpass.ui.components.FintechTransactionPill
 import fr.myfidpass.ui.components.FintechTransactionsEmptyState
 import fr.myfidpass.ui.components.FintechTransactionsHeader
@@ -225,11 +226,21 @@ fun HomeDashboardScreen(
                     FintechTransactionsEmptyState(palette = palette)
                 } else {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        viewModel.recentTransactions.take(8).forEach { t ->
-                            FintechTransactionPill(
-                                transaction = t,
+                        viewModel.recentTransactions
+                            .take(viewModel.transactionsVisibleCount)
+                            .forEach { t ->
+                                FintechTransactionPill(
+                                    transaction = t,
+                                    palette = palette,
+                                    isPointsProgram = isPointsProgram,
+                                    pointsPerEuro = settings?.pointsPerEuro?.takeIf { it > 0 },
+                                )
+                            }
+                        if (viewModel.hasMoreTransactions) {
+                            FintechLoadMoreTransactionsButton(
                                 palette = palette,
-                                isPointsProgram = isPointsProgram,
+                                isLoading = viewModel.loadingMoreTransactions,
+                                onClick = { viewModel.loadMoreTransactions() },
                             )
                         }
                     }

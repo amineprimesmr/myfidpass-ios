@@ -17,7 +17,8 @@ enum AppVersionUpdatePolicy {
         return now.timeIntervalSince(last) >= minimumLookupInterval
     }
 
-    static func recordStoreLookupAttempt(at date: Date = Date()) {
+    /// Enregistre un lookup **réussi** (réponse iTunes parsée) — pas en cas d’échec réseau.
+    static func recordSuccessfulStoreLookup(at date: Date = Date()) {
         UserDefaults.standard.set(date, forKey: lastLookupAtKey)
     }
 

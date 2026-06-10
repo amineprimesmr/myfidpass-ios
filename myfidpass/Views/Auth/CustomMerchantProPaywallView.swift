@@ -22,9 +22,14 @@ struct CustomMerchantProPaywallView: View {
     var requiredCommerceSlots: Int? = nil
     /// Contexte post-inscription : nom du commerce sous le titre.
     var signupCommerceDisplayName: String? = nil
+    /// Ajout d’un commerce (quota plein).
+    var addingAnotherCommerce: Bool = false
+    /// Nom du futur commerce (avant paiement).
+    var pendingCommerceName: String? = nil
 
     /// `true` = mensuel, `false` = annuel (défaut annuel comme Bevel).
     @State private var isMonthlyPlanSelected = false
+    @State private var selectedTargetSlots: Int = 1
     @State private var isPurchasing = false
     @State private var purchaseError: String?
     @State private var legalSafariURL: URL?
@@ -35,15 +40,29 @@ struct CustomMerchantProPaywallView: View {
     @State private var didCompletePaywallSuccess = false
     @ObservedObject private var appleStore = MerchantAppleSubscriptionStore.shared
 
+    private var paidSlotsBaseline: Int {
+        min(5, max(1, authService.allowedBusinesses))
+    }
+
     private var effectiveCommerceSlots: Int {
+        min(5, max(1, selectedTargetSlots))
+    }
+
+    private var initialTargetSlots: Int {
         if let requiredCommerceSlots {
             return min(5, max(1, requiredCommerceSlots))
         }
         return MerchantAppleSubscriptionProducts.slotsToPurchase(
             usedBusinesses: authService.usedBusinesses,
             allowedBusinesses: authService.allowedBusinesses,
-            addingAnotherCommerce: false
+            addingAnotherCommerce: addingAnotherCommerce
         )
+    }
+
+    private var showsCommerceQuotaSection: Bool { true }
+
+    private var pricingUpgradeQuote: MerchantMultiPricing.Quote {
+        MerchantMultiPricing.quote(from: paidSlotsBaseline, to: effectiveCommerceSlots)
     }
 
     private var supportsAnnualPlanToggle: Bool {
@@ -86,6 +105,20 @@ struct CustomMerchantProPaywallView: View {
                     .padding(.top, titleBlockTopPadding)
                     .padding(.bottom, titleBlockBottomPadding)
 
+                if showsCommerceQuotaSection {
+                    PaywallCommerceQuotaSection(
+                        businesses: authService.businessesForMerchantSwitcher,
+                        usedBusinesses: authService.usedBusinesses,
+                        allowedBusinesses: authService.allowedBusinesses,
+                        hasActiveSubscription: authService.hasEncashedMerchantSubscription,
+                        addingAnotherCommerce: addingAnotherCommerce,
+                        pendingCommerceName: pendingCommerceName ?? signupCommerceDisplayName,
+                        selectedTargetSlots: $selectedTargetSlots
+                    )
+                    .padding(.horizontal, 22)
+                    .padding(.bottom, 10)
+                }
+
                 PaywallBevelAutoScrollingFeatures(
                     primary: PaywallBevelFeatureCatalog.primary,
                     alsoIncluded: PaywallBevelFeatureCatalog.alsoIncluded
@@ -127,7 +160,14 @@ struct CustomMerchantProPaywallView: View {
         }
         .onAppear {
             refreshMeasuredTopSafeInset()
-            isMonthlyPlanSelected = !supportsAnnualPlanToggle
+            selectedTargetSlots = initialTargetSlots
+            isMonthlyPlanSelected = true
+        }
+        .onChange(of: requiredCommerceSlots) { _, _ in
+            selectedTargetSlots = initialTargetSlots
+        }
+        .onChange(of: addingAnotherCommerce) { _, _ in
+            selectedTargetSlots = initialTargetSlots
         }
         .onChange(of: effectiveCommerceSlots) { _, _ in
             if !supportsAnnualPlanToggle {
@@ -227,45 +267,15 @@ struct CustomMerchantProPaywallView: View {
         }
     }
 
-    // MARK: - Bas (forfaits + CTA)
+    // MARK: - Bas (CTA)
 
     private var bottomSection: some View {
         VStack(spacing: 14) {
-            Text(paywallPricingIntroText)
-                .font(.system(size: 16, weight: .semibold))
+            Text(paywallPricingIntroLine)
+                .font(.system(size: 20, weight: .bold))
                 .foregroundStyle(Color(red: 0.10, green: 0.11, blue: 0.13))
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: .infinity)
-                .padding(.bottom, 2)
-
-            if supportsAnnualPlanToggle {
-                HStack(spacing: 12) {
-                    PaywallBevelPlanCard(
-                        title: "Mensuel",
-                        priceLine: monthlyPriceLine,
-                        isSelected: isMonthlyPlanSelected,
-                        savingsBadge: nil
-                    ) {
-                        selectMonthlyPlan()
-                    }
-                    PaywallBevelPlanCard(
-                        title: "Annuel",
-                        priceLine: annualPriceLine,
-                        isSelected: !isMonthlyPlanSelected,
-                        savingsBadge: annualSavingsBadge
-                    ) {
-                        selectAnnualPlan()
-                    }
-                }
-            } else {
-                PaywallBevelPlanCard(
-                    title: effectiveCommerceSlots == 1 ? "Mensuel" : "\(effectiveCommerceSlots) commerces",
-                    priceLine: monthlyPriceLine,
-                    isSelected: true,
-                    savingsBadge: nil
-                ) {}
-                    .allowsHitTesting(false)
-            }
 
             PaywallBevelContinueButton(
                 title: paywallContinueButtonTitle,
@@ -275,7 +285,7 @@ struct CustomMerchantProPaywallView: View {
                 Task { await purchaseWithAppStore() }
             }
 
-            Text(MerchantSubscriptionPricingCopy.paywallNoCommitmentHighlight)
+            Text(paywallFooterCommitmentText)
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(Color(red: 0.18, green: 0.19, blue: 0.22))
 
@@ -294,18 +304,19 @@ struct CustomMerchantProPaywallView: View {
 
     // MARK: - Prix
 
-    private var paywallPricingIntroText: String {
-        if let intro = appleStore.introductoryOfferDisplayPrice(
-            slots: effectiveCommerceSlots,
-            annual: selectedPlanIsAnnual
-        ), !intro.isEmpty {
-            return "Premier mois à \(normalizePrice(intro)), puis…"
-        }
-        return MerchantSubscriptionPricingCopy.paywallPricingIntroLine
+    private var paywallPricingIntroLine: String {
+        "Le premier mois à 1€, puis \(pricingUpgradeQuote.toMonthlyLabel) / mois"
+    }
+
+    private var paywallFooterCommitmentText: String {
+        "Puis \(pricingUpgradeQuote.toMonthlyLabel)/mois sans engagement"
     }
 
     private var paywallContinueButtonTitle: String {
-        MerchantSubscriptionPricingCopy.purchaseCta
+        if pricingUpgradeQuote.isUpgrade, authService.hasEncashedMerchantSubscription {
+            return "Passer à \(effectiveCommerceSlots) commerces"
+        }
+        return MerchantSubscriptionPricingCopy.paywallContinueCta
     }
 
     private var paywallContinueButtonEnabled: Bool {
@@ -322,61 +333,6 @@ struct CustomMerchantProPaywallView: View {
             slots: effectiveCommerceSlots,
             annual: selectedPlanIsAnnual
         )
-    }
-
-    private var monthlyPriceLine: String {
-        let raw = appleStore.displayPriceLine(slots: effectiveCommerceSlots, annual: false)
-            ?? MerchantSubscriptionPricingCopy.paywallMonthlyFallbackPrice
-        return "\(normalizePrice(raw)) / mois"
-    }
-
-    private var annualPriceLine: String {
-        let raw = appleStore.displayPriceLine(slots: effectiveCommerceSlots, annual: true)
-            ?? MerchantSubscriptionPricingCopy.paywallAnnualFallbackPrice
-        return "\(normalizePrice(raw)) / an"
-    }
-
-    private var annualSavingsBadge: String? {
-        guard let pct = computedAnnualSavingsPercent, pct > 0 else { return "Économisez 33 %" }
-        return "Économisez \(pct) %"
-    }
-
-    private var computedAnnualSavingsPercent: Int? {
-        guard supportsAnnualPlanToggle,
-              let monthly = appleStore.product(slots: effectiveCommerceSlots, annual: false),
-              let annual = appleStore.product(slots: effectiveCommerceSlots, annual: true)
-        else { return nil }
-        let m = (monthly.price as NSDecimalNumber).doubleValue
-        let a = (annual.price as NSDecimalNumber).doubleValue
-        guard m > 0, a > 0 else { return nil }
-        let yearlyFromMonthly = m * 12
-        let saved = (1 - a / yearlyFromMonthly) * 100
-        return max(1, Int(saved.rounded()))
-    }
-
-    private func normalizePrice(_ raw: String) -> String {
-        let s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if s.hasPrefix("$") {
-            let amount = String(s.dropFirst()).trimmingCharacters(in: .whitespaces)
-            return "\(amount.replacingOccurrences(of: ".", with: ",")) €"
-        }
-        return s
-    }
-
-    private func selectMonthlyPlan() {
-        guard !isMonthlyPlanSelected else { return }
-        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-        withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
-            isMonthlyPlanSelected = true
-        }
-    }
-
-    private func selectAnnualPlan() {
-        guard isMonthlyPlanSelected else { return }
-        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-        withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
-            isMonthlyPlanSelected = false
-        }
     }
 
     // MARK: - Menu légal
@@ -427,24 +383,29 @@ struct CustomMerchantProPaywallView: View {
     private func handleBackgroundAppleStoreTransactionSynced() async {
         guard !didCompletePaywallSuccess else { return }
         if let response = appleStore.lastSuccessfulSyncResponse {
-            authService.applyAppleSubscriptionSync(response)
+            authService.applyAppleSubscriptionSync(response, purchasedSlots: effectiveCommerceSlots)
         }
         _ = await authService.refreshMerchantBillingStateWithRetries()
         if authService.hasEncashedMerchantSubscription {
-            completePaywallAfterSuccessfulPayment()
+            await completePaywallAfterSuccessfulPayment()
             return
         }
         if let response = appleStore.lastSuccessfulSyncResponse,
            AuthService.appleSyncResponseGrantsPaidAccess(response) {
-            authService.applyAppleSubscriptionSync(response)
-            completePaywallAfterSuccessfulPayment()
+            authService.applyAppleSubscriptionSync(response, purchasedSlots: effectiveCommerceSlots)
+            await completePaywallAfterSuccessfulPayment()
         }
     }
 
     @MainActor
-    private func completePaywallAfterSuccessfulPayment() {
+    private func completePaywallAfterSuccessfulPayment() async {
         guard !didCompletePaywallSuccess else { return }
-        guard authService.hasEncashedMerchantSubscription else { return }
+        _ = await authService.refreshMerchantBillingStateWithRetries()
+        if addingAnotherCommerce || effectiveCommerceSlots > authService.allowedBusinesses {
+            authService.applyPostPurchaseQuotaUnlock(minimumSlots: effectiveCommerceSlots)
+        }
+        let quotaUnlocked = addingAnotherCommerce && authService.canCreateBusiness
+        guard authService.hasEncashedMerchantSubscription || quotaUnlocked else { return }
         didCompletePaywallSuccess = true
         if authService.isCompletingSignupPaywallPhase {
             authService.confirmSignupPaywallPaymentInThisSession()
@@ -452,6 +413,11 @@ struct CustomMerchantProPaywallView: View {
         } else {
             dismiss()
             NotificationCenter.default.post(name: .myfidpassSubscriptionPaymentCompleted, object: nil)
+            if addingAnotherCommerce || authService.canCreateBusiness {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+                    NotificationCenter.default.post(name: .myfidpassOpenAddCommerceSheet, object: nil)
+                }
+            }
         }
     }
 
@@ -464,7 +430,7 @@ struct CustomMerchantProPaywallView: View {
             let annual = supportsAnnualPlanToggle && !isMonthlyPlanSelected
             let syncResponse = try await appleStore.purchase(slots: effectiveCommerceSlots, annual: annual)
             if await finalizeStoreKitPaymentAfterServerConfirmation(initialSync: syncResponse) {
-                completePaywallAfterSuccessfulPayment()
+                await completePaywallAfterSuccessfulPayment()
             }
         } catch MerchantAppleSubscriptionStoreError.userCancelled {
             return
@@ -486,7 +452,7 @@ struct CustomMerchantProPaywallView: View {
         initialSync: PaymentAppleSyncResponse?
     ) async -> Bool {
         if let initialSync {
-            authService.applyAppleSubscriptionSync(initialSync)
+            authService.applyAppleSubscriptionSync(initialSync, purchasedSlots: effectiveCommerceSlots)
         }
         if authService.hasEncashedMerchantSubscription {
             return true
@@ -494,7 +460,7 @@ struct CustomMerchantProPaywallView: View {
         let confirmed = await authService.refreshMerchantBillingStateWithRetries()
         if confirmed { return true }
         if let initialSync, AuthService.appleSyncResponseGrantsPaidAccess(initialSync) {
-            authService.applyAppleSubscriptionSync(initialSync)
+            authService.applyAppleSubscriptionSync(initialSync, purchasedSlots: effectiveCommerceSlots)
             return true
         }
         purchaseError =

@@ -219,9 +219,15 @@ struct CommerceStatsPointsAttributedCard: View {
                         )
                     )
                 PointsAttributedLineShape(values: values)
-                    .stroke(lineColor.opacity(0.22), lineWidth: 3)
+                    .stroke(
+                        lineColor.opacity(0.22),
+                        style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round)
+                    )
                 PointsAttributedLineShape(values: values)
-                    .stroke(lineColor, lineWidth: 2.1)
+                    .stroke(
+                        lineColor,
+                        style: StrokeStyle(lineWidth: 2.1, lineCap: .round, lineJoin: .round)
+                    )
             }
 
             if !values.isEmpty {

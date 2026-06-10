@@ -5,6 +5,7 @@ import fr.myfidpass.BuildConfig
 import fr.myfidpass.core.auth.RefreshTokenCoordinator
 import fr.myfidpass.data.local.FirstLaunchPreferences
 import fr.myfidpass.data.local.SessionStore
+import fr.myfidpass.data.network.MyfidpassApi
 import fr.myfidpass.data.network.NetworkModule
 import fr.myfidpass.data.repo.AuthRepository
 import fr.myfidpass.data.repo.BusinessCreationRepository
@@ -40,20 +41,23 @@ class AppContainer(context: Context) {
         refreshCoordinator = refreshCoordinator,
     )
 
+    val api: MyfidpassApi = network.api
+
     val authRepository = AuthRepository(
-        api = network.api,
+        appContext = appContext,
+        api = api,
         sessionStore = sessionStore,
         firstLaunch = firstLaunchPreferences,
         refreshCoordinator = refreshCoordinator,
     )
 
     val dashboardRepository = DashboardRepository(
-        api = network.api,
+        api = api,
         sessionStore = sessionStore,
     )
 
     val businessCreationRepository = BusinessCreationRepository(
-        api = network.api,
+        api = api,
         sessionStore = sessionStore,
     )
 

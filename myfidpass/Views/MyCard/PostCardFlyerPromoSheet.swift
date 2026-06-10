@@ -23,10 +23,12 @@ enum PostCardFlyerPromoEligibility {
     }
 
     private static func flyerLooksRegistered(slug: String) -> Bool {
-        CommerceFlyerStore.shared.hydrateFromDiskIfNeeded(slug: slug)
-        if CommerceFlyerStore.shared.snapshot(for: slug)?.flyerRegistered == true { return true }
-        if CommerceFlyerStateCache.load(slug: slug)?.flyerRegistered == true { return true }
+        if CommerceFlyerStore.shared.isFlyerReady(for: slug) { return true }
         return false
+    }
+
+    private static var isPlatformAdminPiloting: Bool {
+        AuthStorage.isPlatformAdminFlag && AuthStorage.adminPilotMerchantWorkspace
     }
 
     /// Carte complète et flyer pas encore enregistré (sans tenir compte de la fermeture de session).
@@ -37,14 +39,15 @@ enum PostCardFlyerPromoEligibility {
         return !flyerLooksRegistered(slug: slug)
     }
 
-    /// Pastille rouge menu / navigation — persiste même si la feuille promo a été fermée sans créer le flyer.
-    static func showsCreationAttentionBadge(for slugRaw: String?) -> Bool {
-        guard let slugRaw else { return false }
+    static func shouldOffer(for slugRaw: String) -> Bool {
+        guard !suppressedUntilNextAppOpen else { return false }
+        if isPlatformAdminPiloting { return false }
         return stillNeedsFlyerPromo(for: slugRaw)
     }
 
-    static func shouldOffer(for slugRaw: String) -> Bool {
-        guard !suppressedUntilNextAppOpen else { return false }
+    static func showsCreationAttentionBadge(for slugRaw: String?) -> Bool {
+        guard let slugRaw else { return false }
+        if isPlatformAdminPiloting { return false }
         return stillNeedsFlyerPromo(for: slugRaw)
     }
 

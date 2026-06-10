@@ -15,13 +15,14 @@ enum MyCardProgramDefaults {
     static func splitPointsTiersFromAPI(
         _ tiers: [PointsRewardTierDTO]?,
         apiStartGameLabel: String?
-    ) -> (startGameRewardLabel: String, tierPoints: [String], tierLabels: [String]) {
+    ) -> (startGameRewardLabel: String, tierPoints: [String], tierLabels: [String], tierMinPurchases: [String]) {
         let sorted = (tiers ?? [])
             .filter { $0.points >= 0 }
             .sorted { $0.points < $1.points }
         var startGame = apiStartGameLabel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         var ptsOut = Array(repeating: "", count: pointsTierCount)
         var labsOut = Array(repeating: "", count: pointsTierCount)
+        var minOut = Array(repeating: "", count: pointsTierCount)
         var slot = 0
         for t in sorted {
             let lab = t.label.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -31,6 +32,9 @@ enum MyCardProgramDefaults {
                 if ptsOut[0].trimmingCharacters(in: .whitespaces).isEmpty {
                     ptsOut[0] = String(signupRewardPoints)
                     labsOut[0] = lab
+                    if let min = t.minPurchaseEur, min > 0 {
+                        minOut[0] = formatMinPurchase(min)
+                    }
                 }
                 continue
             }
@@ -43,6 +47,9 @@ enum MyCardProgramDefaults {
             guard slot < pointsTierCount else { continue }
             ptsOut[slot] = String(t.points)
             labsOut[slot] = lab
+            if let min = t.minPurchaseEur, min > 0 {
+                minOut[slot] = formatMinPurchase(min)
+            }
             slot += 1
         }
 
@@ -72,7 +79,21 @@ enum MyCardProgramDefaults {
             }
             sanitizeEditableTierSlots(tierPoints: &ptsOut, tierLabels: &labsOut)
         }
-        return (startGame, ptsOut, labsOut)
+        return (startGame, ptsOut, labsOut, minOut)
+    }
+
+    private static func formatMinPurchase(_ value: Double) -> String {
+        let rounded = (value * 100).rounded() / 100
+        if abs(rounded - rounded.rounded()) < 0.001 {
+            return String(Int(rounded))
+        }
+        return String(rounded).replacingOccurrences(of: ".", with: ",")
+    }
+
+    private static func parseMinPurchaseString(_ raw: String) -> Double? {
+        let t = raw.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: ",", with: ".")
+        guard !t.isEmpty, let d = Double(t), d > 0 else { return nil }
+        return (d * 100).rounded() / 100
     }
 
     /// Retire les doublons 10 pts hors 1ʳᵉ ligne.
@@ -114,15 +135,23 @@ enum MyCardProgramDefaults {
     }
 
     /// Supprime un palier (index > 0) et remonte les suivants.
-    static func removePointsTier(at index: Int, tierPoints: inout [String], tierLabels: inout [String]) {
+    static func removePointsTier(
+        at index: Int,
+        tierPoints: inout [String],
+        tierLabels: inout [String],
+        tierMinPurchases: inout [String]
+    ) {
         guard index > 0, index < pointsTierCount else { return }
         ensureTierArraysCapacity(tierPoints: &tierPoints, tierLabels: &tierLabels)
+        while tierMinPurchases.count < pointsTierCount { tierMinPurchases.append("") }
         for i in index..<(pointsTierCount - 1) {
             tierPoints[i] = tierPoints[i + 1]
             tierLabels[i] = tierLabels[i + 1]
+            tierMinPurchases[i] = tierMinPurchases[i + 1]
         }
         tierPoints[pointsTierCount - 1] = ""
         tierLabels[pointsTierCount - 1] = ""
+        tierMinPurchases[pointsTierCount - 1] = ""
     }
 
     /// Aligne `startGameRewardLabel` sur la 1ʳᵉ ligne si elle vaut 10 pts (champ API legacy).
@@ -169,7 +198,8 @@ enum MyCardProgramDefaults {
     static func buildPointsRewardTiersForAPI(
         startGameRewardLabel: String,
         tierPoints: [String],
-        tierLabels: [String]
+        tierLabels: [String],
+        tierMinPurchases: [String] = []
     ) -> [PointsRewardTierPayload] {
         var tiers: [PointsRewardTierPayload] = []
         let signupLabel = resolvedSignupRewardLabel(
@@ -177,13 +207,15 @@ enum MyCardProgramDefaults {
             tierPoints: tierPoints,
             tierLabels: tierLabels
         )
-        tiers.append(PointsRewardTierPayload(points: signupRewardPoints, label: signupLabel))
+        let signupMin = tierMinPurchases.indices.contains(0) ? parseMinPurchaseString(tierMinPurchases[0]) : nil
+        tiers.append(PointsRewardTierPayload(points: signupRewardPoints, label: signupLabel, minPurchaseEur: signupMin))
         for i in 0..<pointsTierCount {
             let ptsStr = tierPoints.indices.contains(i) ? tierPoints[i].trimmingCharacters(in: .whitespaces) : ""
             let lab = tierLabels.indices.contains(i) ? tierLabels[i].trimmingCharacters(in: .whitespaces) : ""
             guard let pts = Int(ptsStr), pts >= 0, !lab.isEmpty else { continue }
             if pts == signupRewardPoints { continue }
-            tiers.append(PointsRewardTierPayload(points: pts, label: String(lab.prefix(120))))
+            let minEur = tierMinPurchases.indices.contains(i) ? parseMinPurchaseString(tierMinPurchases[i]) : nil
+            tiers.append(PointsRewardTierPayload(points: pts, label: String(lab.prefix(120)), minPurchaseEur: minEur))
         }
         tiers.sort { $0.points < $1.points }
         return tiers

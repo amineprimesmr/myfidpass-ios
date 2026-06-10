@@ -48,6 +48,7 @@ struct MerchantStatsAllMembersListScreen: View {
     @State private var searchText = ""
     @State private var activityFilter: AllMembersRecencyFilter = .all
     @State private var sort: MemberRosterSort = .dateNewest
+    @State private var memberDetailSheetItem: MemberDetailSheetItem?
     @State private var showFiltersSheet = false
 
     /// Même conteneur que le sheet / le profil : toujours passer le `viewContext` injecté.
@@ -160,6 +161,14 @@ struct MerchantStatsAllMembersListScreen: View {
             filterSortSheet
                 .environment(\.colorScheme, .dark)
         }
+        .sheet(item: $memberDetailSheetItem) { item in
+            if let card = objectContext.object(with: item.objectID) as? ClientCard {
+                MemberDetailView(card: card, context: objectContext)
+                    .environmentObject(syncService)
+                    .environmentObject(dataService)
+                    .memberDetailSheetChrome()
+            }
+        }
     }
 
     private var emptyState: some View {
@@ -195,13 +204,12 @@ struct MerchantStatsAllMembersListScreen: View {
 
             List {
                 ForEach(filteredSortedMembers, id: \.objectID) { card in
-                    NavigationLink {
-                        MemberDetailView(card: card, context: objectContext)
-                            .environmentObject(syncService)
-                            .environmentObject(dataService)
+                    Button {
+                        memberDetailSheetItem = MemberDetailSheetItem(objectID: card.objectID)
                     } label: {
                         memberRow(card)
                     }
+                    .buttonStyle(.plain)
                     .listRowBackground(
                         RoundedRectangle(cornerRadius: 12, style: .continuous)
                             .fill(CommerceStatisticsTheme.pillBackground.opacity(0.65))

@@ -2,7 +2,8 @@
 //  CardLogoStorage.swift
 //  myfidpass
 //
-//  Sauvegarde du logo de carte choisi depuis la photothèque (fichier local pour l’aperçu).
+//  Médias carte en attente d’envoi API — **un dossier par commerce** (`CardLogos/{slug}/…`).
+//  Les anciens chemins plats (`CardLogos/cardLogo.png`) ne doivent plus être réutilisés entre comptes.
 //
 
 import UIKit
@@ -17,11 +18,30 @@ enum CardLogoStorage {
     private static let iconFilename = "cardLogoIcon.png"
     private static let cardBackgroundFilename = "cardBackground.png"
 
-    /// Chemin relatif pour stockage persistant (évite chemins absolus qui changent après mise à jour app).
-    static let relativeLogoPath = "\(subfolder)/\(filename)"
-    /// Logo carré (notifications / profil) — fichier distinct du bandeau pour ne pas l’écraser.
-    static let relativeLogoIconPath = "\(subfolder)/\(iconFilename)"
-    static let relativeCardBackgroundPath = "\(subfolder)/\(cardBackgroundFilename)"
+    /// Chemins plats historiques (pré multi-commerce) — lecture / migration uniquement.
+    static let legacyRelativeLogoPath = "\(subfolder)/\(filename)"
+    static let legacyRelativeLogoIconPath = "\(subfolder)/\(iconFilename)"
+    static let legacyRelativeCardBackgroundPath = "\(subfolder)/\(cardBackgroundFilename)"
+
+    private static func safeSlug(_ slug: String) -> String {
+        let t = slug.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return "_unknown" }
+        return t
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "..", with: "_")
+    }
+
+    static func relativeLogoPath(for slug: String) -> String {
+        "\(subfolder)/\(safeSlug(slug))/\(filename)"
+    }
+
+    static func relativeLogoIconPath(for slug: String) -> String {
+        "\(subfolder)/\(safeSlug(slug))/\(iconFilename)"
+    }
+
+    static func relativeCardBackgroundPath(for slug: String) -> String {
+        "\(subfolder)/\(safeSlug(slug))/\(cardBackgroundFilename)"
+    }
 
     /// Référence locale en attente d’envoi (pas encore une URL API) : ne pas écraser avec une réponse serveur.
     static func isLocalPendingLogoReference(_ value: String) -> Bool {
@@ -31,13 +51,34 @@ enum CardLogoStorage {
         return t.contains(subfolder) || t.hasPrefix("/") || t.hasPrefix("file:")
     }
 
-    /// Logo carré : fichier dédié ou chemin fichier absolu. (L’ancienne app utilisait `cardLogo.png` pour l’icône : on laisse le serveur corriger.)
     static func isLocalPendingLogoIconReference(_ value: String) -> Bool {
         let t = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { return false }
         if t.lowercased().hasPrefix("http://") || t.lowercased().hasPrefix("https://") { return false }
-        if t.contains(relativeLogoIconPath) || t.hasSuffix(iconFilename) { return true }
+        if t == legacyRelativeLogoIconPath || (t.contains(subfolder) && t.hasSuffix(iconFilename)) { return true }
         return t.hasPrefix("/") || t.hasPrefix("file:")
+    }
+
+    /// `true` si le chemin local appartient à **ce** commerce (évite le logo/fond d’un autre compte).
+    static func belongsToBusiness(_ storedPath: String, slug: String) -> Bool {
+        let t = storedPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return false }
+        if t.lowercased().hasPrefix("http://") || t.lowercased().hasPrefix("https://") { return false }
+        let ownedPrefix = "\(subfolder)/\(safeSlug(slug))/"
+        if t.contains(ownedPrefix) { return true }
+        let legacyPaths = [legacyRelativeLogoPath, legacyRelativeLogoIconPath, legacyRelativeCardBackgroundPath]
+        if legacyPaths.contains(t) || legacyPaths.contains(where: { t.hasSuffix("/\($0.components(separatedBy: "/").last ?? "")") && !t.contains(ownedPrefix) }) {
+            return MerchantMediaUploadOwnership.lastOwnerSlug == slug
+        }
+        return false
+    }
+
+    static func isLocalPendingLogoReference(_ value: String, slug: String) -> Bool {
+        isLocalPendingLogoReference(value) && belongsToBusiness(value, slug: slug)
+    }
+
+    static func isLocalPendingLogoIconReference(_ value: String, slug: String) -> Bool {
+        isLocalPendingLogoIconReference(value) && belongsToBusiness(value, slug: slug)
     }
 
     static var directoryURL: URL {
@@ -49,47 +90,93 @@ enum CardLogoStorage {
         return dir
     }
 
-    /// Enregistre l’image et retourne le chemin pour l’affichage (ou nil en cas d’échec).
-    static func saveImage(_ image: UIImage) -> String? {
-        let url = directoryURL.appendingPathComponent(filename)
+    static func directoryURL(for slug: String) -> URL {
+        let dir = directoryURL.appendingPathComponent(safeSlug(slug), isDirectory: true)
+        if !FileManager.default.fileExists(atPath: dir.path) {
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        return dir
+    }
+
+    /// Copie les fichiers plats legacy vers `CardLogos/{slug}/` si ce commerce en était propriétaire.
+    static func migrateLegacyFlatAssetsIfNeeded(for slug: String) {
+        let trimmed = slug.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let owner = MerchantMediaUploadOwnership.lastOwnerSlug
+        guard owner == nil || owner == trimmed else { return }
+        let fm = FileManager.default
+        let dest = directoryURL(for: trimmed)
+        let pairs: [(String, String)] = [
+            (legacyRelativeLogoPath, filename),
+            (legacyRelativeLogoIconPath, iconFilename),
+            (legacyRelativeCardBackgroundPath, cardBackgroundFilename),
+        ]
+        for (legacyRel, name) in pairs {
+            guard let legacyFull = fullPath(forRelative: legacyRel), fm.fileExists(atPath: legacyFull) else { continue }
+            let target = dest.appendingPathComponent(name)
+            if !fm.fileExists(atPath: target.path) {
+                try? fm.copyItem(at: URL(fileURLWithPath: legacyFull), to: target)
+            }
+        }
+    }
+
+    static func localLogoPathIfExists(for slug: String) -> String? {
+        migrateLegacyFlatAssetsIfNeeded(for: slug)
+        let rel = relativeLogoPath(for: slug)
+        guard let full = fullPath(forRelative: rel), FileManager.default.fileExists(atPath: full) else { return nil }
+        return rel
+    }
+
+    static func localCardBackgroundPathIfExists(for slug: String) -> String? {
+        migrateLegacyFlatAssetsIfNeeded(for: slug)
+        let rel = relativeCardBackgroundPath(for: slug)
+        guard let full = fullPath(forRelative: rel), FileManager.default.fileExists(atPath: full) else { return nil }
+        return rel
+    }
+
+    static func saveImage(_ image: UIImage, slug: String) -> String? {
+        migrateLegacyFlatAssetsIfNeeded(for: slug)
+        let url = directoryURL(for: slug).appendingPathComponent(filename)
         guard let data = image.pngData() else { return nil }
         do {
             try data.write(to: url)
+            MerchantMediaUploadOwnership.recordLogoUpload(for: slug)
             notifyLocalFileChanged()
-            return relativeLogoPath
+            return relativeLogoPath(for: slug)
         } catch {
             return nil
         }
     }
 
-    /// Logo carré (512 px recommandé) — fichier dédié `cardLogoIcon.png`.
-    static func saveLogoIconImage(_ image: UIImage) -> String? {
-        let url = directoryURL.appendingPathComponent(iconFilename)
+    static func saveLogoIconImage(_ image: UIImage, slug: String) -> String? {
+        migrateLegacyFlatAssetsIfNeeded(for: slug)
+        let url = directoryURL(for: slug).appendingPathComponent(iconFilename)
         guard let data = image.pngData() else { return nil }
         do {
             try data.write(to: url)
+            MerchantMediaUploadOwnership.recordLogoIconUpload(for: slug)
             notifyLocalFileChanged()
-            return relativeLogoIconPath
+            return relativeLogoIconPath(for: slug)
         } catch {
             return nil
         }
     }
 
-    /// Enregistre l'image de fond de carte (strip Wallet) et retourne le chemin relatif.
-    static func saveCardBackground(_ image: UIImage) -> String? {
-        let url = directoryURL.appendingPathComponent(cardBackgroundFilename)
+    static func saveCardBackground(_ image: UIImage, slug: String) -> String? {
+        migrateLegacyFlatAssetsIfNeeded(for: slug)
+        let url = directoryURL(for: slug).appendingPathComponent(cardBackgroundFilename)
         let flat = image.imageOrientation == .up ? image : flattenOrientation(image)
         guard let data = flat.pngData() else { return nil }
         do {
             try data.write(to: url)
+            MerchantMediaUploadOwnership.recordCardBackgroundUpload(for: slug)
             notifyLocalFileChanged()
-            return relativeCardBackgroundPath
+            return relativeCardBackgroundPath(for: slug)
         } catch {
             return nil
         }
     }
 
-    /// Aplatit la rotation EXIF dans un nouveau bitmap `.up` — `pngData()` ne bake pas l’orientation.
     private static func flattenOrientation(_ image: UIImage) -> UIImage {
         guard image.size.width > 0, image.size.height > 0 else { return image }
         let format = UIGraphicsImageRendererFormat()
@@ -100,30 +187,29 @@ enum CardLogoStorage {
         }
     }
 
-    /// Supprime le fichier image de fond (ex. après retrait dans l’UI ou changement de compte).
-    static func removeLocalCardBackgroundFile() {
-        let url = directoryURL.appendingPathComponent(cardBackgroundFilename)
+    static func removeLocalCardBackgroundFile(for slug: String) {
+        let url = directoryURL(for: slug).appendingPathComponent(cardBackgroundFilename)
         if FileManager.default.fileExists(atPath: url.path) {
             try? FileManager.default.removeItem(at: url)
             notifyLocalFileChanged()
         }
+        let legacy = directoryURL.appendingPathComponent(cardBackgroundFilename)
+        if FileManager.default.fileExists(atPath: legacy.path) {
+            try? FileManager.default.removeItem(at: legacy)
+            notifyLocalFileChanged()
+        }
     }
 
-    /// Déconnexion / reset compte : logos + fond carte locaux (chemins globaux, pas liés au slug sur disque).
     static func removeAllLocalCardAssets() {
         let fm = FileManager.default
-        var removedAny = false
-        for name in [filename, iconFilename, cardBackgroundFilename] {
-            let url = directoryURL.appendingPathComponent(name)
-            if fm.fileExists(atPath: url.path) {
-                try? fm.removeItem(at: url)
-                removedAny = true
-            }
+        let root = directoryURL
+        if fm.fileExists(atPath: root.path) {
+            try? fm.removeItem(at: root)
+            notifyLocalFileChanged()
         }
-        if removedAny { notifyLocalFileChanged() }
+        MerchantMediaUploadOwnership.clearAll()
     }
 
-    /// Retourne le chemin complet pour un chemin relatif (ex. CardLogos/cardLogo.png).
     static func fullPath(forRelative relativePath: String) -> String? {
         guard !relativePath.isEmpty, !relativePath.hasPrefix("/") else { return nil }
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
@@ -131,7 +217,6 @@ enum CardLogoStorage {
         return url.path
     }
 
-    /// Chemin fichier pour l’aperçu carte : relatif `CardLogos/...`, absolu `/var/...`, ou `file:`.
     static func resolvedDisplayPath(forStoredPath path: String?) -> String? {
         guard let path = path?.trimmingCharacters(in: .whitespacesAndNewlines), !path.isEmpty else { return nil }
         if path.lowercased().hasPrefix("file:"), let u = URL(string: path) { return u.path }
@@ -139,7 +224,6 @@ enum CardLogoStorage {
         return fullPath(forRelative: path)
     }
 
-    /// Compresse pour le **fond de carte** (strip) : JPEG — photos, pas besoin d’alpha.
     static func compressedBase64ForAPI(image: UIImage) -> String? {
         let maxSide: CGFloat = 800
         let size = image.size
@@ -154,7 +238,6 @@ enum CardLogoStorage {
         return "data:image/jpeg;base64," + data.base64EncodedString()
     }
 
-    /// Logo bandeau Wallet (coin haut gauche) : **PNG** pour garder la transparence. Le JPEG ci-dessus tue l’alpha → bloc blanc sur la carte réelle.
     private static let maxLogoUploadBytes = 4 * 1024 * 1024
 
     static func compressedWalletStripLogoBase64ForAPI(image: UIImage) -> String? {
@@ -167,9 +250,7 @@ enum CardLogoStorage {
             format.opaque = false
             format.scale = 1
             let renderer = UIGraphicsImageRenderer(size: newSize, format: format)
-            let resized = renderer.image { _ in
-                image.draw(in: CGRect(origin: .zero, size: newSize))
-            }
+            let resized = renderer.image { _ in image.draw(in: CGRect(origin: .zero, size: newSize)) }
             if let data = resized.pngData(), data.count <= maxLogoUploadBytes {
                 return "data:image/png;base64," + data.base64EncodedString()
             }
@@ -178,7 +259,6 @@ enum CardLogoStorage {
         return nil
     }
 
-    /// Compresse pour `logo_icon_base64` : le backend refuse au-delà de 512 Ko (octets décodés).
     static func compressedBase64ForLogoIconAPI(image: UIImage) -> String? {
         let maxBytes = 500 * 1024
         var maxSide: CGFloat = 512
@@ -203,34 +283,22 @@ enum CardLogoStorage {
         return nil
     }
 
-    /// Charge l'image depuis le chemin (relatif ou absolu) et retourne le base64 JPEG pour l'API (fond de carte), ou nil.
     static func compressedBase64FromFile(path: String) -> String? {
-        let resolvedPath: String
-        if path.hasPrefix("/") || path.hasPrefix("file:") {
-            resolvedPath = path.hasPrefix("file:") ? (URL(string: path)?.path ?? path) : path
-        } else {
-            guard let full = fullPath(forRelative: path) else { return nil }
-            resolvedPath = full
-        }
-        guard let image = ImageIODownsampling.imageFromFile(at: resolvedPath, maxPixelDimension: 8192) else { return nil }
+        guard let image = imageFromResolvedPath(path) else { return nil }
         return compressedBase64ForAPI(image: image)
     }
 
-    /// Logo bandeau Wallet depuis fichier : PNG avec alpha (même résolution de chemin que `compressedBase64FromFile`).
     static func compressedWalletStripLogoBase64FromFile(path: String) -> String? {
-        let resolvedPath: String
-        if path.hasPrefix("/") || path.hasPrefix("file:") {
-            resolvedPath = path.hasPrefix("file:") ? (URL(string: path)?.path ?? path) : path
-        } else {
-            guard let full = fullPath(forRelative: path) else { return nil }
-            resolvedPath = full
-        }
-        guard let image = ImageIODownsampling.imageFromFile(at: resolvedPath, maxPixelDimension: 8192) else { return nil }
+        guard let image = imageFromResolvedPath(path) else { return nil }
         return compressedWalletStripLogoBase64ForAPI(image: image)
     }
 
-    /// Base64 logo carré depuis fichier (même résolution de chemin que `compressedBase64FromFile`).
     static func compressedBase64LogoIconFromFile(path: String) -> String? {
+        guard let image = imageFromResolvedPath(path) else { return nil }
+        return compressedBase64ForLogoIconAPI(image: image)
+    }
+
+    private static func imageFromResolvedPath(_ path: String) -> UIImage? {
         let resolvedPath: String
         if path.hasPrefix("/") || path.hasPrefix("file:") {
             resolvedPath = path.hasPrefix("file:") ? (URL(string: path)?.path ?? path) : path
@@ -238,7 +306,72 @@ enum CardLogoStorage {
             guard let full = fullPath(forRelative: path) else { return nil }
             resolvedPath = full
         }
-        guard let image = ImageIODownsampling.imageFromFile(at: resolvedPath, maxPixelDimension: 8192) else { return nil }
-        return compressedBase64ForLogoIconAPI(image: image)
+        return ImageIODownsampling.imageFromFile(at: resolvedPath, maxPixelDimension: 8192)
+    }
+}
+
+/// Horodatages et propriétaire des uploads locaux — **par slug** (évite de mélanger deux commerces).
+enum MerchantMediaUploadOwnership {
+    private static let ownerSlugKey = "myfidpass.merchantMediaUploadOwnerSlug"
+
+    static var lastOwnerSlug: String? {
+        UserDefaults.standard.string(forKey: ownerSlugKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .nilIfEmpty
+    }
+
+    static func lastLogoUploadDate(for slug: String) -> Date? {
+        UserDefaults.standard.object(forKey: logoUploadKey(slug)) as? Date
+    }
+
+    static func lastLogoIconUploadDate(for slug: String) -> Date? {
+        UserDefaults.standard.object(forKey: logoIconUploadKey(slug)) as? Date
+    }
+
+    static func recordLogoUpload(for slug: String) {
+        let s = slug.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !s.isEmpty else { return }
+        UserDefaults.standard.set(Date(), forKey: logoUploadKey(s))
+        UserDefaults.standard.set(s, forKey: ownerSlugKey)
+    }
+
+    static func recordLogoIconUpload(for slug: String) {
+        let s = slug.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !s.isEmpty else { return }
+        UserDefaults.standard.set(Date(), forKey: logoIconUploadKey(s))
+        UserDefaults.standard.set(s, forKey: ownerSlugKey)
+    }
+
+    static func recordCardBackgroundUpload(for slug: String) {
+        let s = slug.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !s.isEmpty else { return }
+        UserDefaults.standard.set(s, forKey: ownerSlugKey)
+    }
+
+    static func clearAll() {
+        let keys = UserDefaults.standard.dictionaryRepresentation().keys
+        for k in keys where k.hasPrefix("myfidpass.lastLogoUploadAt.")
+            || k.hasPrefix("myfidpass.lastLogoIconUploadAt.")
+            || k.hasPrefix("myfidpass.merchantLogoStripeServerCacheDate.")
+            || k.hasPrefix("myfidpass.merchantLogoIconServerCacheDate.") {
+            UserDefaults.standard.removeObject(forKey: k)
+        }
+        UserDefaults.standard.removeObject(forKey: ownerSlugKey)
+        UserDefaults.standard.removeObject(forKey: "myfidpass.lastLogoUploadAt")
+        UserDefaults.standard.removeObject(forKey: "myfidpass.lastLogoIconUploadAt")
+    }
+
+    private static func logoUploadKey(_ slug: String) -> String {
+        "myfidpass.lastLogoUploadAt.\(slug)"
+    }
+
+    private static func logoIconUploadKey(_ slug: String) -> String {
+        "myfidpass.lastLogoIconUploadAt.\(slug)"
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? {
+        isEmpty ? nil : self
     }
 }

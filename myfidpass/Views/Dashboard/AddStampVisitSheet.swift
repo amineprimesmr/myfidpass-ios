@@ -249,7 +249,6 @@ struct AddStampVisitSheet: View {
             disabled: isSubmitting
         )
         return SlideToConfirm(config: cfg) {
-            UINotificationFeedbackGenerator().notificationOccurred(.success)
             Task { await applySingleStampVisit() }
         }
         .id(slideResetID)
@@ -271,7 +270,6 @@ struct AddStampVisitSheet: View {
             disabled: isSubmitting
         )
         return SlideToConfirm(config: cfg) {
-            UINotificationFeedbackGenerator().notificationOccurred(.success)
             Task { await applyGrantReward() }
         }
         .id(slideResetID)
@@ -282,7 +280,7 @@ struct AddStampVisitSheet: View {
             await MainActor.run { slideResetID = UUID() }
             if !err.isEmpty {
                 await MainActor.run {
-                    UINotificationFeedbackGenerator().notificationOccurred(.error)
+                    MerchantUXFeedback.shared.play(.error)
                 }
             }
             return

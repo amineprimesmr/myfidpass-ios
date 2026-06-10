@@ -144,8 +144,8 @@ fun ScanSecuritySettingsScreen(
                 label = { Text("Points max par opération") },
                 modifier = Modifier.fillMaxWidth(),
             )
-            if ((maxPasses.toIntOrNull() ?: 0) == MerchantScanBenchAccess.BENCH_MAX_PASSES_PER_DAY)
-                && ((maxPoints.toIntOrNull() ?: 0) == MerchantScanBenchAccess.BENCH_MAX_POINTS_PER_OPERATION)
+            if ((maxPasses.toIntOrNull() ?: 0) == MerchantScanBenchAccess.BENCH_MAX_PASSES_PER_DAY
+                && (maxPoints.toIntOrNull() ?: 0) == MerchantScanBenchAccess.BENCH_MAX_POINTS_PER_OPERATION
             ) {
                 Spacer(Modifier.height(8.dp))
                 Text(

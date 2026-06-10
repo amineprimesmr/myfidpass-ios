@@ -111,9 +111,7 @@ fun MatchPredictionsScreen(
         pointsPerCorrect = cfg?.get("points_per_correct_prediction")?.jsonPrimitive?.intOrNull
             ?.coerceIn(1, 500) ?: 10
         nextMatch = parseNextMatch(json["next_match"]?.jsonObject)
-            ?: parseNextMatch(json["matches"]?.let { arr ->
-                arr.firstOrNull()?.jsonObject
-            })
+            ?: parseNextMatch(json["matches"]?.jsonArray?.firstOrNull()?.jsonObject)
         val stats = json["stats"]?.jsonObject
         totalPredictions = stats?.get("total_predictions")?.jsonPrimitive?.intOrNull ?: 0
         predictionsOnNext = stats?.get("predictions_on_next_match")?.jsonPrimitive?.intOrNull

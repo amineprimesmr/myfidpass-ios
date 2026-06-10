@@ -25,8 +25,9 @@ data class MyCardDraftState(
     var stampRewardLabel: String = "",
     var stampMidRewardLabel: String = "",
     var startGameRewardLabel: String = "",
-    var tierPoints: List<String> = List(5) { "" },
-    var tierLabels: List<String> = List(5) { "" },
+    var tierPoints: List<String> = List(MyCardRewardsSync.SLOT_COUNT) { "" },
+    var tierLabels: List<String> = List(MyCardRewardsSync.SLOT_COUNT) { "" },
+    var tierMinPurchases: List<String> = List(MyCardRewardsSync.SLOT_COUNT) { "" },
     var labelMember: String = "",
     var labelRestants: String = "",
     var backTerms: String = "",
@@ -107,6 +108,7 @@ data class MyCardDraftState(
         }
         tierLabels = split.tierLabels
         tierPoints = split.tierPoints
+        tierMinPurchases = split.tierMinPurchases
         if (!isStampsMode) {
             val pts = tierPoints.toMutableList()
             val labs = tierLabels.toMutableList()
@@ -190,6 +192,7 @@ data class MyCardDraftState(
             startLabel,
             n.tierPoints,
             n.tierLabels,
+            n.tierMinPurchases,
         )
         if (tiers.isNotEmpty()) put("points_reward_tiers", tiers)
         }
@@ -210,6 +213,7 @@ data class MyCardDraftState(
             startLabel,
             n.tierPoints,
             n.tierLabels,
+            n.tierMinPurchases,
         )
         if (n.programType == "points") {
             if (tiers.isNotEmpty()) put("points_reward_tiers", tiers)

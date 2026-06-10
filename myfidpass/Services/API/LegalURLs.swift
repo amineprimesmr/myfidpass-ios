@@ -36,15 +36,22 @@ enum LegalURLs {
     /// Connexion au tableau de bord web (gestion abonnement, facturation).
     static let dashboardLogin = URL(string: "https://www.myfidpass.fr")!
 
-    /// Page web d’abonnement (essai → paiement Stripe). Même origine que la redirection canonique Vercel (www).
-    static let merchantSubscriptionCheckout = URL(string: "https://www.myfidpass.fr/abonnement")!
+    /// Page web d’abonnement (checkout intégré Stripe).
+    static let merchantSubscriptionCheckout = URL(string: "https://www.myfidpass.fr/paiement")!
 
-    /// Payment Link Stripe (1er mois 1 €, code MYFID1EURO) — ouverture externe / fallback.
-    static func merchantSaasProPaymentPage(prefilledEmail: String? = nil) -> URL {
-        merchantStripeSubscriptionPaymentLinkWithPromo(prefilledEmail: prefilledEmail)
+    /// Checkout intégré myfidpass.fr — 1 € 1er mois via coupon Stripe côté API (sans code promo prérempli).
+    static func merchantSaasProPaymentPage(
+        prefilledEmail: String? = nil,
+        commerceSlots: Int = 1
+    ) -> URL {
+        merchantEmbeddedSaasPaymentPage(
+            prefilledEmail: prefilledEmail,
+            planAnnual: false,
+            commerceSlots: commerceSlots
+        )
     }
 
-    /// Checkout intégré myfidpass.fr (`app_embed=1`) — 1 € 1er mois via coupons Stripe (tous comptes, hors limite Apple).
+    /// Checkout intégré myfidpass.fr (`app_embed=1`) — 1 € 1er mois via coupons Stripe (tous paliers).
     static func merchantEmbeddedSaasPaymentPage(
         prefilledEmail: String? = nil,
         planAnnual: Bool = false,
@@ -65,19 +72,17 @@ enum LegalURLs {
         return components.url ?? URL(string: "https://www.myfidpass.fr/paiement?app_embed=1")!
     }
 
-    /// Payment Link abonnement (fallback) — code **MYFID1EURO** aligné 1er mois à 1 € sur le mensuel.
-    static func merchantStripeSubscriptionPaymentLinkWithPromo(prefilledEmail: String?) -> URL {
+    /// Payment Link Stripe legacy (sans code promo prérempli — préférer `merchantEmbeddedSaasPaymentPage`).
+    static func merchantStripeSubscriptionPaymentLink(prefilledEmail: String?) -> URL {
         var components = URLComponents(string: "https://buy.stripe.com/7sYcN53Z72N88et4Cr8Zq01")!
-        var items: [URLQueryItem] = [
-            URLQueryItem(name: "prefilled_promo_code", value: "MYFID1EURO"),
-        ]
+        var items: [URLQueryItem] = []
         let e = prefilledEmail?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !e.isEmpty {
             items.append(URLQueryItem(name: "prefilled_email", value: e))
         }
-        components.queryItems = items
+        if !items.isEmpty { components.queryItems = items }
         return components.url
-            ?? URL(string: "https://buy.stripe.com/7sYcN53Z72N88et4Cr8Zq01?prefilled_promo_code=MYFID1EURO")!
+            ?? URL(string: "https://buy.stripe.com/7sYcN53Z72N88et4Cr8Zq01")!
     }
 
     /// Espace web : ouvre le paiement Stripe du pack créations flyer (connecté, 1er commerce).

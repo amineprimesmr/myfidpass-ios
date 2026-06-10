@@ -12,6 +12,7 @@ struct MembersListView: View {
     @EnvironmentObject private var syncService: SyncService
     @StateObject private var dataService: DataService
     @State private var searchText = ""
+    @State private var memberDetailSheetItem: MemberDetailSheetItem?
     @State private var showDeleteAllConfirm = false
     @State private var isDeletingAll = false
     @State private var deleteAllError: String?
@@ -46,17 +47,24 @@ struct MembersListView: View {
             } else {
                 List {
                     ForEach(filteredMembers, id: \.objectID) { card in
-                        NavigationLink {
-                            MemberDetailView(card: card, context: context)
-                                .environmentObject(syncService)
-                                .environmentObject(dataService)
+                        Button {
+                            memberDetailSheetItem = MemberDetailSheetItem(objectID: card.objectID)
                         } label: {
                             MemberListRow(card: card)
                         }
+                        .buttonStyle(.plain)
                     }
                 }
                 .listStyle(.insetGrouped)
                 .searchable(text: $searchText, prompt: "Nom, email ou identifiant…")
+            }
+        }
+        .sheet(item: $memberDetailSheetItem) { item in
+            if let card = context.object(with: item.objectID) as? ClientCard {
+                MemberDetailView(card: card, context: context)
+                    .environmentObject(syncService)
+                    .environmentObject(dataService)
+                    .memberDetailSheetChrome()
             }
         }
         .navigationTitle("Membres")

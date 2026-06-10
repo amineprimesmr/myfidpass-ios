@@ -65,9 +65,10 @@ fun AppRoot(
     val lifecycleOwner = LocalLifecycleOwner.current
 
     var appUpdateInfo by remember { mutableStateOf<PlayStoreVersionChecker.UpdateInfo?>(null) }
+    var didColdLaunchUpdateCheck by remember { mutableStateOf(false) }
 
-    suspend fun checkAppStoreUpdate() {
-        appUpdateInfo = PlayStoreVersionChecker.check(context)
+    suspend fun checkAppStoreUpdate(ignoreThrottle: Boolean = false) {
+        appUpdateInfo = PlayStoreVersionChecker.check(context, ignoreThrottle = ignoreThrottle)
     }
     var notificationPermissionRequested by remember { mutableStateOf(false) }
     var showPaymentThankYou by remember { mutableStateOf(false) }
@@ -132,7 +133,11 @@ fun AppRoot(
 
     LaunchedEffect(rootVm.state) {
         if (rootVm.state is RootUiState.Main || rootVm.state is RootUiState.AuthLanding) {
-            checkAppStoreUpdate()
+            if (!didColdLaunchUpdateCheck) {
+                kotlinx.coroutines.delay(900)
+                checkAppStoreUpdate(ignoreThrottle = true)
+                didColdLaunchUpdateCheck = true
+            }
         }
         if (rootVm.state is RootUiState.Main) {
             presentPendingSubscriptionThankYouIfNeeded()
@@ -142,9 +147,10 @@ fun AppRoot(
     androidx.compose.runtime.DisposableEffect(lifecycleOwner, rootVm.state) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME &&
+                didColdLaunchUpdateCheck &&
                 (rootVm.state is RootUiState.Main || rootVm.state is RootUiState.AuthLanding)
             ) {
-                scope.launch { checkAppStoreUpdate() }
+                scope.launch { checkAppStoreUpdate(ignoreThrottle = false) }
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)

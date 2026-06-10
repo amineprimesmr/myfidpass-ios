@@ -44,6 +44,7 @@ final class AuthService: NSObject, ObservableObject {
     @Published private(set) var businesses: [BusinessDTO] = []
     /// Tous les commerces plateforme (`GET /api/admin/businesses`) — alimente le sélecteur en haut à droite pour l’admin.
     @Published private(set) var platformAdminBusinesses: [BusinessDTO] = []
+    @Published private(set) var platformAdminBusinessRows: [AdminBusinessRow] = []
     /// Incrémenté après suppression de compte pour que `myfidpassApp` réaffiche l’onboarding premier lancement.
     @Published private(set) var firstLaunchOnboardingRestartEpoch: Int = 0
     /// `true` après au moins un `GET /api/auth/me` (ou login avec champs abonnement) post-restauration session.
@@ -62,6 +63,8 @@ final class AuthService: NSObject, ObservableObject {
     @Published private(set) var isPlatformAdmin = false
     /// `false` = interface **Administration** (liste plateforme) ; `true` = interface commerçant classique (pilotage d’un commerce).
     @Published var adminShowsMerchantWorkspace = false
+    /// Admin en train de créer un compte commerçant via le parcours onboarding standard (session admin conservée).
+    @Published private(set) var isAdminProvisioningMerchant = false
     /// Rôle dans le commerce actif (`user.workspace_role` sur login / `GET /me`). Défaut `owner` si absent.
     @Published private(set) var merchantWorkspaceRole: MerchantWorkspaceRole = .owner
     /// Verrou global UI pendant un switch multi-commerce (évite les états visuels mélangés).
@@ -110,7 +113,7 @@ final class AuthService: NSObject, ObservableObject {
 
     /// Paiement réel (Stripe / App Store) ou bench scan (plafonds 102 / 102 enregistrés).
     var hasEncashedMerchantSubscription: Bool {
-        if isPlatformAdmin { return false }
+        if isPlatformAdmin, !adminShowsMerchantWorkspace { return false }
         if merchantScanBenchAccessActive { return true }
         if serverReportsPaidMerchantSubscription { return true }
         let s = merchantSubscription?.status?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
@@ -204,7 +207,9 @@ final class AuthService: NSObject, ObservableObject {
             }
             syncAccountDisplayLineForSession()
             isPlatformAdmin = AuthStorage.isPlatformAdminFlag
+            AuthStorage.adminPilotMerchantWorkspace = false
             merchantScanBenchAccessActive = MerchantInternalBenchAccess.isActive
+            applyBenchFullEntitlementsIfActive()
             Task { await bootstrapAuthenticatedSessionIfNeeded(force: true) }
         } else {
             currentScreen = .welcome
@@ -363,7 +368,7 @@ final class AuthService: NSObject, ObservableObject {
     }
 
     /// Applique le résultat de `POST /api/payment/apple/sync-transaction` (cache UI court — la vérité reste `GET /me`).
-    func applyAppleSubscriptionSync(_ response: PaymentAppleSyncResponse) {
+    func applyAppleSubscriptionSync(_ response: PaymentAppleSyncResponse, purchasedSlots: Int? = nil) {
         guard Self.appleSyncResponseGrantsPaidAccess(response) else { return }
         let status = response.subscriptionStatus?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
         let effectiveStatus = (status == "active" || status == "trialing" || status == "past_due") ? status : "active"
@@ -374,7 +379,27 @@ final class AuthService: NSObject, ObservableObject {
         entitlementBillingProvider = "apple"
         hasActiveMerchantSubscription = true
         serverReportsPaidMerchantSubscription = true
+        if let ent = response.entitlements {
+            applyMerchantEntitlements(ent)
+        } else if let allowed = response.allowedBusinesses {
+            applyPostPurchaseQuotaUnlock(minimumSlots: allowed)
+        } else if let slots = purchasedSlots {
+            applyPostPurchaseQuotaUnlock(minimumSlots: slots)
+        }
         applySubscriptionGateState(active: true, markResolved: true)
+        persistMerchantSubscriptionForLocalNotifications()
+    }
+
+    /// Après achat / upgrade multi-commerce : évite le paywall en boucle si `GET /me` est en retard.
+    func applyPostPurchaseQuotaUnlock(minimumSlots: Int) {
+        guard !bypassesMerchantSubscriptionGate else { return }
+        let slots = min(5, max(1, minimumSlots))
+        let used = max(usedBusinesses, businesses.count, 0)
+        let allowed = max(allowedBusinesses, slots)
+        allowedBusinesses = allowed
+        usedBusinesses = used
+        canCreateBusiness = used < allowed
+        persistMerchantSubscriptionForLocalNotifications()
     }
 
     private func applyMerchantBillingFromAPI(
@@ -414,7 +439,20 @@ final class AuthService: NSObject, ObservableObject {
     /// Aligné `MerchantInternalBenchAccess` après chargement / enregistrement des plafonds scan.
     func reconcileScanSecurityBenchAccess(passes: Int, points: Int) {
         merchantScanBenchAccessActive = MerchantInternalBenchAccess.sync(passes: passes, points: points)
+        applyBenchFullEntitlementsIfActive()
         persistMerchantSubscriptionForLocalNotifications()
+    }
+
+    /// Mode bench 102 / 102 : forfait max (5 commerces) + création autorisée (ne pas écraser après GET /me).
+    func applyBenchFullEntitlementsIfActive() {
+        guard merchantScanBenchAccessActive else { return }
+        guard !bypassesMerchantSubscriptionGate else { return }
+        let maxSlots = MerchantInternalBenchAccess.benchMaxAllowedBusinesses
+        let used = max(usedBusinesses, businesses.count, 0)
+        allowedBusinesses = maxSlots
+        usedBusinesses = used
+        canCreateBusiness = used < maxSlots
+        entitlementBillingProvider = "bench"
     }
 
     /// Aligné backend : `has_paid_merchant_subscription`.
@@ -543,6 +581,7 @@ final class AuthService: NSObject, ObservableObject {
         canCreateBusiness = ent?.canCreateBusiness ?? (used < allowed)
         let provider = ent?.billingProvider?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         entitlementBillingProvider = provider.isEmpty ? nil : provider
+        applyBenchFullEntitlementsIfActive()
     }
 
     private func applyWorkspaceRole(from user: AuthUser) {
@@ -634,6 +673,7 @@ final class AuthService: NSObject, ObservableObject {
         applyPlatformAdminFromAuthUser(response.user)
         if isPlatformAdmin {
             adminShowsMerchantWorkspace = false
+            AuthStorage.adminPilotMerchantWorkspace = false
         }
         applyWorkspaceRole(from: response.user)
         alignMerchantRoleWithPersistedStaffSession()
@@ -657,6 +697,11 @@ final class AuthService: NSObject, ObservableObject {
         }
         ScanFlowSettingsCache.clearAll()
         AuthStorage.currentBusinessSlug = trimmed
+        NotificationCenter.default.post(
+            name: .myfidpassActiveBusinessDidChange,
+            object: nil,
+            userInfo: ["slug": trimmed]
+        )
     }
 
     /// Si `POST …/create-from-place` renvoie déjà la liste complète, on l’applique tout de suite (tokens + Core Data).
@@ -690,6 +735,25 @@ final class AuthService: NSObject, ObservableObject {
     func finishBusinessSwitch() {
         isBusinessSwitching = false
         businessSwitchTargetSlug = nil
+    }
+
+    /// Existence + méthode de connexion (`email_otp` ou `password` pour admin plateforme).
+    func checkAccountSignInProbe(identifier: String) async throws -> AccountSignInProbeResult {
+        let norm = identifier.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !norm.isEmpty else { throw AuthError.invalidCredentials }
+        do {
+            return try await APIClient.shared.fetchAccountSignInProbe(identifier: norm)
+        } catch let e as APIError {
+            if case .server(let code, let msg) = e, code == 429 {
+                let cleaned = msg?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                throw AuthError.apiMessage(
+                    cleaned.isEmpty ? "Trop de vérifications. Réessayez dans quelques minutes." : cleaned
+                )
+            }
+            throw AuthError.networkError
+        } catch {
+            throw AuthError.networkError
+        }
     }
 
     /// Indique si un compte existe : `check-email` puis `check-identifier` en secours ; lecture JSON souple côté `APIClient` (évite « Erreur réseau » si `Codable` échoue).
@@ -1265,10 +1329,11 @@ final class AuthService: NSObject, ObservableObject {
     /// Ouvre l’interface commerçant pour piloter un commerce (admin plateforme).
     func openMerchantWorkspaceFromAdmin(preferredSlug: String? = nil) async {
         guard isPlatformAdmin else { return }
+        PostCardFlyerPromoEligibility.clearPendingSlugQueuedForMerchantHome()
         if let raw = preferredSlug?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty {
             selectBusiness(slug: raw, showSwitchingOverlay: false)
         }
-        await refreshPlatformAdminBusinesses(force: true)
+        await refreshPlatformAdminBusinesses(force: platformAdminBusinesses.isEmpty)
         AuthStorage.mergeDashboardTokens(from: platformAdminBusinesses)
         let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if slug.isEmpty, let first = platformAdminBusinesses.first {
@@ -1276,6 +1341,7 @@ final class AuthService: NSObject, ObservableObject {
         }
         guard !(AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "").isEmpty else { return }
         adminShowsMerchantWorkspace = true
+        AuthStorage.adminPilotMerchantWorkspace = true
         NotificationCenter.default.post(name: .myfidpassAdminPilotDidStart, object: nil)
     }
 
@@ -1335,25 +1401,71 @@ final class AuthService: NSObject, ObservableObject {
     }
 
     /// `GET /api/admin/businesses` — cache pour le sélecteur « Tous les commerces ».
-    func refreshPlatformAdminBusinesses(force: Bool = false) async {
+    func pruneAdminBusiness(id: String) {
+        let trimmed = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        platformAdminBusinessRows.removeAll { $0.id == trimmed }
+        platformAdminBusinesses = platformAdminBusinessRows.map { $0.asBusinessDTO() }
+    }
+
+    func prependAdminBusiness(_ row: AdminBusinessRow) {
+        let trimmedId = row.id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedId.isEmpty else { return }
+        platformAdminBusinessRows.removeAll { $0.id == trimmedId }
+        platformAdminBusinessRows.insert(row, at: 0)
+        platformAdminBusinesses = platformAdminBusinessRows.map { $0.asBusinessDTO() }
+        AuthStorage.mergeDashboardTokens(from: platformAdminBusinesses)
+    }
+
+    /// Prépare un parcours inscription commerçant identique au premier lancement (établissement → e-mail → OTP).
+    func beginAdminMerchantProvisioning() {
+        guard isPlatformAdmin else { return }
+        isAdminProvisioningMerchant = true
+        FirstLaunchOnboarding.clearPendingEstablishmentFromOnboarding()
+        FirstLaunchOnboarding.clearSignupEmail()
+        MerchantLinkedPlaceCache.clear()
+    }
+
+    func cancelAdminMerchantProvisioning() {
+        isAdminProvisioningMerchant = false
+        FirstLaunchOnboarding.clearPendingEstablishmentFromOnboarding()
+        FirstLaunchOnboarding.clearSignupEmail()
+        MerchantLinkedPlaceCache.clear()
+    }
+
+    /// Compte commerçant créé côté API : on garde la session admin et on rafraîchit la liste plateforme.
+    func completeAdminMerchantProvisioning(merchantEmail: String?) async {
+        isAdminProvisioningMerchant = false
+        FirstLaunchOnboarding.clearPendingEstablishmentFromOnboarding()
+        FirstLaunchOnboarding.clearSignupEmail()
+        MerchantLinkedPlaceCache.clear()
+        await refreshPlatformAdminBusinesses(force: true)
+        _ = merchantEmail
+    }
+
+    @discardableResult
+    func refreshPlatformAdminBusinesses(force: Bool = false) async -> Bool {
         guard isPlatformAdmin else {
             platformAdminBusinesses = []
-            return
+            platformAdminBusinessRows = []
+            return false
         }
-        if !force, !platformAdminBusinesses.isEmpty { return }
+        if !force, !platformAdminBusinesses.isEmpty { return true }
         do {
             let response: AdminBusinessesListResponse = try await APIClient.shared.request(
                 .adminBusinesses(q: nil, limit: 500, offset: 0)
             )
+            platformAdminBusinessRows = response.businesses
             platformAdminBusinesses = response.businesses.map { $0.asBusinessDTO() }
             AuthStorage.mergeDashboardTokens(from: platformAdminBusinesses)
-            guard adminShowsMerchantWorkspace else { return }
+            guard adminShowsMerchantWorkspace else { return true }
             let active = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             if active.isEmpty, let first = platformAdminBusinesses.first {
                 selectBusiness(slug: first.slug, showSwitchingOverlay: false)
             }
+            return true
         } catch {
-            // Conserve la liste précédente si le GET échoue (réseau).
+            return !platformAdminBusinessRows.isEmpty
         }
     }
 
@@ -1391,13 +1503,17 @@ final class AuthService: NSObject, ObservableObject {
         AuthStorage.isPlatformAdminFlag = admin
         if !admin {
             adminShowsMerchantWorkspace = false
+            AuthStorage.adminPilotMerchantWorkspace = false
             platformAdminBusinesses = []
+            platformAdminBusinessRows = []
         }
     }
 
     func returnToPlatformAdministrationHub() {
         guard isPlatformAdmin else { return }
         adminShowsMerchantWorkspace = false
+        AuthStorage.adminPilotMerchantWorkspace = false
+        PostCardFlyerPromoEligibility.clearPendingSlugQueuedForMerchantHome()
     }
 
     func logout() {
@@ -1415,7 +1531,8 @@ final class AuthService: NSObject, ObservableObject {
         // Mémoire + accusés checklist : sinon un **même slug** après nouveau compte réaffiche l’ancien flyer / étapes cochées.
         CommerceFlyerStore.shared.clearAll()
         MerchantSetupProgressCalculator.clearAllFlyerDisplayedAcknowledgementsFromUserDefaults()
-        // L’historique local d’envois de campagnes (`NotificationSendLocalHistoryStore`) est conservé au logout simple ; `deleteAccount()` le vide avant cette étape.
+        NotificationSendLocalHistoryStore.clearForAllSlugs()
+        NotificationStatsEndpointCache.clearAll()
         // Vider le cache CoreData (+ caches UI activité accueil via `.myfidpassLocalSessionDidEnd`).
         DataService.clearAllLocalData(context: PersistenceController.shared.container.viewContext)
         // Effacer l'établissement pour forcer la re-sélection au prochain lancement (WelcomeFlow)
@@ -1438,7 +1555,9 @@ final class AuthService: NSObject, ObservableObject {
         isPlatformAdmin = false
         adminShowsMerchantWorkspace = false
         platformAdminBusinesses = []
+        platformAdminBusinessRows = []
         AuthStorage.isPlatformAdminFlag = false
+        AuthStorage.adminPilotMerchantWorkspace = false
         merchantWorkspaceRole = .owner
         isCompletingSignupCardSetup = false
         isCompletingSignupPaywallPhase = false

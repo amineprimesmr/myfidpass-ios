@@ -38,10 +38,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.TextButton
 import fr.myfidpass.data.dto.BusinessSettingsResponse
-import fr.myfidpass.data.dto.PointsRewardTierDto
 import fr.myfidpass.data.dto.ScanRequest
 import fr.myfidpass.data.dto.isApiTrue
 import fr.myfidpass.data.repo.DashboardRepository
@@ -86,10 +83,7 @@ fun AddPointsAfterScanScreen(
     val scope = rememberCoroutineScope()
     var loading by remember { mutableStateOf(false) }
     var receiptSession by remember { mutableStateOf<ReceiptTicketScanSession?>(null) }
-    var pendingRedeemTier by remember { mutableStateOf<PointsRewardTierDto?>(null) }
-    var confirmRedeemTier by remember { mutableStateOf<PointsRewardTierDto?>(null) }
     val memberPoints = args.memberPoints ?: 0
-    val rewardTiers = settings?.pointsRewardTiers.orEmpty().filter { it.points > 0 }
     val pointsPerVisit = settings?.pointsPerVisit ?: 0
     val requiredStamps = settings?.requiredStamps ?: 10
     var amountDigits by remember { mutableStateOf("") }
@@ -215,84 +209,10 @@ fun AddPointsAfterScanScreen(
         }
     }
 
-    suspend fun redeemTierConfirmed(tier: PointsRewardTierDto, receiptToken: String? = null) {
-        val slug = repository.currentSlug() ?: return
-        val before = memberPoints
-        val ppe = maxOf(1, settings?.pointsPerEuro ?: 1)
-        var earned = 0
-        if (euros > 0) {
-            if (euros < minEur - 1e-9) {
-                snackbar.showSnackbar("Montant sous le minimum défini.")
-                return
-            }
-            earned = (euros * ppe).roundToInt()
-        }
-        val after = before + earned
-        loading = true
-        runCatching {
-            if (before >= tier.points) {
-                repository.redeemPoints(slug, args.barcode, tier.points)
-            } else if (earned > 0 && after >= tier.points) {
-                repository.scan(
-                    slug,
-                    ScanRequest(
-                        barcode = args.barcode,
-                        amountEur = euros,
-                        points = if (computedPoints > 0) computedPoints else null,
-                        receiptValidationToken = receiptToken,
-                    ),
-                )
-                val credited = repository.memberPublic(slug, args.barcode).points ?: after
-                if (credited < tier.points) error("Solde insuffisant après crédit")
-                repository.redeemPoints(slug, args.barcode, tier.points)
-            } else {
-                error("Créditez d'abord ${tier.points} pts pour « ${tier.label ?: "récompense"} ».")
-            }
-        }.onSuccess {
-            snackbar.showSnackbar("Récompense offerte : ${tier.label ?: tier.points.toString() + " pts"}")
-            onDone()
-        }.onFailure {
-            snackbar.showSnackbar(it.message ?: "Erreur")
-        }
-        loading = false
-    }
-
     fun finishCreditWithReceipt(token: String?) {
         receiptSession = null
-        if (token == null) {
-            pendingRedeemTier = null
-            return
-        }
-        val tier = pendingRedeemTier
-        if (tier != null) {
-            pendingRedeemTier = null
-            scope.launch { redeemTierConfirmed(tier, token) }
-        } else {
+        if (token != null) {
             performScan(token)
-        }
-    }
-
-    fun startRedeemTier(tier: PointsRewardTierDto) {
-        confirmRedeemTier = null
-        val needsReceipt = settings?.requireReceiptQrValidation.isApiTrue() && euros > 0 &&
-            memberPoints + computedPoints < tier.points
-        if (needsReceipt) {
-            val slug = repository.currentSlug() ?: return
-            scope.launch {
-                loading = true
-                runCatching {
-                    val ch = repository.receiptChallenge(slug, euros)
-                    val payload = ch.qrPayload.trim()
-                    if (payload.isEmpty()) error("Challenge ticket indisponible")
-                    pendingRedeemTier = tier
-                    receiptSession = ReceiptTicketScanSession(slug, euros, payload, ch.expiresAt)
-                }.onFailure {
-                    snackbar.showSnackbar(it.message ?: "Erreur ticket")
-                }
-                loading = false
-            }
-        } else {
-            scope.launch { redeemTierConfirmed(tier, null) }
         }
     }
 
@@ -338,11 +258,6 @@ fun AddPointsAfterScanScreen(
                 args.memberName.ifBlank { "Client" },
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold,
-            )
-            Text(
-                "Solde actuel : ${args.memberPoints ?: "—"} pts",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.height(16.dp))
 
@@ -422,23 +337,6 @@ fun AddPointsAfterScanScreen(
                             onConfirmed = { creditVisit() },
                         )
                     }
-                    if (rewardTiers.isNotEmpty()) {
-                        Spacer(Modifier.height(16.dp))
-                        Text("Utiliser une récompense", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                        Spacer(Modifier.height(8.dp))
-                        rewardTiers.forEach { tier ->
-                            val enabled = memberPoints >= tier.points || (computedPoints > 0 && memberPoints + computedPoints >= tier.points)
-                            OutlinedButton(
-                                onClick = { confirmRedeemTier = tier },
-                                enabled = !loading && enabled,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(bottom = 6.dp),
-                            ) {
-                                Text("${tier.label ?: "${tier.points} pts"} (${tier.points} pts)")
-                            }
-                        }
-                    }
                 }
                 else -> {
                     Text(
@@ -450,20 +348,6 @@ fun AddPointsAfterScanScreen(
                         Text("Voir la fiche membre")
                     }
                 }
-            }
-
-            confirmRedeemTier?.let { tier ->
-                AlertDialog(
-                    onDismissRequest = { confirmRedeemTier = null },
-                    title = { Text("Offrir la récompense ?") },
-                    text = { Text("${tier.label ?: "${tier.points} points"} — ${tier.points} pts seront débités.") },
-                    confirmButton = {
-                        TextButton(onClick = { startRedeemTier(tier) }) { Text("Confirmer") }
-                    },
-                    dismissButton = {
-                        TextButton(onClick = { confirmRedeemTier = null }) { Text("Annuler") }
-                    },
-                )
             }
 
             Spacer(Modifier.height(12.dp))

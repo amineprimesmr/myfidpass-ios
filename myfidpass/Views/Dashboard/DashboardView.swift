@@ -13,8 +13,6 @@ import UIKit
 enum DashboardRoute: Hashable {
     /// Hub unifié membres + activité (filtre initial selon l’entrée tableau de bord).
     case membersActivity(MemberActivityFilter)
-    /// Fiche membre depuis une ligne d’activité (dernières transactions).
-    case memberDetail(NSManagedObjectID)
 }
 
 private enum HomeMyCardZoom {
@@ -230,12 +228,14 @@ struct DashboardView: View {
     @Environment(\.merchantWorkspaceMode) private var merchantWorkspaceMode
     @Environment(\.scenePhase) private var scenePhase
     @EnvironmentObject private var dataService: DataService
+    @EnvironmentObject private var memberSearchCoordinator: MerchantMemberSearchCoordinator
 
     @State private var showScanner: Bool = false
     @State private var showToast: Bool = false
     @State private var successToast: Toast = .example1
     @State private var scanError: String?
     @State private var navigationPath = NavigationPath()
+    @State private var memberDetailSheetItem: MemberDetailSheetItem?
     @Namespace private var homeMyCardZoomNamespace
     @State private var showMyCardFullScreen = false
     @State private var showHomeFlyerHubFullScreen = false
@@ -277,10 +277,45 @@ struct DashboardView: View {
     @State private var showHomeMatchPredictionsSheet = false
     /// Évite de marquer « fermé pour la session » quand on ouvre l’éditeur flyer depuis le CTA.
     @State private var skipFlyerPromoSuppressOnDismiss = false
+    private static let activityTransactionsPageSize = 8
+    @State private var activityDisplayLimit = 8
+    @State private var loadingMoreActivity = false
     private var palette: DashboardRevolutPalette { DashboardRevolutPalette(colorScheme: colorScheme) }
 
     private var activityPreview: [DashboardActivityEntry] {
-        dataService.dashboardActivityPreview(limit: 8, includeNewCardEvents: false)
+        let _ = dataService.updateTrigger
+        return dataService.dashboardActivityFeed(limit: activityDisplayLimit, includeNewCardEvents: false)
+    }
+
+    private var activityHasMore: Bool {
+        let _ = dataService.updateTrigger
+        return dataService.dashboardActivityFeed(
+            limit: activityDisplayLimit + 1,
+            includeNewCardEvents: false
+        ).count > activityDisplayLimit
+    }
+
+    private func resetActivityDisplayLimit() {
+        activityDisplayLimit = Self.activityTransactionsPageSize
+        loadingMoreActivity = false
+    }
+
+    private func loadMoreActivityTransactions() {
+        guard !loadingMoreActivity, activityHasMore else { return }
+        loadingMoreActivity = true
+        withAnimation(.spring(response: 0.38, dampingFraction: 0.86)) {
+            activityDisplayLimit += Self.activityTransactionsPageSize
+        }
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            loadingMoreActivity = false
+        }
+    }
+
+    private func presentMerchantToast(_ toast: Toast, feedback: MerchantUXFeedback.Kind = .scan) {
+        MerchantUXFeedback.shared.play(feedback)
+        successToast = toast
+        showToast = true
     }
 
     /// Relance le polling accueil quand onglet actif, retour à la racine navigation, ou retour premier plan.
@@ -336,6 +371,13 @@ struct DashboardView: View {
         return (raw ?? "points").lowercased() == "points"
     }
 
+    private var homePointsPerEuro: Int? {
+        let slug = AuthStorage.currentBusinessSlug ?? ""
+        guard !slug.isEmpty else { return nil }
+        let ppe = ScanFlowSettingsCache.cached(for: slug)?.pointsPerEuro ?? 0
+        return ppe > 0 ? ppe : nil
+    }
+
     /// Contenu principal de l’accueil (ZStack + modificateurs navigation / scan).
     @ViewBuilder
     private var dashboardHomeRoot: some View {
@@ -351,11 +393,12 @@ struct DashboardView: View {
                         hasNotificationIcon: homeHasNotificationIconConfigured,
                         businesses: authService.businessesForMerchantSwitcher,
                         activeBusinessSlug: AuthStorage.currentBusinessSlug,
-                        canCreateBusiness: authService.isPlatformAdmin ? false : authService.canCreateBusiness,
-                        isPlatformAdminAllCommercesMode: authService.isPlatformAdmin,
-                        onOpenAdministration: authService.isPlatformAdmin ? { authService.returnToPlatformAdministrationHub() } : nil,
+                        canCreateBusiness: authService.isPlatformAdmin && !authService.adminShowsMerchantWorkspace
+                            ? false
+                            : authService.canCreateBusiness,
+                        isPlatformAdminAllCommercesMode: authService.isPlatformAdmin && !authService.adminShowsMerchantWorkspace,
                         onBusinessSwitcherWillOpen: authService.isPlatformAdmin ? {
-                            Task { await authService.refreshPlatformAdminBusinesses(force: true) }
+                            Task { await authService.refreshPlatformAdminBusinesses(force: false) }
                         } : nil,
                         onOpenSideMenu: {
                             openHomeSidebar(animated: true)
@@ -369,19 +412,37 @@ struct DashboardView: View {
                             refreshHomeFlyerAvailability()
                             Task {
                                 defer { authService.finishBusinessSwitch() }
-                                await syncService.syncIfNeeded(force: true)
+                                if authService.isPlatformAdmin, authService.adminShowsMerchantWorkspace {
+                                    await syncService.syncPilotEntry(force: true)
+                                } else {
+                                    await syncService.syncIfNeeded(force: true)
+                                }
                                 await refreshHomeNotificationIconStatusIfNeeded(force: true)
                             }
                         },
                         onAddCommerce: {
-                            NotificationCenter.default.post(name: .myfidpassOpenAddCommerceSheet, object: nil)
+                            Task { @MainActor in
+                                await authService.refreshMerchantBillingStateFromServer(force: true)
+                                if authService.canCreateBusiness {
+                                    NotificationCenter.default.post(name: .myfidpassOpenAddCommerceSheet, object: nil)
+                                } else {
+                                    NotificationCenter.default.postOpenMerchantSubscription(
+                                        usedBusinesses: authService.usedBusinesses,
+                                        allowedBusinesses: authService.allowedBusinesses,
+                                        addingAnotherCommerce: true
+                                    )
+                                }
+                            }
                         },
                         onUpgradeCommerceQuota: {
-                            NotificationCenter.default.postOpenMerchantSubscription(
-                                usedBusinesses: authService.usedBusinesses,
-                                allowedBusinesses: authService.allowedBusinesses,
-                                addingAnotherCommerce: true
-                            )
+                            Task { @MainActor in
+                                await authService.refreshMerchantBillingStateFromServer(force: true)
+                                NotificationCenter.default.postOpenMerchantSubscription(
+                                    usedBusinesses: authService.usedBusinesses,
+                                    allowedBusinesses: authService.allowedBusinesses,
+                                    addingAnotherCommerce: true
+                                )
+                            }
                         }
                     )
                 }
@@ -390,14 +451,24 @@ struct DashboardView: View {
                 ZStack(alignment: .top) {
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 10) {
-                            employeeOrOwnerHomeContent
+                            if memberSearchCoordinator.isActive {
+                                MerchantMemberSearchInlineSection { oid in
+                                    memberDetailSheetItem = MemberDetailSheetItem(objectID: oid)
+                                }
+                                .padding(.top, 8)
+                            } else {
+                                employeeOrOwnerHomeContent
+                            }
                         }
                         .padding(.horizontal, DashboardHomeLayoutMetrics.scrollHorizontalPadding)
                         .padding(.top, 0)
                         .padding(.bottom, 100)
+                        .animation(MerchantMotion.searchBarMorph, value: memberSearchCoordinator.isActive)
                     }
                     .scrollIndicators(.hidden)
+                    .scrollDismissesKeyboard(.interactively)
                     .refreshable {
+                        guard !memberSearchCoordinator.isActive else { return }
                         await syncService.syncIfNeeded(force: true)
                     }
 
@@ -412,18 +483,14 @@ struct DashboardView: View {
             case .membersActivity(let initialFilter):
                 DashboardActivityFullView(context: viewContext, initialFilter: initialFilter)
                     .environmentObject(syncService)
-            case .memberDetail(let oid):
-                if let card = viewContext.object(with: oid) as? ClientCard {
-                    MemberDetailView(card: card, context: viewContext)
-                        .environmentObject(syncService)
-                        .environmentObject(dataService)
-                } else {
-                    ContentUnavailableView(
-                        "Membre introuvable",
-                        systemImage: "person.crop.circle.badge.questionmark",
-                        description: Text("Cette fiche n’est plus disponible.")
-                    )
-                }
+            }
+        }
+        .sheet(item: $memberDetailSheetItem) { item in
+            if let card = viewContext.object(with: item.objectID) as? ClientCard {
+                MemberDetailView(card: card, context: viewContext)
+                    .environmentObject(syncService)
+                    .environmentObject(dataService)
+                    .memberDetailSheetChrome()
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .myfidpassOpenHomeScanner)) { _ in
@@ -455,11 +522,14 @@ struct DashboardView: View {
 
     /// Sync différée après scan / tampon (évite N sync complètes en rafale).
     private func scheduleDebouncedPostScanSync() {
+        if let slug = currentBusinessSlug {
+            AuthStorage.clearProgramModeSwitchExpectEmptyHistory(slug: slug)
+        }
         postScanSyncDebounceTask?.cancel()
         postScanSyncDebounceTask = Task { @MainActor in
-            try? await Task.sleep(for: .seconds(2.5))
+            try? await Task.sleep(for: .milliseconds(800))
             guard !Task.isCancelled else { return }
-            await syncService.syncIfNeeded(force: true)
+            await syncService.syncAfterServerMutation()
         }
     }
 
@@ -478,7 +548,10 @@ struct DashboardView: View {
                 hasNotificationIcon: homeHasNotificationIconConfigured,
                 onOpenFlyer: openFlyerHubFromHomeSidebar,
                 onOpenFootballGame: openFootballGameFromHomeSidebar,
-                onOpenLiveGame: openTestGameFromHomeSidebar
+                onOpenLiveGame: openTestGameFromHomeSidebar,
+                onOpenAdministration: {
+                    authService.returnToPlatformAdministrationHub()
+                }
             )
             .environmentObject(authService)
         } content: { _ in
@@ -604,6 +677,9 @@ struct DashboardView: View {
 
     private func applyDashboardListenersPhase1<V: View>(to content: V) -> some View {
         content
+            .merchantMemberSearchTabBinding { oid in
+                memberDetailSheetItem = MemberDetailSheetItem(objectID: oid)
+            }
             .onChange(of: navigationPath) { _, _ in
                 syncDashboardAtRootState()
             }
@@ -655,6 +731,27 @@ struct DashboardView: View {
                     CardPreviewDisplaySnapshotStore.reconcileFromSettingsCacheIfNeeded(slug: slug)
                 }
                 cardPreviewDisplayRefresh += 1
+                refreshHomeFlyerAvailability()
+                scheduleMerchantFlyerPromoSheetIfEligible()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .myfidpassFlyerCacheDidHydrateFromSync)) { _ in
+                refreshHomeFlyerAvailability()
+                scheduleMerchantFlyerPromoSheetIfEligible()
+            }
+            .onChange(of: syncService.isSyncing) { _, syncing in
+                if !syncing {
+                    refreshHomeFlyerAvailability()
+                    scheduleMerchantFlyerPromoSheetIfEligible()
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .myfidpassProgramModeDidSwitch)) { _ in
+                dataService.invalidateActivityPreviewCache()
+                resetActivityDisplayLimit()
+                cardPreviewDisplayRefresh += 1
+            }
+            .onChange(of: currentBusinessSlug) { _, _ in
+                showMyCardFullScreen = false
+                resetActivityDisplayLimit()
             }
             .onReceive(NotificationCenter.default.publisher(for: .myfidpassOpenMerchantFlyerHub)) { note in
                 handleOpenMerchantFlyerHubNotification(note)
@@ -792,14 +889,15 @@ struct DashboardView: View {
             isSubmitting: $isStampVisitSubmitting,
             onDismiss: { scanStampSheet = nil },
             onStampVisitSuccess: { response in
-                successToast = Toast.scanStampSuccess(
-                    memberName: response.member?.name ?? data.memberName,
-                    pointsCapped: response.pointsCapped == true,
-                    pointsRequested: response.pointsRequested,
-                    pointsAdded: response.pointsAdded,
-                    stampCycleCompleted: response.stampCycleCompleted == true
+                presentMerchantToast(
+                    Toast.scanStampSuccess(
+                        memberName: response.member?.name ?? data.memberName,
+                        pointsCapped: response.pointsCapped == true,
+                        pointsRequested: response.pointsRequested,
+                        pointsAdded: response.pointsAdded,
+                        stampCycleCompleted: response.stampCycleCompleted == true
+                    )
                 )
-                showToast = true
             },
             onConfirm: {
                 await submitStampVisit(slug: data.slug, barcode: data.barcode)
@@ -840,14 +938,16 @@ struct DashboardView: View {
             let label = response.rewardLabel ?? data.cardModel.stampRewardLabel
             let newP = response.newPoints ?? 0
             await MainActor.run {
-                successToast = Toast(
-                    symbol: "gift.fill",
-                    symbolFont: .system(size: 32, weight: .semibold),
-                    symbolForegroundStyle: (.white, Color(red: 1, green: 0.55, blue: 0.2)),
-                    title: "Récompense validée",
-                    message: "\(memberName) — \(label). Nouveau solde : \(newP) tampon\(newP > 1 ? "s" : "")."
+                presentMerchantToast(
+                    Toast(
+                        symbol: "gift.fill",
+                        symbolFont: .system(size: 32, weight: .semibold),
+                        symbolForegroundStyle: (.white, Color(red: 1, green: 0.55, blue: 0.2)),
+                        title: "Récompense validée",
+                        message: "\(memberName) — \(label). Nouveau solde : \(newP) tampon\(newP > 1 ? "s" : "")."
+                    ),
+                    feedback: .success
                 )
-                showToast = true
             }
             scheduleDebouncedPostScanSync()
             return nil
@@ -859,10 +959,11 @@ struct DashboardView: View {
     @ViewBuilder
     private var dashboardMyCardFullScreen: some View {
         NavigationStack {
-            MyCardView(context: viewContext)
+            MyCardView(context: viewContext, businessSlug: currentBusinessSlug ?? "")
                 .environmentObject(syncService)
         }
         .environment(\.managedObjectContext, viewContext)
+        .id(currentBusinessSlug ?? "no-business")
         .statsDetailZoomTransition(sourceID: HomeMyCardZoom.previewSourceID, namespace: homeMyCardZoomNamespace)
     }
 
@@ -910,7 +1011,6 @@ struct DashboardView: View {
         )
     }
 
-    /// Évite le ternaire `onRedeemTier` dans `body` (échec d’inférence Swift / « Failed to produce diagnostic »).
     @ViewBuilder
     private func scanAddPointsSheet(for data: ScanResultSheetData) -> some View {
         AddPointsAmountSheet(
@@ -926,16 +1026,8 @@ struct DashboardView: View {
             onDismiss: { scanResultSheet = nil },
             onSubmit: { amountEur in
                 await submitScanAmount(slug: data.slug, barcode: data.barcode, amountEur: amountEur)
-            },
-            onRedeemTier: scanRedeemHandler(for: data)
+            }
         )
-    }
-
-    private func scanRedeemHandler(for data: ScanResultSheetData) -> ((ScanRewardTier, Double) async -> Int?)? {
-        guard !data.rewardTiers.isEmpty else { return nil }
-        return { tier, amount in
-            await redeemOrCreditScan(tier: tier, amountEur: amount, data: data)
-        }
     }
 
     // MARK: - Accueil type fintech (carte + transactions)
@@ -1269,6 +1361,7 @@ struct DashboardView: View {
     /// Feuille « Créer le flyer » tant que pas de flyer enregistré : lancement Accueil, retour après arrière-plan, file post « Ma carte ».
     private func scheduleMerchantFlyerPromoSheetIfEligible() {
         guard merchantWorkspaceMode != .staff else { return }
+        if authService.isPlatformAdmin, authService.adminShowsMerchantWorkspace { return }
         guard tabRouter.selectedTab == 0 else { return }
         guard !showMyCardFullScreen else { return }
         guard !showHomeFlyerHubFullScreen else { return }
@@ -1286,7 +1379,10 @@ struct DashboardView: View {
             let activeRaw = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let slug = slugQueued ?? (activeRaw.isEmpty ? nil : activeRaw)
 
-            guard let slug, PostCardFlyerPromoEligibility.shouldOffer(for: slug) else { return }
+            guard let slug else { return }
+            guard !syncService.isSyncing else { return }
+            guard syncService.hasCompletedFlyerHydration(for: slug) else { return }
+            guard PostCardFlyerPromoEligibility.shouldOffer(for: slug) else { return }
 
             merchantHomeFlyerPromoPresentation = MerchantHomeFlyerPromoSheetContext(businessSlug: slug)
         }
@@ -1450,15 +1546,25 @@ struct DashboardView: View {
                 VStack(spacing: 10) {
                     ForEach(activityPreview) { entry in
                         Button {
-                            withAnimation(MerchantMotion.navigationPath) {
-                                navigationPath.append(DashboardRoute.memberDetail(entry.cardObjectID))
-                            }
+                            memberDetailSheetItem = MemberDetailSheetItem(objectID: entry.cardObjectID)
                         } label: {
-                            FintechTransactionRow(entry: entry, palette: palette, isPointsProgram: homeProgramIsPoints)
+                            FintechTransactionRow(
+                                entry: entry,
+                                palette: palette,
+                                isPointsProgram: homeProgramIsPoints,
+                                pointsPerEuro: homePointsPerEuro
+                            )
                         }
                         .buttonStyle(MerchantPressableButtonStyle(scalePressed: 0.98, opacityPressed: 0.94))
                         .accessibilityLabel("\(entry.clientName), \(entry.eventTitle)")
                         .accessibilityHint("Ouvre la fiche membre")
+                    }
+                    if activityHasMore {
+                        FintechLoadMoreTransactionsButton(
+                            palette: palette,
+                            isLoading: loadingMoreActivity,
+                            action: loadMoreActivityTransactions
+                        )
                     }
                 }
             }
@@ -1467,12 +1573,12 @@ struct DashboardView: View {
         .task(id: homeActivityLiveSyncTaskKey) {
             guard merchantTabIsActive, navigationPath.isEmpty, scenePhase == .active else { return }
             guard currentBusinessSlug != nil else { return }
-            await syncService.syncIfNeeded()
+            await syncService.syncAfterServerMutation()
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(Self.homeActivityPollIntervalSeconds))
                 guard !Task.isCancelled else { return }
                 guard merchantTabIsActive, navigationPath.isEmpty, scenePhase == .active else { return }
-                await syncService.syncIfNeeded()
+                await syncService.syncAfterServerMutation()
             }
         }
     }
@@ -1697,7 +1803,7 @@ struct DashboardView: View {
         let barcode = normalizeBarcodeToMemberId(code)
         Task {
             do {
-                async let lookupTask = APIClient.shared.request(.scanLookup(slug: slug, barcode: code)) as ScanLookupResponse
+                async let lookupTask = APIClient.shared.requestWithTransientRetry(.scanLookup(slug: slug, barcode: code)) as ScanLookupResponse
 
                 let settings: BusinessSettingsResponse
                 if let cached = ScanFlowSettingsCache.cached(for: slug) {
@@ -1709,7 +1815,7 @@ struct DashboardView: View {
                         } catch { /* ignore */ }
                     }
                 } else {
-                    settings = try await APIClient.shared.request(.businessSettings(slug: slug)) as BusinessSettingsResponse
+                    settings = try await APIClient.shared.requestWithTransientRetry(.businessSettings(slug: slug)) as BusinessSettingsResponse
                     ScanFlowSettingsCache.store(settings, for: slug)
                 }
 
@@ -1799,19 +1905,20 @@ struct DashboardView: View {
                     }
                 }
 
-                let response: ScanResponse = try await APIClient.shared.request(
+                let response: ScanResponse = try await APIClient.shared.requestWithTransientRetry(
                     .scan(slug: slug, barcode: walletBarcode, visit: true, points: nil, amountEur: nil, receiptValidationToken: nil)
                 )
                 await MainActor.run {
-                    applyScanBalanceLocally(barcode: walletBarcode, response: response)
-                    successToast = Toast.scanStampSuccess(
-                        memberName: response.member?.name ?? memberName,
-                        pointsCapped: response.pointsCapped == true,
-                        pointsRequested: response.pointsRequested,
-                        pointsAdded: response.pointsAdded,
-                        stampCycleCompleted: response.stampCycleCompleted == true
+                    dataService.applyScanFromServerResponse(barcode: walletBarcode, response: response, isVisit: true)
+                    presentMerchantToast(
+                        Toast.scanStampSuccess(
+                            memberName: response.member?.name ?? memberName,
+                            pointsCapped: response.pointsCapped == true,
+                            pointsRequested: response.pointsRequested,
+                            pointsAdded: response.pointsAdded,
+                            stampCycleCompleted: response.stampCycleCompleted == true
+                        )
                     )
-                    showToast = true
                 }
                 scheduleDebouncedPostScanSync()
             } catch let e as APIError where e.isHTTPResourceMissing {
@@ -1829,50 +1936,24 @@ struct DashboardView: View {
 
     @MainActor
     private func presentScanFailure(_ error: Error, fallback: String) {
+        MerchantUXFeedback.shared.play(.error)
         let msg = APIError.merchantFacingMessage(from: error) ?? fallback
         scanError = msg
-        appState.showError(msg)
-    }
-
-    @MainActor
-    private func applyScanBalanceLocally(barcode: String, response: ScanResponse) {
-        guard let template = dataService.currentCardTemplate() else { return }
-        let bc = barcode.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !bc.isEmpty else { return }
-        let card = dataService.clientCard(byQRCodeValue: bc)
-            ?? dataService.findOrCreateClientCard(
-                qrCodeValue: bc,
-                template: template,
-                clientDisplayName: response.member?.name
-            )
-        if let bal = response.newBalance {
-            card.stampsCount = Int32(bal)
-        } else if let p = response.member?.points {
-            card.stampsCount = Int32(p)
-        } else if let added = response.pointsAdded {
-            card.stampsCount += Int32(added)
-        }
-        card.updatedAt = Date()
-        if let name = response.member?.name?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
-            card.clientDisplayName = name
-        }
-        try? viewContext.save()
     }
 
     private func submitStampVisit(slug: String, barcode: String) async -> ScanResponse? {
         isStampVisitSubmitting = true
         defer { Task { @MainActor in isStampVisitSubmitting = false } }
         do {
-            let response: ScanResponse = try await APIClient.shared.request(
+            let response: ScanResponse = try await APIClient.shared.requestWithTransientRetry(
                 .scan(slug: slug, barcode: barcode, visit: true, points: nil, amountEur: nil, receiptValidationToken: nil)
             )
             await MainActor.run {
-                applyScanBalanceLocally(barcode: barcode, response: response)
+                dataService.applyScanFromServerResponse(barcode: barcode, response: response, isVisit: true)
             }
             scheduleDebouncedPostScanSync()
             return response
         } catch {
-            scheduleDebouncedPostScanSync()
             await MainActor.run {
                 presentScanFailure(error, fallback: "Erreur lors de l’enregistrement du tampon.")
             }
@@ -1914,18 +1995,25 @@ struct DashboardView: View {
                 )
             )
             await MainActor.run {
-                successToast = Toast.scanSuccess(
-                    memberName: response.member?.name ?? "Client",
-                    pointsAdded: response.pointsAdded,
-                    pointsCapped: response.pointsCapped == true,
-                    pointsRequested: response.pointsRequested
+                dataService.applyScanFromServerResponse(
+                    barcode: barcode,
+                    response: response,
+                    isVisit: false,
+                    amountEur: amountEur
+                )
+                presentMerchantToast(
+                    Toast.scanSuccess(
+                        memberName: response.member?.name ?? "Client",
+                        pointsAdded: response.pointsAdded,
+                        pointsCapped: response.pointsCapped == true,
+                        pointsRequested: response.pointsRequested
+                    )
                 )
                 var tx = Transaction()
                 tx.disablesAnimations = true
                 withTransaction(tx) {
                     scanResultSheet = nil
                 }
-                showToast = true
             }
             scheduleDebouncedPostScanSync()
             return true
@@ -1945,14 +2033,16 @@ struct DashboardView: View {
             let label = response.rewardLabel ?? data.rewardLabel
             let newP = response.newPoints ?? data.pointsBalance
             await MainActor.run {
-                successToast = Toast(
-                    symbol: "gift.fill",
-                    symbolFont: .system(size: 32, weight: .semibold),
-                    symbolForegroundStyle: (.white, Color(red: 1, green: 0.55, blue: 0.2)),
-                    title: "Récompense validée",
-                    message: "\(data.memberName) — \(label). Nouveau solde : \(newP) pts."
+                presentMerchantToast(
+                    Toast(
+                        symbol: "gift.fill",
+                        symbolFont: .system(size: 32, weight: .semibold),
+                        symbolForegroundStyle: (.white, Color(red: 1, green: 0.55, blue: 0.2)),
+                        title: "Récompense validée",
+                        message: "\(data.memberName) — \(label). Nouveau solde : \(newP) pts."
+                    ),
+                    feedback: .success
                 )
-                showToast = true
             }
             scheduleDebouncedPostScanSync()
             return nil
@@ -1996,14 +2086,16 @@ struct DashboardView: View {
                 let response = try await performRedeem()
                 let newP = response.newPoints ?? max(0, before - tier.points)
                 await MainActor.run {
-                    successToast = Toast(
-                        symbol: "gift.fill",
-                        symbolFont: .system(size: 32, weight: .semibold),
-                        symbolForegroundStyle: (.white, Color(red: 1, green: 0.55, blue: 0.2)),
-                        title: "Récompense offerte",
-                        message: "\(data.memberName) — \(tier.label). Solde : \(newP) pts."
+                    presentMerchantToast(
+                        Toast(
+                            symbol: "gift.fill",
+                            symbolFont: .system(size: 32, weight: .semibold),
+                            symbolForegroundStyle: (.white, Color(red: 1, green: 0.55, blue: 0.2)),
+                            title: "Récompense offerte",
+                            message: "\(data.memberName) — \(tier.label). Solde : \(newP) pts."
+                        ),
+                        feedback: .success
                     )
-                    showToast = true
                 }
                 scheduleDebouncedPostScanSync()
                 return newP
@@ -2051,14 +2143,16 @@ struct DashboardView: View {
                 let redeemResponse = try await performRedeem()
                 let finalP = redeemResponse.newPoints ?? max(0, credited - tier.points)
                 await MainActor.run {
-                    successToast = Toast(
-                        symbol: "gift.fill",
-                        symbolFont: .system(size: 32, weight: .semibold),
-                        symbolForegroundStyle: (.white, Color(red: 1, green: 0.55, blue: 0.2)),
-                        title: "Panier crédité et récompense offerte",
-                        message: "\(data.memberName) — \(tier.label). Solde : \(finalP) pts."
+                    presentMerchantToast(
+                        Toast(
+                            symbol: "gift.fill",
+                            symbolFont: .system(size: 32, weight: .semibold),
+                            symbolForegroundStyle: (.white, Color(red: 1, green: 0.55, blue: 0.2)),
+                            title: "Panier crédité et récompense offerte",
+                            message: "\(data.memberName) — \(tier.label). Solde : \(finalP) pts."
+                        ),
+                        feedback: .success
                     )
-                    showToast = true
                 }
                 scheduleDebouncedPostScanSync()
                 return finalP
@@ -2108,4 +2202,5 @@ private struct RecipientCategoryChip: View {
         .environmentObject(SyncService(container: container))
         .environmentObject(AppState.shared)
         .environmentObject(MainTabRouter())
+        .environmentObject(MerchantMemberSearchCoordinator())
 }

@@ -6,6 +6,7 @@ import fr.myfidpass.data.dto.MemberDto
 import fr.myfidpass.data.dto.TransactionDto
 import fr.myfidpass.data.local.db.MyfidpassDatabase
 import fr.myfidpass.data.local.db.entities.MemberEntity
+import fr.myfidpass.util.MerchantTechnicalMember
 import fr.myfidpass.data.local.db.entities.SyncMetaEntity
 import fr.myfidpass.data.local.db.entities.TransactionEntity
 import fr.myfidpass.data.repo.DashboardRepository
@@ -18,8 +19,9 @@ class SyncService(
     context: Context,
     private val repository: DashboardRepository,
 ) {
+    private val appContext = context.applicationContext
     private val db = Room.databaseBuilder(
-        context.applicationContext,
+        appContext,
         MyfidpassDatabase::class.java,
         "myfidpass.db",
     ).fallbackToDestructiveMigration().build()
@@ -36,6 +38,10 @@ class SyncService(
         private set
 
     var isSyncing: Boolean = false
+        private set
+
+    /** Slug pour lequel l’hydratation flyer a été tentée durant la session courante. */
+    var flyerHydrationCompletedForSlug: String? = null
         private set
 
     val memberDao get() = db.memberDao()
@@ -66,6 +72,16 @@ class SyncService(
         lastSyncBySlug.set(0)
     }
 
+    fun resetFlyerHydrationState() {
+        flyerHydrationCompletedForSlug = null
+    }
+
+    fun hasCompletedFlyerHydration(slug: String): Boolean {
+        val key = slug.trim()
+        if (key.isEmpty()) return false
+        return flyerHydrationCompletedForSlug?.trim()?.equals(key, ignoreCase = true) == true
+    }
+
     suspend fun clearForSlug(slug: String) {
         db.memberDao().deleteForSlug(slug)
         db.transactionDao().deleteForSlug(slug)
@@ -73,42 +89,49 @@ class SyncService(
 
     private suspend fun pull(slug: String) {
         val ts = System.currentTimeMillis()
-        val members = mutableListOf<MemberEntity>()
-        var memberOffset = 0
-        val memberPageSize = 200
-        while (memberOffset < 20_000) {
-            val page = repository.businessMembers(slug, limit = memberPageSize, offset = memberOffset)
-            members += page.members.mapNotNull { it.toEntity(slug, ts) }
-            if (page.members.size < memberPageSize) break
-            memberOffset += memberPageSize
-        }
-        db.memberDao().deleteForSlug(slug)
-        if (members.isNotEmpty()) {
-            members.chunked(500).forEach { db.memberDao().upsertAll(it) }
-        }
+        try {
+            val members = mutableListOf<MemberEntity>()
+            var memberOffset = 0
+            val memberPageSize = 200
+            while (memberOffset < 20_000) {
+                val page = repository.businessMembers(slug, limit = memberPageSize, offset = memberOffset)
+                members += page.members
+                    .filter { !MerchantTechnicalMember.shouldExcludeFromMerchantActivity(it.email) }
+                    .mapNotNull { it.toEntity(slug, ts) }
+                if (page.members.size < memberPageSize) break
+                memberOffset += memberPageSize
+            }
+            db.memberDao().deleteForSlug(slug)
+            if (members.isNotEmpty()) {
+                members.chunked(500).forEach { db.memberDao().upsertAll(it) }
+            }
 
-        val txs = mutableListOf<TransactionEntity>()
-        var txOffset = 0
-        val txPageSize = 100
-        while (txOffset < 10_000) {
-            val page = repository.businessTransactions(slug, limit = txPageSize, offset = txOffset, sort = "desc")
-            txs += page.transactions.mapNotNull { it.toEntity(slug, ts) }
-            if (page.transactions.size < txPageSize) break
-            txOffset += txPageSize
-        }
-        db.transactionDao().deleteForSlug(slug)
-        if (txs.isNotEmpty()) {
-            txs.chunked(500).forEach { db.transactionDao().upsertAll(it) }
-        }
+            val txs = mutableListOf<TransactionEntity>()
+            var txOffset = 0
+            val txPageSize = 100
+            while (txOffset < 50_000) {
+                val page = repository.businessTransactions(slug, limit = txPageSize, offset = txOffset, sort = "desc")
+                txs += page.transactions.mapNotNull { it.toEntity(slug, ts) }
+                if (page.transactions.size < txPageSize) break
+                txOffset += txPageSize
+            }
+            if (txs.isNotEmpty()) {
+                txs.chunked(500).forEach { db.transactionDao().upsertAll(it) }
+            }
 
-        db.syncMetaDao().upsert(
-            SyncMetaEntity(
-                businessSlug = slug,
-                lastSyncAt = ts,
-                membersTotal = members.size,
-                transactionsTotal = txs.size,
-            ),
-        )
+            db.syncMetaDao().upsert(
+                SyncMetaEntity(
+                    businessSlug = slug,
+                    lastSyncAt = ts,
+                    membersTotal = members.size,
+                    transactionsTotal = txs.size,
+                ),
+            )
+        } finally {
+            val settings = runCatching { repository.businessSettings(slug) }.getOrNull()
+            FlyerSyncHydrator.hydrate(appContext, repository, slug, settings)
+            flyerHydrationCompletedForSlug = slug.trim()
+        }
     }
 
     private fun MemberDto.toEntity(slug: String, ts: Long): MemberEntity? {

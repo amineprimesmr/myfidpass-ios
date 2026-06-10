@@ -62,21 +62,9 @@ struct CommerceStatsRewardsUsedCard: View {
 
     private var headerRow: some View {
         HStack(alignment: .top, spacing: 10) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(row.title)
-                    .font(CommerceStatisticsTheme.kpiTileTitleFont())
-                    .foregroundStyle(CommerceStatisticsTheme.kpiTileTitleGradient(forGlassOverlay: g))
-                HStack(spacing: 0) {
-                    Text("\(row.subtitle) · total \(row.rightPrimary)")
-                        .font(CommerceStatisticsTheme.statsText(size: 12, weight: .medium))
-                        .foregroundStyle(CommerceStatisticsTheme.onCardSecondary(forGlassOverlay: g))
-                    if !row.rightSecondary.isEmpty {
-                        Text(" · poids \(row.rightSecondary)")
-                            .font(CommerceStatisticsTheme.statsText(size: 12, weight: .medium))
-                            .foregroundStyle(CommerceStatisticsTheme.onCardSecondary(forGlassOverlay: g))
-                    }
-                }
-            }
+            Text(row.title)
+                .font(CommerceStatisticsTheme.kpiTileTitleFont())
+                .foregroundStyle(CommerceStatisticsTheme.kpiTileTitleGradient(forGlassOverlay: g))
             Spacer(minLength: 8)
             if showsInlineInfo {
                 Button {

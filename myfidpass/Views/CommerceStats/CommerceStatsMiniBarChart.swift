@@ -117,8 +117,8 @@ struct CommerceStatsMiniSparklineChart: View {
             CommerceMiniSparklineLineShape(values: values)
                 .stroke(lineColor, style: StrokeStyle(lineWidth: 3.2, lineCap: .round, lineJoin: .round))
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .drawingGroup(opaque: false, colorMode: .nonLinear)
-        .frame(height: 48)
     }
 }
 

@@ -10,6 +10,8 @@ import Foundation
 enum MerchantInternalBenchAccess {
     static let benchMaxPassesPerDay = 102
     static let benchMaxPointsPerOperation = 102
+    /// Palier IAP max (5 commerces) — accès test complet via 102 / 102.
+    static let benchMaxAllowedBusinesses = 5
 
     static func matchesBenchCombo(passes: Int, points: Int) -> Bool {
         passes == benchMaxPassesPerDay && points == benchMaxPointsPerOperation

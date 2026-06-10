@@ -19,7 +19,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import fr.myfidpass.data.local.CardPreviewSnapshotStore
-import fr.myfidpass.data.local.CommerceFlyerStateCache
+import fr.myfidpass.data.local.CommerceFlyerStore
 
 /** Aligné iOS `PostCardFlyerPromoEligibility`. */
 object PostCardFlyerPromoEligibility {
@@ -41,9 +41,8 @@ object PostCardFlyerPromoEligibility {
         val slug = slugRaw.trim().lowercase()
         if (slug.isEmpty()) return false
         if (!CardPreviewSnapshotStore.isMerchantCardConfigured(context, slug)) return false
-        val cached = CommerceFlyerStateCache.load(context, slug)
-        if (cached?.flyerRegistered == true) return false
-        return !CommerceFlyerStateCache.flyerLooksCustomized(context, slug)
+        if (CommerceFlyerStore.isFlyerReady(context, slug)) return false
+        return true
     }
 
     fun shouldOffer(context: Context, slugRaw: String): Boolean {
@@ -74,6 +73,11 @@ object PostCardFlyerPromoEligibility {
     fun showsCreationAttentionBadge(context: Context, slugRaw: String?): Boolean {
         slugRaw ?: return false
         return stillNeedsFlyerPromo(context, slugRaw)
+    }
+
+    fun clearPendingForLogout(context: Context) {
+        suppressedUntilNextAppOpen = false
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().clear().apply()
     }
 }
 

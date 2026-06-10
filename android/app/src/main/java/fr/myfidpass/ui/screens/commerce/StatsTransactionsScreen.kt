@@ -23,14 +23,21 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import fr.myfidpass.data.dto.DashboardEvolutionResponse
 import fr.myfidpass.data.dto.TransactionDto
 import fr.myfidpass.data.repo.DashboardRepository
+import fr.myfidpass.ui.components.FintechLoadMoreTransactionsButton
+import fr.myfidpass.ui.theme.FintechLightPalette
+import kotlinx.coroutines.launch
+
+private const val TRANSACTIONS_PAGE_SIZE = 20
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -39,10 +46,36 @@ fun StatsTransactionsScreen(
     onBack: () -> Unit,
 ) {
     val slug = repository.currentSlug()
+    val scope = rememberCoroutineScope()
+    val palette = FintechLightPalette
+
     var loading by remember { mutableStateOf(true) }
+    var loadingMore by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var evolution by remember { mutableStateOf<DashboardEvolutionResponse?>(null) }
     var transactions by remember { mutableStateOf<List<TransactionDto>>(emptyList()) }
+    var transactionsTotal by remember { mutableIntStateOf(0) }
+
+    val hasMore = transactions.size < transactionsTotal
+
+    fun loadMore() {
+        val currentSlug = slug ?: return
+        if (loadingMore || !hasMore) return
+        scope.launch {
+            loadingMore = true
+            runCatching {
+                val response = repository.businessTransactions(
+                    slug = currentSlug,
+                    limit = TRANSACTIONS_PAGE_SIZE,
+                    offset = transactions.size,
+                    sort = "desc",
+                )
+                transactionsTotal = response.total ?: transactionsTotal
+                transactions = transactions + response.transactions
+            }.onFailure { error = it.message }
+            loadingMore = false
+        }
+    }
 
     LaunchedEffect(slug) {
         if (slug == null) {
@@ -51,9 +84,17 @@ fun StatsTransactionsScreen(
         }
         loading = true
         error = null
+        transactions = emptyList()
+        transactionsTotal = 0
         runCatching {
             evolution = repository.businessEvolution(slug, weeks = 12)
-            transactions = repository.businessTransactions(slug, limit = 40, sort = "desc").transactions
+            val response = repository.businessTransactions(
+                slug = slug,
+                limit = TRANSACTIONS_PAGE_SIZE,
+                sort = "desc",
+            )
+            transactions = response.transactions
+            transactionsTotal = response.total ?: response.transactions.size
         }.onFailure { error = it.message }
         loading = false
     }
@@ -70,33 +111,49 @@ fun StatsTransactionsScreen(
             )
         },
     ) { padding ->
-        Column(
+        if (loading) {
+            CircularProgressIndicator(Modifier.padding(padding).padding(24.dp))
+            return@Scaffold
+        }
+
+        LazyColumn(
             Modifier
                 .fillMaxSize()
                 .padding(padding)
                 .padding(horizontal = 16.dp),
         ) {
-            if (loading) {
-                CircularProgressIndicator(Modifier.padding(24.dp))
-                return@Column
+            error?.let { message ->
+                item(key = "error") {
+                    Text(message, color = MaterialTheme.colorScheme.error)
+                    Spacer(Modifier.height(12.dp))
+                }
             }
-            error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-            Text("Évolution (semaines)", style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.height(8.dp))
+            item(key = "evolution-title") {
+                Text("Évolution (semaines)", style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.height(8.dp))
+            }
             evolution?.evolution?.takeIf { it.isNotEmpty() }?.let { weeks ->
-                weeks.forEach { w ->
+                items(weeks, key = { it.weekIndex ?: it.hashCode() }) { w ->
                     Text(
                         "Semaine ${w.weekIndex ?: "—"} : ${w.operationsCount ?: 0} op., ${w.membersCount ?: 0} membres actifs",
                         style = MaterialTheme.typography.bodyMedium,
                         modifier = Modifier.padding(vertical = 4.dp),
                     )
                 }
-            } ?: Text("Pas de données d’évolution.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(Modifier.height(20.dp))
-            Text("Dernières transactions", style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.height(8.dp))
-            LazyColumn {
-                items(transactions, key = { it.id ?: it.createdAt ?: "" }) { t ->
+            } ?: item(key = "evolution-empty") {
+                Text("Pas de données d’évolution.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            item(key = "transactions-title") {
+                Spacer(Modifier.height(20.dp))
+                Text("Dernières transactions", style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.height(8.dp))
+            }
+            if (transactions.isEmpty()) {
+                item(key = "transactions-empty") {
+                    Text("Aucune transaction récente.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            } else {
+                items(transactions, key = { it.id ?: it.createdAt ?: it.hashCode() }) { t ->
                     Card(
                         Modifier
                             .fillMaxWidth()
@@ -113,6 +170,17 @@ fun StatsTransactionsScreen(
                                 style = MaterialTheme.typography.bodySmall,
                             )
                         }
+                    }
+                }
+                if (hasMore) {
+                    item(key = "load-more") {
+                        FintechLoadMoreTransactionsButton(
+                            palette = palette,
+                            isLoading = loadingMore,
+                            onClick = ::loadMore,
+                            modifier = Modifier.padding(vertical = 8.dp),
+                        )
+                        Spacer(Modifier.height(16.dp))
                     }
                 }
             }

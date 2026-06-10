@@ -111,6 +111,9 @@ struct AddCommerceSheet: View {
         }
         .preferredColorScheme(.light)
         .interactiveDismissDisabled(isCreating)
+        .task {
+            await authService.refreshMerchantBillingStateFromServer(force: true)
+        }
     }
 
     /// CTA fixé en bas : le clavier remonte la zone sûre (plus de `Spacer` dans un `ZStack` sans hauteur max).
@@ -152,32 +155,47 @@ struct AddCommerceSheet: View {
         guard let placeId = selectedPlaceId?.trimmingCharacters(in: .whitespacesAndNewlines),
               !placeId.isEmpty else { return }
         let rawDescription = selectedDescription?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        // Éviter `.first.map` sur `String` (`.first` = `Character?`) : découper puis prendre le premier segment.
-        let mainText: String = {
-            let parts = rawDescription.split(separator: ",", maxSplits: 1, omittingEmptySubsequences: false)
-            guard let head = parts.first else { return rawDescription }
-            let trimmed = String(head).trimmingCharacters(in: .whitespaces)
-            return trimmed.isEmpty ? rawDescription : trimmed
-        }()
-        let establishmentName = mainText.isEmpty ? rawDescription : mainText
-        guard !establishmentName.isEmpty else { return }
+        let establishmentNamePreview = establishmentName(from: rawDescription)
+        guard !establishmentNamePreview.isEmpty else { return }
 
+        Task { @MainActor in
+            await authService.refreshMerchantBillingStateFromServer(force: true)
+            guard authService.canCreateBusiness else {
+                NotificationCenter.default.postOpenMerchantSubscription(
+                    usedBusinesses: authService.usedBusinesses,
+                    allowedBusinesses: authService.allowedBusinesses,
+                    addingAnotherCommerce: true,
+                    pendingCommerceName: establishmentNamePreview
+                )
+                return
+            }
+            await performConfirmAddCommerceAfterQuotaCheck(
+                establishmentName: establishmentNamePreview,
+                placeId: placeId
+            )
+        }
+    }
+
+    @MainActor
+    private func performConfirmAddCommerceAfterQuotaCheck(establishmentName: String, placeId: String) async {
         hapticManager.impact(.medium)
         isCreating = true
         errorMessage = nil
-
-        Task { @MainActor in
-            defer { isCreating = false }
-            do {
-                try await performCreateCommerce(establishmentName: establishmentName, placeId: placeId)
-                hapticManager.notification(.success)
-                dismiss()
-            } catch let apiError as APIError {
-                Self.openPaywallIfCommerceQuotaBlocked(apiError, authService: authService)
-                errorMessage = Self.userFacingCreateCommerceError(apiError)
-            } catch {
-                errorMessage = "Impossible de créer le commerce. Vérifiez votre connexion."
-            }
+        defer { isCreating = false }
+        do {
+            try await performCreateCommerce(establishmentName: establishmentName, placeId: placeId)
+            hapticManager.notification(.success)
+            dismiss()
+        } catch let apiError as APIError {
+            await authService.refreshMerchantBillingStateFromServer(force: true)
+            Self.openPaywallIfCommerceQuotaBlocked(
+                apiError,
+                authService: authService,
+                pendingCommerceName: establishmentName
+            )
+                errorMessage = userFacingCreateCommerceError(apiError)
+        } catch {
+            errorMessage = "Impossible de créer le commerce. Vérifiez votre connexion."
         }
     }
 
@@ -252,26 +270,44 @@ struct AddCommerceSheet: View {
         }
     }
 
-    private static func openPaywallIfCommerceQuotaBlocked(_ error: APIError, authService: AuthService) {
+    private func establishmentName(from rawDescription: String) -> String {
+        let mainText: String = {
+            let parts = rawDescription.split(separator: ",", maxSplits: 1, omittingEmptySubsequences: false)
+            guard let head = parts.first else { return rawDescription }
+            let trimmed = String(head).trimmingCharacters(in: .whitespaces)
+            return trimmed.isEmpty ? rawDescription : trimmed
+        }()
+        return mainText.isEmpty ? rawDescription : mainText
+    }
+
+    private static func openPaywallIfCommerceQuotaBlocked(
+        _ error: APIError,
+        authService: AuthService,
+        pendingCommerceName: String? = nil
+    ) {
         switch error {
         case .subscriptionRequired, .businessQuotaReached:
             NotificationCenter.default.postOpenMerchantSubscription(
                 usedBusinesses: authService.usedBusinesses,
                 allowedBusinesses: authService.allowedBusinesses,
-                addingAnotherCommerce: true
+                addingAnotherCommerce: true,
+                pendingCommerceName: pendingCommerceName
             )
         default:
             break
         }
     }
 
-    private static func userFacingCreateCommerceError(_ error: APIError) -> String {
+    private func userFacingCreateCommerceError(_ error: APIError) -> String {
         switch error {
         case .unauthorized:
             return "Connexion expirée. Fermez cet écran, reconnectez-vous (Apple ou e-mail), puis réessayez."
         case .subscriptionRequired:
             return "Abonnement requis. L’écran de paiement s’ouvre pour choisir le forfait adapté."
         case .businessQuotaReached:
+            if authService.merchantScanBenchAccessActive {
+                return "Quota serveur pas à jour. Paramètres → Sécurité caisse : vérifiez 102 / 102, Enregistrer, puis réessayez."
+            }
             return "Limite de commerces atteinte. L’écran de paiement s’ouvre pour passer au forfait supérieur."
         case .businessPlaceAlreadyLinked(let message):
             return message

@@ -152,10 +152,26 @@ struct BusinessDTO: Decodable {
     let organizationName: String?
     let createdAt: String?
     let dashboardToken: String?
+    /// Renseigné par `GET /api/admin/businesses` pour le switcher admin (logo enregistré côté commerce).
+    let displayLogoUrl: String?
+    /// Admin plateforme (`GET /api/admin/businesses`).
+    let ownerEmail: String?
+    let memberCount: Int?
+    let ownerSubscriptionStatus: String?
+    /// Réseau fidélité partagé (`loyalty_groups`) — plusieurs adresses, une carte client.
+    let loyaltyGroupId: String?
 
     /// Tolère champs manquants / vides côté API (sinon toute la synchro échoue sur `GET /me`).
     private enum CodingKeys: String, CodingKey {
-        case id, name, slug, organizationName, createdAt, dashboardToken
+        case id, name, slug, organizationName, createdAt, dashboardToken, displayLogoUrl
+        case ownerEmail, memberCount, ownerSubscriptionStatus, loyaltyGroupId
+    }
+
+    var ownerHasActiveSubscription: Bool {
+        let st = (ownerSubscriptionStatus ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        return st == "active" || st == "trialing" || st == "past_due"
     }
 
     init(from decoder: Decoder) throws {
@@ -175,15 +191,50 @@ struct BusinessDTO: Decodable {
         organizationName = try c.decodeIfPresent(String.self, forKey: .organizationName)
         createdAt = try c.decodeIfPresent(String.self, forKey: .createdAt)
         dashboardToken = try c.decodeIfPresent(String.self, forKey: .dashboardToken)
+        displayLogoUrl = try c.decodeIfPresent(String.self, forKey: .displayLogoUrl)
+        ownerEmail = try c.decodeIfPresent(String.self, forKey: .ownerEmail)
+        memberCount = Self.decodeFlexibleInt(c, forKey: .memberCount)
+        ownerSubscriptionStatus = try c.decodeIfPresent(String.self, forKey: .ownerSubscriptionStatus)
+        loyaltyGroupId = try c.decodeIfPresent(String.self, forKey: .loyaltyGroupId)
     }
 
-    init(id: String, name: String, slug: String, organizationName: String? = nil, createdAt: String? = nil, dashboardToken: String? = nil) {
+    init(
+        id: String,
+        name: String,
+        slug: String,
+        organizationName: String? = nil,
+        createdAt: String? = nil,
+        dashboardToken: String? = nil,
+        displayLogoUrl: String? = nil,
+        ownerEmail: String? = nil,
+        memberCount: Int? = nil,
+        ownerSubscriptionStatus: String? = nil,
+        loyaltyGroupId: String? = nil
+    ) {
         self.id = id
         self.name = name
         self.slug = slug
         self.organizationName = organizationName
         self.createdAt = createdAt
         self.dashboardToken = dashboardToken
+        self.displayLogoUrl = displayLogoUrl
+        self.ownerEmail = ownerEmail
+        self.memberCount = memberCount
+        self.ownerSubscriptionStatus = ownerSubscriptionStatus
+        self.loyaltyGroupId = loyaltyGroupId
+    }
+
+    var isInLoyaltyNetwork: Bool {
+        let g = (loyaltyGroupId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return !g.isEmpty
+    }
+
+    private static func decodeFlexibleInt(_ c: KeyedDecodingContainer<CodingKeys>, forKey key: CodingKeys) -> Int? {
+        if let n = try? c.decodeIfPresent(Int.self, forKey: key) { return n }
+        if let s = try? c.decodeIfPresent(String.self, forKey: key),
+           let n = Int(s.trimmingCharacters(in: .whitespacesAndNewlines)) { return n }
+        if let d = try? c.decodeIfPresent(Double.self, forKey: key) { return Int(d) }
+        return nil
     }
 
     /// Entrée minimale quand `GET /me` n’a pas encore le commerce créé : permet `selectBusiness` + synchro sans redémarrage.
@@ -333,6 +384,9 @@ struct BusinessSettingsResponse: Decodable {
     let notificationIconUrl: String?
     let notificationIconUpdatedAt: String?
     let hasCardBackground: Bool?
+    /// `true` si `flyer_prefs_json` existe côté serveur (fallback sync avant GET flyer complet).
+    let hasFlyerPrefs: Bool?
+    let flyerPrefsUpdatedAt: String?
     /// Invalide le cache HTTP / URLCache quand le fond change (query `?v=` côté app).
     let cardBackgroundUpdatedAt: String?
     let hasStampIcon: Bool?
@@ -581,10 +635,12 @@ struct EngagementChannelDTO: Decodable, Equatable {
 struct PointsRewardTierDTO: Decodable {
     let points: Int
     let label: String
+    let minPurchaseEur: Double?
 
     enum CodingKeys: String, CodingKey {
         case points
         case label
+        case minPurchaseEur = "min_purchase_eur"
     }
 
     /// Tolère les paliers SaaS incomplets (label manquant, points en nombre décimal / chaîne) pour ne pas faire échouer tout `GET …/settings`.
@@ -600,6 +656,15 @@ struct PointsRewardTierDTO: Decodable {
             points = 0
         }
         label = (try? c.decode(String.self, forKey: .label))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if let d = try? c.decode(Double.self, forKey: .minPurchaseEur), d > 0 {
+            minPurchaseEur = d
+        } else if let s = try? c.decode(String.self, forKey: .minPurchaseEur),
+                  let d = Double(s.replacingOccurrences(of: ",", with: ".").trimmingCharacters(in: .whitespaces)),
+                  d > 0 {
+            minPurchaseEur = d
+        } else {
+            minPurchaseEur = nil
+        }
     }
 }
 
@@ -618,27 +683,37 @@ struct NotificationCampaignInsightDTO: Codable, Sendable, Identifiable {
     let message: String?
     let sentPasskit: Int?
     let sentWebPush: Int?
+    /// `queued` | `sending` | `delivered` | `partial` | `failed` | `no_targets`
+    let deliveryStatus: String?
+    /// Cibles prévues tant que la livraison n’est pas confirmée (ne pas confondre avec « membres touchés »).
+    let expectedDevices: Int?
 
+    // IMPORTANT : les décodeurs APIClient / MerchantStatisticsDiskCache utilisent
+    // `.convertFromSnakeCase` — les clés JSON snake_case sont converties en camelCase
+    // AVANT le lookup. Les rawValues doivent donc être en camelCase (un rawValue
+    // "batch_id" ne matcherait jamais). `48h`/`7d` deviennent `48H`/`7D` à la conversion.
     enum CodingKeys: String, CodingKey {
-        case batchId = "batch_id"
-        case triggerName = "trigger_name"
-        case createdAt = "created_at"
-        case sentTotal = "sent_total"
-        case recipientsDistinct = "recipients_distinct"
-        case returnedWithin48h = "returned_within_48h"
-        case returnedWithin7dLegacy = "returned_within_7d"
+        case batchId
+        case triggerName
+        case createdAt
+        case sentTotal
+        case recipientsDistinct
+        case returnedWithin48h = "returnedWithin48H"
+        case returnedWithin7dLegacy = "returnedWithin7D"
         case title
-        case notificationTitle = "notification_title"
-        case pushTitle = "push_title"
+        case notificationTitle
+        case pushTitle
         case message
         case body
-        case pushBody = "push_body"
+        case pushBody
         case content
-        case messagePreview = "message_preview"
-        case sentPasskit = "sent_passkit"
-        case passkitSent = "passkit_sent"
-        case sentWebPush = "sent_web_push"
-        case sentWeb = "sent_web"
+        case messagePreview
+        case sentPasskit
+        case passkitSent
+        case sentWebPush
+        case sentWeb
+        case deliveryStatus
+        case expectedDevices
     }
 
     init(from decoder: Decoder) throws {
@@ -685,6 +760,8 @@ struct NotificationCampaignInsightDTO: Codable, Sendable, Identifiable {
             c,
             keys: [.sentWebPush, .sentWeb]
         )
+        deliveryStatus = try c.decodeIfPresent(String.self, forKey: .deliveryStatus)
+        expectedDevices = try c.decodeIfPresent(Int.self, forKey: .expectedDevices)
     }
 
     init(
@@ -697,7 +774,9 @@ struct NotificationCampaignInsightDTO: Codable, Sendable, Identifiable {
         notificationTitle: String? = nil,
         message: String? = nil,
         sentPasskit: Int? = nil,
-        sentWebPush: Int? = nil
+        sentWebPush: Int? = nil,
+        deliveryStatus: String? = nil,
+        expectedDevices: Int? = nil
     ) {
         self.batchId = batchId
         self.triggerName = triggerName
@@ -709,6 +788,8 @@ struct NotificationCampaignInsightDTO: Codable, Sendable, Identifiable {
         self.message = message
         self.sentPasskit = sentPasskit
         self.sentWebPush = sentWebPush
+        self.deliveryStatus = deliveryStatus
+        self.expectedDevices = expectedDevices
     }
 
     func encode(to encoder: Encoder) throws {
@@ -723,6 +804,8 @@ struct NotificationCampaignInsightDTO: Codable, Sendable, Identifiable {
         try c.encodeIfPresent(message, forKey: .message)
         try c.encodeIfPresent(sentPasskit, forKey: .sentPasskit)
         try c.encodeIfPresent(sentWebPush, forKey: .sentWebPush)
+        try c.encodeIfPresent(deliveryStatus, forKey: .deliveryStatus)
+        try c.encodeIfPresent(expectedDevices, forKey: .expectedDevices)
     }
 
     private static func firstNonEmptyString(
@@ -755,14 +838,36 @@ extension NotificationCampaignInsightDTO {
             batchId: batchId,
             triggerName: triggerName ?? other.triggerName,
             createdAt: createdAt ?? other.createdAt,
-            sentTotal: sentTotal ?? other.sentTotal,
-            recipientsDistinct: recipientsDistinct ?? other.recipientsDistinct,
-            returnedWithin48h: returnedWithin48h ?? other.returnedWithin48h,
+            sentTotal: Self.mergeCount(sentTotal, other.sentTotal),
+            recipientsDistinct: Self.mergeCount(recipientsDistinct, other.recipientsDistinct),
+            returnedWithin48h: Self.mergeCount(returnedWithin48h, other.returnedWithin48h),
             notificationTitle: notificationTitle ?? other.notificationTitle,
             message: message ?? other.message,
-            sentPasskit: sentPasskit ?? other.sentPasskit,
-            sentWebPush: sentWebPush ?? other.sentWebPush
+            sentPasskit: Self.mergeCount(sentPasskit, other.sentPasskit),
+            sentWebPush: Self.mergeCount(sentWebPush, other.sentWebPush),
+            deliveryStatus: deliveryStatus ?? other.deliveryStatus,
+            expectedDevices: Self.mergeCount(expectedDevices, other.expectedDevices)
         )
+    }
+
+    var isDeliveryPending: Bool {
+        let s = deliveryStatus?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        return s == "queued" || s == "sending" || s == "pending"
+    }
+
+    var confirmedRecipientsCount: Int {
+        if isDeliveryPending { return 0 }
+        return max(recipientsDistinct ?? 0, sentTotal ?? 0)
+    }
+
+    /// Garde le plus grand compteur — un `0` explicite côté API ne doit pas écraser une valeur correcte de l’autre source.
+    private static func mergeCount(_ a: Int?, _ b: Int?) -> Int? {
+        switch (a, b) {
+        case let (x?, y?): return max(x, y)
+        case let (x?, nil): return x
+        case let (nil, y?): return y
+        default: return nil
+        }
     }
 }
 
@@ -782,41 +887,126 @@ private struct LastBatchStatsDecodable: Decodable {
     private let sentPasskit: Int?
     private let sentWeb: Int?
     private let sentWebPush: Int?
+    private let deliveryStatus: String?
+    private let expectedDevices: Int?
 
+    // RawValues camelCase — voir note sur `.convertFromSnakeCase` plus haut.
     enum CodingKeys: String, CodingKey {
-        case batchId = "batch_id"
-        case triggerName = "trigger_name"
-        case createdAt = "created_at"
-        case sentTotal = "sent_total"
-        case recipientsDistinct = "recipients_distinct"
-        case returnedWithin48h = "returned_within_48h"
-        case returnedWithin7dLegacy = "returned_within_7d"
+        case id
+        case batchId
+        case triggerName
+        case createdAt
+        case sentTotal
+        case sent
+        case recipientsDistinct
+        case distinctRecipients
+        case returnedWithin48h = "returnedWithin48H"
+        case returnedWithin7dLegacy = "returnedWithin7D"
         case title
+        case notificationTitle
         case message
         case body
-        case sentPasskit = "sent_passkit"
-        case sentWeb = "sent_web"
-        case sentWebPush = "sent_web_push"
+        case sentPasskit
+        case sentWeb
+        case sentWebPush
+        case deliveryStatus
+        case expectedDevices
+        case summary
+    }
+
+    private struct SummaryBox: Decodable {
+        let sent: Int?
+        let sentTotal: Int?
+        let recipientsDistinct: Int?
+        let distinctRecipients: Int?
+        let title: String?
+        let notificationTitle: String?
+        let message: String?
+        let body: String?
+        let sentPasskit: Int?
+        let sentWebPush: Int?
+        let deliveryStatus: String?
+        let expectedDevices: Int?
+
+        // Le summary serveur écrit `sentPassKit` (K majuscule) — clé sans underscore,
+        // laissée telle quelle par `.convertFromSnakeCase`.
+        enum CodingKeys: String, CodingKey {
+            case sent
+            case sentTotal
+            case recipientsDistinct
+            case distinctRecipients
+            case title
+            case notificationTitle
+            case message
+            case body
+            case sentPasskit = "sentPassKit"
+            case sentWebPush
+            case deliveryStatus
+            case expectedDevices
+        }
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        batchId = try c.decodeIfPresent(String.self, forKey: .batchId)
+        let topId = try c.decodeIfPresent(String.self, forKey: .id)
+        let topBatch = try c.decodeIfPresent(String.self, forKey: .batchId)
+        let resolvedBatchId = (topBatch?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+            ? topBatch
+            : topId
+
+        var resolvedSentTotal = try c.decodeIfPresent(Int.self, forKey: .sentTotal)
+        if resolvedSentTotal == nil { resolvedSentTotal = try c.decodeIfPresent(Int.self, forKey: .sent) }
+
+        var resolvedRecipients = try c.decodeIfPresent(Int.self, forKey: .recipientsDistinct)
+        if resolvedRecipients == nil {
+            resolvedRecipients = try c.decodeIfPresent(Int.self, forKey: .distinctRecipients)
+        }
+
+        let resolvedReturned48h: Int?
+        if let v = try c.decodeIfPresent(Int.self, forKey: .returnedWithin48h) {
+            resolvedReturned48h = v
+        } else {
+            resolvedReturned48h = try c.decodeIfPresent(Int.self, forKey: .returnedWithin7dLegacy)
+        }
+
+        var resolvedTitle = try c.decodeIfPresent(String.self, forKey: .title)
+            ?? (try? c.decodeIfPresent(String.self, forKey: .notificationTitle))
+        var resolvedMessage = try c.decodeIfPresent(String.self, forKey: .message)
+        var resolvedBody = try c.decodeIfPresent(String.self, forKey: .body)
+        var resolvedSentPasskit = try c.decodeIfPresent(Int.self, forKey: .sentPasskit)
+        let resolvedSentWeb = try c.decodeIfPresent(Int.self, forKey: .sentWeb)
+        var resolvedSentWebPush = try c.decodeIfPresent(Int.self, forKey: .sentWebPush)
+        var resolvedDeliveryStatus = try c.decodeIfPresent(String.self, forKey: .deliveryStatus)
+        var resolvedExpectedDevices = try c.decodeIfPresent(Int.self, forKey: .expectedDevices)
+
+        if let summary = try c.decodeIfPresent(SummaryBox.self, forKey: .summary) {
+            if resolvedSentTotal == nil { resolvedSentTotal = summary.sentTotal ?? summary.sent }
+            if resolvedRecipients == nil {
+                resolvedRecipients = summary.recipientsDistinct ?? summary.distinctRecipients
+            }
+            if resolvedTitle == nil { resolvedTitle = summary.notificationTitle ?? summary.title }
+            if resolvedMessage == nil { resolvedMessage = summary.message }
+            if resolvedBody == nil { resolvedBody = summary.body }
+            if resolvedSentPasskit == nil { resolvedSentPasskit = summary.sentPasskit }
+            if resolvedSentWebPush == nil { resolvedSentWebPush = summary.sentWebPush }
+            if resolvedDeliveryStatus == nil { resolvedDeliveryStatus = summary.deliveryStatus }
+            if resolvedExpectedDevices == nil { resolvedExpectedDevices = summary.expectedDevices }
+        }
+
+        batchId = resolvedBatchId
         triggerName = try c.decodeIfPresent(String.self, forKey: .triggerName)
         createdAt = try c.decodeIfPresent(String.self, forKey: .createdAt)
-        sentTotal = try c.decodeIfPresent(Int.self, forKey: .sentTotal)
-        recipientsDistinct = try c.decodeIfPresent(Int.self, forKey: .recipientsDistinct)
-        if let v = try c.decodeIfPresent(Int.self, forKey: .returnedWithin48h) {
-            returnedWithin48h = v
-        } else {
-            returnedWithin48h = try c.decodeIfPresent(Int.self, forKey: .returnedWithin7dLegacy)
-        }
-        title = try c.decodeIfPresent(String.self, forKey: .title)
-        message = try c.decodeIfPresent(String.self, forKey: .message)
-        body = try c.decodeIfPresent(String.self, forKey: .body)
-        sentPasskit = try c.decodeIfPresent(Int.self, forKey: .sentPasskit)
-        sentWeb = try c.decodeIfPresent(Int.self, forKey: .sentWeb)
-        sentWebPush = try c.decodeIfPresent(Int.self, forKey: .sentWebPush)
+        sentTotal = resolvedSentTotal
+        recipientsDistinct = resolvedRecipients
+        returnedWithin48h = resolvedReturned48h
+        title = resolvedTitle
+        message = resolvedMessage
+        body = resolvedBody
+        sentPasskit = resolvedSentPasskit
+        sentWeb = resolvedSentWeb
+        sentWebPush = resolvedSentWebPush
+        deliveryStatus = resolvedDeliveryStatus
+        expectedDevices = resolvedExpectedDevices
     }
 
     func asCampaignInsight() -> NotificationCampaignInsightDTO? {
@@ -839,23 +1029,31 @@ private struct LastBatchStatsDecodable: Decodable {
             || (triggerName?.isEmpty == false)
             || (sentTotal ?? 0) > 0
             || (recipientsDistinct ?? 0) > 0
+            || (expectedDevices ?? 0) > 0
             || mergedTitle != nil
             || mergedMessage != nil
+            || !(deliveryStatus?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
         guard hasSignal else { return nil }
         let web = sentWebPush ?? sentWeb
+        let pending = ["queued", "sending", "pending"].contains(
+            deliveryStatus?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        )
+        let confirmedRecipients = pending ? 0 : max(recipientsDistinct ?? 0, sentTotal ?? 0)
         return NotificationCampaignInsightDTO(
             batchId: (batchId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
                 ? (batchId ?? "batch")
                 : "last-batch-\(createdAt ?? "unknown")",
             triggerName: triggerName,
             createdAt: createdAt,
-            sentTotal: sentTotal,
-            recipientsDistinct: recipientsDistinct,
+            sentTotal: pending ? nil : sentTotal,
+            recipientsDistinct: confirmedRecipients > 0 ? confirmedRecipients : (pending ? 0 : recipientsDistinct),
             returnedWithin48h: returnedWithin48h,
             notificationTitle: mergedTitle,
             message: mergedMessage,
             sentPasskit: sentPasskit,
-            sentWebPush: web
+            sentWebPush: web,
+            deliveryStatus: deliveryStatus,
+            expectedDevices: expectedDevices
         )
     }
 }
@@ -864,15 +1062,17 @@ private struct LastBatchStatsDecodable: Decodable {
 struct NotificationStatsEndpointPayload: Decodable {
     let campaigns: [NotificationCampaignInsightDTO]
 
+    // RawValues en camelCase : le décodeur `.convertFromSnakeCase` convertit les clés JSON
+    // snake_case AVANT le lookup (un rawValue "notification_campaigns" ne matcherait jamais).
     private enum K: String, CodingKey {
-        case notificationCampaigns = "notification_campaigns"
+        case notificationCampaigns
         case campaigns
         case batches
-        case recentBatches = "recent_batches"
+        case recentBatches
         case history
-        case notificationHistory = "notification_history"
-        case sendHistory = "send_history"
-        case lastBatch = "last_batch"
+        case notificationHistory
+        case sendHistory
+        case lastBatch
     }
 
     init(from decoder: Decoder) throws {
@@ -1163,6 +1363,14 @@ struct RedeemResponse: Decodable {
     let previousPoints: Int?
     let pointsDeducted: Int?
     let message: String?
+}
+
+// MARK: - POST .../members/:memberId/points/remove
+
+struct RemoveMemberPointsResponse: Decodable {
+    let id: String?
+    let points: Int?
+    let pointsRemoved: Int?
 }
 
 // MARK: - GET/PUT .../dashboard/flyer (flyer QR, sync SaaS)
@@ -1932,6 +2140,10 @@ struct FlyerPutPayload: Encodable {
 struct AdminOverviewResponse: Decodable {
     let usersCount: Int?
     let businessesCount: Int?
+    let merchantOwnersCount: Int?
+    let teamMemberAccountsCount: Int?
+    let platformAdminAccountsCount: Int?
+    let orphanAccountsCount: Int?
     let activeSubscriptionsCount: Int?
 }
 
@@ -1954,6 +2166,45 @@ struct AdminBusinessesListResponse: Decodable {
     let businesses: [AdminBusinessRow]
 }
 
+/// URLs médias commerce pour la console admin (fallback client si l’API n’expose pas encore `display_logo_url`).
+enum AdminBusinessMediaURL {
+    static func resourceURL(slug: String, resource: String) -> URL? {
+        let trimmed = slug.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let encoded = trimmed.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? trimmed
+        return APIConfig.baseURL
+            .appendingPathComponent("api")
+            .appendingPathComponent("businesses")
+            .appendingPathComponent(encoded)
+            .appendingPathComponent(resource)
+    }
+
+    /// Ordre d’essai : icône notif → logo carré → bandeau carte.
+    static func logoLoadCandidates(for business: AdminBusinessRow) -> [URL] {
+        var seen = Set<String>()
+        var out: [URL] = []
+        func append(_ raw: String?) {
+            let t = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !t.isEmpty, let url = APIResourceURL.resolved(from: t) else { return }
+            let key = url.absoluteString
+            guard seen.insert(key).inserted else { return }
+            out.append(url)
+        }
+        append(business.displayLogoUrl)
+        append(business.notificationIconUrl)
+        append(business.logoIconUrl)
+        append(business.logoUrl)
+        for resource in ["notification-icon", "logo-icon", "logo"] {
+            if let url = resourceURL(slug: business.slug, resource: resource) {
+                let key = url.absoluteString
+                guard seen.insert(key).inserted else { continue }
+                out.append(url)
+            }
+        }
+        return out
+    }
+}
+
 struct AdminBusinessRow: Decodable, Identifiable, Hashable {
     let id: String
     let slug: String
@@ -1966,6 +2217,77 @@ struct AdminBusinessRow: Decodable, Identifiable, Hashable {
     let ownerSubscriptionStatus: String?
     let ownerPlanId: String?
     let dashboardToken: String?
+    let logoUrl: String?
+    let logoIconUrl: String?
+    let notificationIconUrl: String?
+    let displayLogoUrl: String?
+    let logoUpdatedAt: String?
+    let logoIconUpdatedAt: String?
+    let notificationIconUpdatedAt: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case id, slug, name, organizationName, userId, createdAt
+        case ownerEmail, memberCount, ownerSubscriptionStatus, ownerPlanId
+        case dashboardToken, logoUrl, logoIconUrl, notificationIconUrl
+        case displayLogoUrl, logoUpdatedAt, logoIconUpdatedAt, notificationIconUpdatedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = (try c.decodeIfPresent(String.self, forKey: .id) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        slug = (try c.decodeIfPresent(String.self, forKey: .slug) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        name = try c.decodeIfPresent(String.self, forKey: .name)
+        organizationName = try c.decodeIfPresent(String.self, forKey: .organizationName)
+        userId = try c.decodeIfPresent(String.self, forKey: .userId)
+        createdAt = try c.decodeIfPresent(String.self, forKey: .createdAt)
+        ownerEmail = try c.decodeIfPresent(String.self, forKey: .ownerEmail)
+        memberCount = Self.decodeFlexibleInt(c, forKey: .memberCount)
+        ownerSubscriptionStatus = try c.decodeIfPresent(String.self, forKey: .ownerSubscriptionStatus)
+        ownerPlanId = try c.decodeIfPresent(String.self, forKey: .ownerPlanId)
+        dashboardToken = try c.decodeIfPresent(String.self, forKey: .dashboardToken)
+        logoUrl = try c.decodeIfPresent(String.self, forKey: .logoUrl)
+        logoIconUrl = try c.decodeIfPresent(String.self, forKey: .logoIconUrl)
+        notificationIconUrl = try c.decodeIfPresent(String.self, forKey: .notificationIconUrl)
+        displayLogoUrl = try c.decodeIfPresent(String.self, forKey: .displayLogoUrl)
+        logoUpdatedAt = try c.decodeIfPresent(String.self, forKey: .logoUpdatedAt)
+        logoIconUpdatedAt = try c.decodeIfPresent(String.self, forKey: .logoIconUpdatedAt)
+        notificationIconUpdatedAt = try c.decodeIfPresent(String.self, forKey: .notificationIconUpdatedAt)
+    }
+
+    private static func decodeFlexibleInt(_ c: KeyedDecodingContainer<CodingKeys>, forKey key: CodingKeys) -> Int? {
+        if let n = try? c.decodeIfPresent(Int.self, forKey: key) { return n }
+        if let s = try? c.decodeIfPresent(String.self, forKey: key),
+           let n = Int(s.trimmingCharacters(in: .whitespacesAndNewlines)) { return n }
+        if let d = try? c.decodeIfPresent(Double.self, forKey: key) { return Int(d) }
+        return nil
+    }
+
+    /// URL affichable dans la liste admin (notif > carré > bandeau).
+    var resolvedDisplayLogoURL: String? {
+        let candidates = [displayLogoUrl, notificationIconUrl, logoIconUrl, logoUrl]
+        for raw in candidates {
+            let t = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !t.isEmpty { return t }
+        }
+        return AdminBusinessMediaURL.resourceURL(slug: slug, resource: "notification-icon")?.absoluteString
+            ?? AdminBusinessMediaURL.resourceURL(slug: slug, resource: "logo-icon")?.absoluteString
+            ?? AdminBusinessMediaURL.resourceURL(slug: slug, resource: "logo")?.absoluteString
+    }
+
+    var displayName: String {
+        let n = organizationName?.trimmingCharacters(in: .whitespacesAndNewlines)
+            ?? name?.trimmingCharacters(in: .whitespacesAndNewlines)
+            ?? ""
+        return n.isEmpty ? slug : n
+    }
+
+    /// Abonnement propriétaire opérationnel (`active`, `trialing`, `past_due`).
+    var ownerHasActiveSubscription: Bool {
+        let st = (ownerSubscriptionStatus ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        return st == "active" || st == "trialing" || st == "past_due"
+    }
 
     func asBusinessDTO() -> BusinessDTO {
         let display = organizationName?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1978,13 +2300,72 @@ struct AdminBusinessRow: Decodable, Identifiable, Hashable {
             slug: slug,
             organizationName: organizationName,
             createdAt: createdAt,
-            dashboardToken: (tokenTrimmed?.isEmpty == false) ? tokenTrimmed : nil
+            dashboardToken: (tokenTrimmed?.isEmpty == false) ? tokenTrimmed : nil,
+            displayLogoUrl: resolvedDisplayLogoURL,
+            ownerEmail: ownerEmail,
+            memberCount: memberCount,
+            ownerSubscriptionStatus: ownerSubscriptionStatus
         )
     }
 }
 
 struct AdminEventsListResponse: Decodable {
     let events: [AdminEventRow]
+}
+
+struct AdminDeleteBusinessBody: Encodable {
+    let confirm: String
+
+    static let confirmToken = "SUPPRIMER"
+
+    static var wipe: AdminDeleteBusinessBody {
+        AdminDeleteBusinessBody(confirm: confirmToken)
+    }
+}
+
+struct AdminDeleteUserBody: Encodable {
+    let confirm: String
+
+    static let confirmToken = "SUPPRIMER"
+
+    static var wipe: AdminDeleteUserBody {
+        AdminDeleteUserBody(confirm: confirmToken)
+    }
+}
+
+struct AdminDeleteSuccessResponse: Decodable {
+    let ok: Bool?
+}
+
+struct AdminCreateMerchantAccountBody: Encodable {
+    let email: String
+    let businessName: String
+    let ownerName: String?
+    let slug: String?
+    let organizationName: String?
+    let password: String?
+
+    enum CodingKeys: String, CodingKey {
+        case email
+        case businessName = "business_name"
+        case ownerName = "owner_name"
+        case slug
+        case organizationName = "organization_name"
+        case password
+    }
+}
+
+struct AdminCreateMerchantAccountResponse: Decodable {
+    let ok: Bool?
+    let userCreated: Bool?
+    let user: AdminProvisionedUserRow?
+    let business: AdminBusinessRow?
+}
+
+struct AdminProvisionedUserRow: Decodable {
+    let id: String
+    let email: String?
+    let name: String?
 }
 
 struct AdminEventRow: Decodable, Identifiable {
@@ -2193,5 +2574,124 @@ struct WorkspaceTeamStaffAccountResponse: Decodable {
         case emailSent = "email_sent"
         case emailError = "email_error"
     }
+}
+
+// MARK: - Réseaux fidélité (multi-adresses, carte unique)
+// `APIClient` applique `convertFromSnakeCase` : pas de CodingKeys snake_case explicites (sinon décodage impossible).
+
+struct LoyaltyGroupSummaryDTO: Decodable, Identifiable, Sendable {
+    let id: String
+    let name: String
+    let createdAt: String?
+    let updatedAt: String?
+    let businessCount: Int?
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        createdAt = try c.decodeIfPresent(String.self, forKey: .createdAt)
+        updatedAt = try c.decodeIfPresent(String.self, forKey: .updatedAt)
+        businessCount = Self.decodeFlexibleInt(c, forKey: .businessCount)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, createdAt, updatedAt, businessCount
+    }
+
+    private static func decodeFlexibleInt(
+        _ c: KeyedDecodingContainer<CodingKeys>,
+        forKey key: CodingKeys
+    ) -> Int? {
+        if let n = try? c.decodeIfPresent(Int.self, forKey: key) { return n }
+        if let s = try? c.decodeIfPresent(String.self, forKey: key),
+           let n = Int(s.trimmingCharacters(in: .whitespacesAndNewlines)) { return n }
+        if let d = try? c.decodeIfPresent(Double.self, forKey: key) { return Int(d) }
+        return nil
+    }
+}
+
+struct LoyaltyGroupsListResponse: Decodable, Sendable {
+    let loyaltyGroups: [LoyaltyGroupSummaryDTO]
+}
+
+struct LoyaltyGroupDTO: Decodable, Identifiable, Sendable {
+    let id: String
+    let name: String
+    let ownerUserId: String?
+    let createdAt: String?
+    let updatedAt: String?
+}
+
+struct LoyaltyGroupBusinessLinkDTO: Decodable, Identifiable, Sendable {
+    let id: String
+    let name: String
+    let slug: String
+    let organizationName: String?
+    let loyaltyGroupId: String?
+    let programType: String?
+    let requiredStamps: Int?
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        var slugValue = (try c.decodeIfPresent(String.self, forKey: .slug) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if slugValue.isEmpty { slugValue = id }
+        slug = slugValue
+        organizationName = try c.decodeIfPresent(String.self, forKey: .organizationName)
+        loyaltyGroupId = try c.decodeIfPresent(String.self, forKey: .loyaltyGroupId)
+        programType = try c.decodeIfPresent(String.self, forKey: .programType)
+        requiredStamps = Self.decodeFlexibleInt(c, forKey: .requiredStamps)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, slug, organizationName, loyaltyGroupId, programType, requiredStamps
+    }
+
+    private static func decodeFlexibleInt(
+        _ c: KeyedDecodingContainer<CodingKeys>,
+        forKey key: CodingKeys
+    ) -> Int? {
+        if let n = try? c.decodeIfPresent(Int.self, forKey: key) { return n }
+        if let s = try? c.decodeIfPresent(String.self, forKey: key),
+           let n = Int(s.trimmingCharacters(in: .whitespacesAndNewlines)) { return n }
+        if let d = try? c.decodeIfPresent(Double.self, forKey: key) { return Int(d) }
+        return nil
+    }
+}
+
+struct LoyaltyGroupDetailResponse: Decodable, Sendable {
+    let loyaltyGroup: LoyaltyGroupDTO
+    let businesses: [LoyaltyGroupBusinessLinkDTO]
+}
+
+struct LoyaltyGroupCreateResponse: Decodable, Sendable {
+    let loyaltyGroup: LoyaltyGroupDTO
+    let businesses: [LoyaltyGroupBusinessLinkDTO]
+}
+
+struct LoyaltyGroupLinkBusinessResponse: Decodable, Sendable {
+    let loyaltyGroup: LoyaltyGroupDTO
+    let business: LoyaltyGroupBusinessLinkDTO
+}
+
+struct LoyaltyGroupOkResponse: Decodable, Sendable {
+    let ok: Bool?
+}
+
+struct LoyaltyGroupCreateBody: Encodable, Sendable {
+    let name: String
+    let businessIds: [String]?
+}
+
+struct LoyaltyGroupPatchBody: Encodable, Sendable {
+    let name: String
+}
+
+struct LoyaltyGroupLinkBusinessBody: Encodable, Sendable {
+    let businessId: String?
+    let slug: String?
 }
 

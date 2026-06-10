@@ -24,8 +24,11 @@ import fr.myfidpass.ui.screens.settings.AccountSettingsDetailScreen
 import fr.myfidpass.ui.screens.settings.MerchantAccountingPackScreen
 import fr.myfidpass.ui.screens.settings.MerchantTraceabilityExportScreen
 import fr.myfidpass.ui.screens.settings.AppSettingsHubScreen
+import fr.myfidpass.ui.screens.settings.LoyaltyNetworkSettingsScreen
 import fr.myfidpass.ui.screens.settings.SettingsHubScreen
 import androidx.compose.runtime.remember
+import fr.myfidpass.ui.screens.members.MemberDetailScreen
+import fr.myfidpass.ui.screens.members.MembersListScreen
 import fr.myfidpass.ui.screens.stats.CommerceStatisticsDashboardScreen
 import fr.myfidpass.ui.viewModelFactory
 import fr.myfidpass.ui.viewmodel.MerchantStatsViewModel
@@ -42,6 +45,7 @@ fun CommerceTabNavHost(
     initialRoute: String = if (embeddedRoot) CommerceRoutes.STATS else CommerceRoutes.HUB,
     onHubBack: (() -> Unit)? = null,
     onUnlockPro: () -> Unit = {},
+    onCommerceQuotaBlocked: (pendingCommerceName: String) -> Unit = {},
     onCommerceStatsAtRootChange: (Boolean) -> Unit = {},
 ) {
     val factory = remember(container) { viewModelFactory(container) }
@@ -88,6 +92,7 @@ fun CommerceTabNavHost(
                 onAppSettings = { nav.navigate(CommerceRoutes.SETTINGS_APP) },
                 onScanSecurity = { nav.navigate(CommerceRoutes.SCAN_SECURITY) },
                 onTeam = { nav.navigate(CommerceRoutes.TEAM) },
+                onLoyaltyNetwork = { nav.navigate(CommerceRoutes.LOYALTY_NETWORK) },
                 onMatchPredictions = { nav.navigate(CommerceRoutes.MATCH_PREDICTIONS) },
                 onAccounting = { nav.navigate(CommerceRoutes.ACCOUNTING) },
                 onOpenFlyerHub = { nav.navigate(CommerceRoutes.FLYER) },
@@ -119,6 +124,10 @@ fun CommerceTabNavHost(
                 snackbar = snackbarHostState,
                 onBack = { nav.popBackStack() },
                 onCreated = { nav.popBackStack(CommerceRoutes.HUB, false) },
+                onQuotaBlocked = { name ->
+                    nav.popBackStack()
+                    onCommerceQuotaBlocked(name)
+                },
             )
         }
         composable(CommerceRoutes.SETTINGS) {
@@ -149,6 +158,30 @@ fun CommerceTabNavHost(
                 onTraceability = { nav.navigate(CommerceRoutes.TRACEABILITY) },
                 onStatsTransactions = { nav.navigate(CommerceRoutes.STATS_TRANSACTIONS) },
                 onOpenSocial = { nav.navigate(CommerceRoutes.SOCIAL_MISSIONS) },
+                onOpenMembers = { nav.navigate(CommerceRoutes.MEMBERS) },
+            )
+        }
+        composable(CommerceRoutes.MEMBERS) {
+            MembersListScreen(
+                repository = container.dashboardRepository,
+                syncService = container.syncService,
+                snackbarHostState = snackbarHostState,
+                appScope = appScope,
+                onBack = { nav.popBackStack() },
+                onMemberClick = { id -> nav.navigate(CommerceRoutes.memberDetail(id)) },
+            )
+        }
+        composable(
+            route = CommerceRoutes.MEMBER_DETAIL,
+            arguments = listOf(navArgument("memberId") { type = NavType.StringType }),
+        ) { entry ->
+            val memberId = entry.arguments?.getString("memberId").orEmpty()
+            MemberDetailScreen(
+                memberId = memberId,
+                repository = container.dashboardRepository,
+                sessionStore = container.sessionStore,
+                onBack = { nav.popBackStack() },
+                snackbar = snackbarHostState,
             )
         }
         composable(CommerceRoutes.STATS_TRANSACTIONS) {
@@ -236,6 +269,13 @@ fun CommerceTabNavHost(
         composable(CommerceRoutes.ADMIN) {
             AdminPlatformScreen(
                 repository = container.dashboardRepository,
+                onBack = { nav.popBackStack() },
+            )
+        }
+        composable(CommerceRoutes.LOYALTY_NETWORK) {
+            LoyaltyNetworkSettingsScreen(
+                api = container.api,
+                sessionStore = container.sessionStore,
                 onBack = { nav.popBackStack() },
             )
         }

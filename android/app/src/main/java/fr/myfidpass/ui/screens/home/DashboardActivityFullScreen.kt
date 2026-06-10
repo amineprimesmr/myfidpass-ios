@@ -24,14 +24,21 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import fr.myfidpass.data.dto.TransactionDto
 import fr.myfidpass.data.repo.DashboardRepository
+import fr.myfidpass.ui.components.FintechLoadMoreTransactionsButton
+import fr.myfidpass.ui.theme.FintechLightPalette
+import kotlinx.coroutines.launch
+
+private const val ACTIVITY_PAGE_SIZE = 20
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -41,21 +48,54 @@ fun DashboardActivityFullScreen(
     onMemberClick: (String) -> Unit,
 ) {
     val slug = repository.currentSlug()
+    val scope = rememberCoroutineScope()
+    val palette = FintechLightPalette
+    val scrollState = rememberScrollState()
+
     var loading by remember { mutableStateOf(true) }
+    var loadingMore by remember { mutableStateOf(false) }
     var filter by remember { mutableStateOf("all") }
     var transactions by remember { mutableStateOf<List<TransactionDto>>(emptyList()) }
+    var transactionsTotal by remember { mutableIntStateOf(0) }
+
+    val hasMore = transactions.size < transactionsTotal
+
+    val loadMore: () -> Unit = loadMore@{
+        val currentSlug = slug ?: return@loadMore
+        if (loadingMore || !hasMore) return@loadMore
+        scope.launch {
+            loadingMore = true
+            runCatching {
+                val response = repository.businessTransactions(
+                    slug = currentSlug,
+                    limit = ACTIVITY_PAGE_SIZE,
+                    offset = transactions.size,
+                    sort = "desc",
+                    type = if (filter == "all") null else filter,
+                    days = if (filter == "today") 1 else null,
+                )
+                transactionsTotal = response.total ?: transactionsTotal
+                transactions = transactions + response.transactions
+            }
+            loadingMore = false
+        }
+    }
 
     LaunchedEffect(slug, filter) {
-        if (slug == null) return@LaunchedEffect
+        val currentSlug = slug ?: return@LaunchedEffect
         loading = true
+        transactions = emptyList()
+        transactionsTotal = 0
         runCatching {
-            transactions = repository.businessTransactions(
-                slug,
-                limit = 80,
+            val response = repository.businessTransactions(
+                slug = currentSlug,
+                limit = ACTIVITY_PAGE_SIZE,
                 sort = "desc",
                 type = if (filter == "all") null else filter,
                 days = if (filter == "today") 1 else null,
-            ).transactions
+            )
+            transactions = response.transactions
+            transactionsTotal = response.total ?: response.transactions.size
         }
         loading = false
     }
@@ -85,10 +125,18 @@ fun DashboardActivityFullScreen(
             } else if (transactions.isEmpty()) {
                 Text("Aucune opération.", color = MaterialTheme.colorScheme.onSurfaceVariant)
             } else {
-                Column(Modifier.verticalScroll(rememberScrollState())) {
+                Column(Modifier.verticalScroll(scrollState)) {
                     transactions.forEach { t ->
                         ActivityRow(t, onMemberClick)
                         Spacer(Modifier.height(6.dp))
+                    }
+                    if (hasMore) {
+                        Spacer(Modifier.height(4.dp))
+                        FintechLoadMoreTransactionsButton(
+                            palette = palette,
+                            isLoading = loadingMore,
+                            onClick = loadMore,
+                        )
                     }
                 }
             }

@@ -22,6 +22,8 @@ fun viewModelFactory(container: AppContainer): ViewModelProvider.Factory =
                         container.authRepository,
                         container.sessionStore,
                         container.firstLaunchPreferences,
+                        container.syncService,
+                        container.syncService,
                     ) as T
                 modelClass.isAssignableFrom(MerchantOnboardingViewModel::class.java) ->
                     MerchantOnboardingViewModel(container.authRepository) as T

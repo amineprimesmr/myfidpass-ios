@@ -23,12 +23,28 @@ enum StatsFR {
         return f
     }()
 
+    /// Montants de transaction (fil d’activité, fiche membre) — toujours 2 décimales (ex. 13,90 €, pas 13,9 €).
+    private static let transactionEuroFormatter: NumberFormatter = {
+        let f = NumberFormatter()
+        f.numberStyle = .decimal
+        f.locale = Locale(identifier: "fr_FR")
+        f.groupingSeparator = " "
+        f.minimumFractionDigits = 2
+        f.maximumFractionDigits = 2
+        return f
+    }()
+
     static func formatInt(_ n: Int) -> String {
         intFormatter.string(from: NSNumber(value: n)) ?? "\(n)"
     }
 
     static func formatEuro(_ n: Double) -> String {
         euroFormatter.string(from: NSNumber(value: n)) ?? String(format: "%.2f", n)
+    }
+
+    static func formatTransactionEuro(_ n: Double) -> String {
+        transactionEuroFormatter.string(from: NSNumber(value: abs(n)))
+            ?? String(format: "%.2f", abs(n))
     }
 
     static func formatPct(_ pct: Double) -> String {

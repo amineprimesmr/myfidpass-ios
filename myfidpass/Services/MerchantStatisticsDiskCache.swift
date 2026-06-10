@@ -8,7 +8,7 @@
 import Foundation
 
 enum MerchantStatisticsDiskCache {
-    private static let folderName = "MerchantStatistics"
+    private static let folderName = "MerchantStatistics_v2"
     private static let maxMonthsStored = 18
 
     private struct FilePayload: Codable {

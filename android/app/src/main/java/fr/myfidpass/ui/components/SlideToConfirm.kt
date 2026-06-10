@@ -31,8 +31,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import fr.myfidpass.util.HapticHelper
 import kotlin.math.roundToInt
 
 /** Glisser pour confirmer — aligné iOS `SlideToConfirm`. */
@@ -46,6 +48,7 @@ fun SlideToConfirm(
 ) {
     var dragPx by remember { mutableFloatStateOf(0f) }
     var completed by remember { mutableStateOf(false) }
+    val view = LocalView.current
     val trackHeight = 52.dp
 
     BoxWithConstraints(
@@ -99,6 +102,7 @@ fun SlideToConfirm(
                             detectHorizontalDragGestures(
                                 onDragEnd = {
                                     if (dragPx >= maxDrag * 0.92f) {
+                                        HapticHelper.confirm(view)
                                         dragPx = maxDrag
                                         completed = true
                                         onConfirmed()

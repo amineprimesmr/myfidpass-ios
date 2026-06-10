@@ -178,6 +178,8 @@ fun AuthEmailOtpVerificationContent(
 ) {
     val focusRequester = remember { FocusRequester() }
     var resendCountdown by remember { mutableIntStateOf(60) }
+    var blockedAutoSubmitCode by remember { mutableStateOf<String?>(null) }
+    var lastSubmittedCode by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) {
         focusRequester.requestFocus()
@@ -186,6 +188,12 @@ fun AuthEmailOtpVerificationContent(
     LaunchedEffect(isVerifying, showSuccessCelebration) {
         if (!isVerifying && !showSuccessCelebration) {
             focusRequester.requestFocus()
+        }
+    }
+
+    LaunchedEffect(errorMessage) {
+        if (!errorMessage.isNullOrBlank()) {
+            lastSubmittedCode?.let { blockedAutoSubmitCode = it }
         }
     }
 
@@ -205,7 +213,19 @@ fun AuthEmailOtpVerificationContent(
             onCodeChange(filtered)
             return@LaunchedEffect
         }
-        if (filtered.length == 6 && !interactionLocked && !isVerifying && !showSuccessCelebration) {
+        if (filtered.length < 6) {
+            if (filtered.isNotEmpty()) {
+                blockedAutoSubmitCode = null
+            }
+            return@LaunchedEffect
+        }
+        if (
+            !interactionLocked &&
+            !isVerifying &&
+            !showSuccessCelebration &&
+            filtered != blockedAutoSubmitCode
+        ) {
+            lastSubmittedCode = filtered
             onCodeComplete()
         }
     }
@@ -253,7 +273,15 @@ fun AuthEmailOtpVerificationContent(
                         fontSize = 14.sp,
                     )
                 } else {
-                    TextButton(onClick = onResend, enabled = !isSendingCode) {
+                    TextButton(
+                        onClick = {
+                            blockedAutoSubmitCode = null
+                            lastSubmittedCode = null
+                            onCodeChange("")
+                            onResend()
+                        },
+                        enabled = !isSendingCode,
+                    ) {
                         Text(if (isSendingCode) "Envoi…" else "Renvoyer le code")
                     }
                 }

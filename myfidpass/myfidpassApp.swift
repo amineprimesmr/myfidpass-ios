@@ -18,6 +18,7 @@ struct myfidpassApp: App {
     @StateObject private var appState = AppState.shared
 
     init() {
+        MerchantUXFeedback.shared.prepare()
         let auth = AuthService()
         let container = PersistenceController.shared.container
         _authService = StateObject(wrappedValue: auth)

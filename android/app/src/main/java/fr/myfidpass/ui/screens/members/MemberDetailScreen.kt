@@ -374,7 +374,7 @@ fun MemberDetailScreen(
                 },
                 enabled = !actionLoading && slug != null && removeInput.isNotBlank(),
                 modifier = Modifier.fillMaxWidth(),
-            ) { Text("Retirer des points") }
+            ) { Text("Retirer") }
             Spacer(Modifier.height(12.dp))
             OutlinedButton(
                 onClick = {

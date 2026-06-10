@@ -61,6 +61,7 @@ struct CafeDesArtsCardPreview: View {
     var restantsCaption: String = "Restants"
     var compact: Bool = false
     var onEditZoneTap: ((CardPreviewEditZone) -> Void)? = nil
+    var onCompletionPillTap: ((CardPreviewEditZone) -> Void)? = nil
     /// URL encodée dans le QR (page carte fidélité). Si `nil`, QR de démonstration.
     var fidelityQRPayloadURL: String? = nil
     var completionHighlightZones: Set<CardPreviewEditZone> = []
@@ -214,7 +215,7 @@ struct CafeDesArtsCardPreview: View {
                             core
                                 .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
                                 .overlay {
-                                    if !completionHighlightZones.isEmpty, let onTap = onEditZoneTap {
+                                    if !completionHighlightZones.isEmpty, let onTap = onCompletionPillTap ?? onEditZoneTap {
                                         CardPreviewCompletionPillsOverlay(
                                             cardWidth: w,
                                             totalHeight: h,
@@ -306,7 +307,7 @@ struct CafeDesArtsCardPreview: View {
                 HStack(alignment: .top, spacing: 0) {
                     CardPreviewTappableZone(
                         zone: .logoBand,
-                        accessibilityLabel: "Modifier le logo ou le texte du bandeau",
+                        accessibilityLabel: "Agrandir le logo",
                         onEditZoneTap: onEditZoneTap
                     ) {
                         logoInStrip(maxWidth: logoSlot.maxWidth, maxHeight: logoSlot.maxHeight, cardWidth: cardWidth)

@@ -36,7 +36,13 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -44,6 +50,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
+import fr.myfidpass.util.HapticHelper
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -60,6 +68,7 @@ import fr.myfidpass.ui.components.ImageCropSpec
 import fr.myfidpass.ui.components.GoogleWalletLoyaltyPreviewAndroid
 import fr.myfidpass.ui.mycard.CardMissingRequirement
 import fr.myfidpass.ui.mycard.CardPreviewEditZone
+import fr.myfidpass.ui.mycard.MyCardCompletionRequirements
 import fr.myfidpass.ui.mycard.MyCardDraftState
 import fr.myfidpass.ui.mycard.StampIconCatalog
 import fr.myfidpass.ui.mycard.applySavedMediaFrom
@@ -85,13 +94,18 @@ fun MyCardScreen(
 ) {
     val slug = sessionStore.currentBusinessSlug.orEmpty()
     val context = LocalContext.current
+    val view = LocalView.current
     val scope = rememberCoroutineScope()
     var draft by remember { mutableStateOf(MyCardDraftState()) }
     var baseline by remember { mutableStateOf<MyCardDraftState?>(null) }
     var saving by remember { mutableStateOf(false) }
     var walletLoading by remember { mutableStateOf(false) }
     var activeZone by remember { mutableStateOf<CardPreviewEditZone?>(null) }
+    var cardLogoZoomFocused by remember { mutableStateOf(false) }
     var showLeaveAlert by remember { mutableStateOf(false) }
+    var showProgramSwitchConfirm by remember { mutableStateOf(false) }
+    var pendingProgramType by remember { mutableStateOf<String?>(null) }
+    var pendingProgramSwitchMemberCount by remember { mutableStateOf(0) }
     var cropUri by remember { mutableStateOf<Uri?>(null) }
     var cropSpec by remember { mutableStateOf(ImageCropSpec.WALLET_STRIP_LOGO) }
     var showCrop by remember { mutableStateOf(false) }
@@ -172,8 +186,9 @@ fun MyCardScreen(
         }
     }
     val rewardsConfigurationComplete = !missing.contains(CardMissingRequirement.Recompenses)
+    val cardPreviewSnapshot = slug.takeIf { it.isNotBlank() }?.let { CardPreviewSnapshotStore.load(context, it) }
     val cardConfiguredHint = slug.isNotBlank() &&
-        MyCardCompletionRequirements.isConfigured(viewModel.settings, snapshot)
+        MyCardCompletionRequirements.isConfigured(viewModel.settings, cardPreviewSnapshot)
     val shouldShowCompletionPills = missing.isNotEmpty() &&
         !(cardConfiguredHint && viewModel.settings == null)
 
@@ -196,6 +211,10 @@ fun MyCardScreen(
     }
 
     fun requestBack() {
+        if (cardLogoZoomFocused) {
+            cardLogoZoomFocused = false
+            return
+        }
         if (hasUnsaved) showLeaveAlert = true else onBack()
     }
 
@@ -268,6 +287,7 @@ fun MyCardScreen(
                 CardPreviewSnapshotStore.save(context, slug, snap)
                 baseline = draft.snapshotForDirtyCompare()
             }.onSuccess {
+                HapticHelper.save(view)
                 snackbar.showSnackbar("Carte enregistrée")
                 PostCardFlyerPromoEligibility.queuePresentationOnMerchantHome(context, slug)
                 onDone()
@@ -278,13 +298,71 @@ fun MyCardScreen(
         }
     }
 
-    fun handleZoneTap(zone: CardPreviewEditZone) {
+    fun openCustomizationZone(zone: CardPreviewEditZone) {
         if (zone == CardPreviewEditZone.QR_CODE) {
             openInCustomTab(context, fidelityUrl)
             return
         }
+        if (zone == CardPreviewEditZone.LOGO_BAND) {
+            cardLogoZoomFocused = true
+        } else {
+            cardLogoZoomFocused = false
+        }
         activeZone = zone
     }
+
+    fun handleZoneTap(zone: CardPreviewEditZone) {
+        if (zone == CardPreviewEditZone.LOGO_BAND) {
+            openCustomizationZone(zone)
+            return
+        }
+        if (cardLogoZoomFocused) {
+            cardLogoZoomFocused = false
+        }
+        openCustomizationZone(zone)
+    }
+
+    fun programModeLabel(type: String): String =
+        if (type.trim().lowercase() == "stamps") "Tampons" else "Points"
+
+    fun trySwitchProgramType(next: String) {
+        val current = draft.programType.trim().lowercase()
+        val normalized = next.trim().lowercase()
+        if (current == normalized) return
+        scope.launch {
+            val localCount = if (slug.isNotBlank()) {
+                runCatching { syncService.memberDao.countForSlug(slug) }.getOrDefault(0)
+            } else {
+                0
+            }
+            val statsCount = viewModel.stats?.membersCount ?: 0
+            val memberCount = maxOf(localCount, statsCount)
+            if (memberCount > 0) {
+                pendingProgramType = normalized
+                pendingProgramSwitchMemberCount = memberCount
+                showProgramSwitchConfirm = true
+            } else {
+                val updated = draft.copy(programType = normalized)
+                updated.applyProgramTypeSideEffects(normalized)
+                draft = updated
+            }
+        }
+    }
+
+    fun confirmProgramSwitch() {
+        val next = pendingProgramType ?: return
+        val updated = draft.copy(programType = next)
+        updated.applyProgramTypeSideEffects(next)
+        draft = updated
+        pendingProgramType = null
+        showProgramSwitchConfirm = false
+    }
+
+    val logoZoomScale by animateFloatAsState(
+        targetValue = if (cardLogoZoomFocused) 1.75f else 1f,
+        animationSpec = spring(dampingRatio = 0.86f, stiffness = 420f),
+        label = "cardLogoZoom",
+    )
 
     val pageBg = Color(0xFFF2F2F7)
 
@@ -310,11 +388,20 @@ fun MyCardScreen(
                 color = Color.Black,
             )
             if (hasUnsaved) {
-                TextButton(onClick = { saveCard() }, enabled = !saving) {
+                IconButton(onClick = { saveCard() }, enabled = !saving) {
                     if (saving) {
-                        CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(18.dp))
+                        CircularProgressIndicator(
+                            strokeWidth = 2.dp,
+                            modifier = Modifier.size(20.dp),
+                            color = Color(0xFF007AFF),
+                        )
                     } else {
-                        Text("Enregistrer", fontWeight = FontWeight.SemiBold, color = Color(0xFF007AFF))
+                        Icon(
+                            Icons.Filled.Check,
+                            contentDescription = "Enregistrer",
+                            tint = Color(0xFF007AFF),
+                            modifier = Modifier.size(22.dp),
+                        )
                     }
                 }
             } else {
@@ -342,11 +429,7 @@ fun MyCardScreen(
                 ) {
                     SegmentedButton(
                         selected = !draft.isStampsMode,
-                        onClick = {
-                            val next = draft.copy(programType = "points")
-                            next.applyProgramTypeSideEffects("points")
-                            draft = next
-                        },
+                        onClick = { trySwitchProgramType("points") },
                         shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
                         colors = SegmentedButtonDefaults.colors(
                             activeContainerColor = Color.White,
@@ -355,11 +438,7 @@ fun MyCardScreen(
                     ) { Text("Points") }
                     SegmentedButton(
                         selected = draft.isStampsMode,
-                        onClick = {
-                            val next = draft.copy(programType = "stamps")
-                            next.applyProgramTypeSideEffects("stamps")
-                            draft = next
-                        },
+                        onClick = { trySwitchProgramType("stamps") },
                         shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
                         colors = SegmentedButtonDefaults.colors(
                             activeContainerColor = Color.White,
@@ -369,37 +448,50 @@ fun MyCardScreen(
                 }
             }
 
-            GoogleWalletLoyaltyPreviewAndroid(
-                businessName = draft.displayName.ifBlank { "Ma Carte Fidélité" },
-                qrPayload = fidelityUrl,
-                logoUrl = logoPreviewModel,
-                backgroundHex = draft.primaryHex,
-                labelHex = draft.labelHex,
-                accentHex = draft.accentHex,
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-                samplePoints = draft.previewPoints,
-                sampleMemberLabel = "Prévisualisation",
-                programType = draft.programType,
-                requiredStamps = draft.requiredStamps,
-                previewStampsCount = draft.previewStamps,
-                stampEmoji = draft.stampEmoji,
-                stripDisplayMode = draft.stripDisplayMode,
-                stripText = draft.stripText,
-                backgroundImageUrl = backgroundPreviewModel,
-                stampHeroImageUrl = null,
-                pendingBackgroundDataUrl = null,
-                pendingLogoDataUrl = null,
-                pendingStampIconDataUrl = draft.pendingStampIconDataUrl,
-                stampIconRemoteUrl = stampIconApiUrl,
-                stampMidRewardLabel = draft.stampMidRewardLabel,
-                stampRewardLabel = draft.stampRewardLabel,
-                startGameRewardLabel = draft.startGameRewardLabel,
-                tierPoints = draft.tierPoints,
-                tierLabels = draft.tierLabels,
-                authToken = sessionStore.accessToken,
-                completionHighlightZones = if (shouldShowCompletionPills) completionZones else emptySet(),
-                onZoneTap = ::handleZoneTap,
-            )
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = if (cardLogoZoomFocused) 240.dp else 0.dp)
+                    .padding(horizontal = 14.dp, vertical = 12.dp)
+                    .graphicsLayer {
+                        scaleX = logoZoomScale
+                        scaleY = logoZoomScale
+                        transformOrigin = TransformOrigin(0f, 0f)
+                    },
+            ) {
+                GoogleWalletLoyaltyPreviewAndroid(
+                    businessName = draft.displayName.ifBlank { "Ma Carte Fidélité" },
+                    qrPayload = fidelityUrl,
+                    logoUrl = logoPreviewModel,
+                    backgroundHex = draft.primaryHex,
+                    labelHex = draft.labelHex,
+                    accentHex = draft.accentHex,
+                    modifier = Modifier.fillMaxWidth(),
+                    samplePoints = draft.previewPoints,
+                    sampleMemberLabel = "Prévisualisation",
+                    programType = draft.programType,
+                    requiredStamps = draft.requiredStamps,
+                    previewStampsCount = draft.previewStamps,
+                    stampEmoji = draft.stampEmoji,
+                    stripDisplayMode = draft.stripDisplayMode,
+                    stripText = draft.stripText,
+                    backgroundImageUrl = backgroundPreviewModel,
+                    stampHeroImageUrl = null,
+                    pendingBackgroundDataUrl = null,
+                    pendingLogoDataUrl = null,
+                    pendingStampIconDataUrl = draft.pendingStampIconDataUrl,
+                    stampIconRemoteUrl = stampIconApiUrl,
+                    stampMidRewardLabel = draft.stampMidRewardLabel,
+                    stampRewardLabel = draft.stampRewardLabel,
+                    startGameRewardLabel = draft.startGameRewardLabel,
+                    tierPoints = draft.tierPoints,
+                    tierLabels = draft.tierLabels,
+                    authToken = sessionStore.accessToken,
+                    completionHighlightZones = if (shouldShowCompletionPills) completionZones else emptySet(),
+                    onZoneTap = ::handleZoneTap,
+                    onCompletionPillTap = ::openCustomizationZone,
+                )
+            }
             Text(
                 "Aperçu Google Wallet — le rendu final s’affiche dans l’app Wallet.",
                 modifier = Modifier
@@ -447,7 +539,10 @@ fun MyCardScreen(
             zone = zone,
             draft = draft,
             onDraftChange = { draft = it },
-            onDismiss = { activeZone = null },
+            onDismiss = {
+                activeZone = null
+                cardLogoZoomFocused = false
+            },
             onApplyExamples = { applyRewardExamples() },
             onSaveRewards = { saveRewardsOnly(onDone = { activeZone = null }) },
             canSaveRewards = rewardsConfigurationComplete,
@@ -511,6 +606,37 @@ fun MyCardScreen(
                 }
                 cropUri = null
                 showCrop = false
+            },
+        )
+    }
+
+    if (showProgramSwitchConfirm) {
+        val fromLabel = programModeLabel(draft.programType)
+        val toLabel = programModeLabel(pendingProgramType ?: draft.programType)
+        val n = pendingProgramSwitchMemberCount
+        AlertDialog(
+            onDismissRequest = {
+                showProgramSwitchConfirm = false
+                pendingProgramType = null
+            },
+            title = { Text("Changer le mode ?") },
+            text = {
+                Text(
+                    "Vous avez $n client${if (n > 1) "s" else ""}. " +
+                        "Passer de $fromLabel à $toLabel remet tous les soldes à zéro et efface l’historique. " +
+                        "Irréversible — enregistrez ensuite la carte.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { confirmProgramSwitch() }) {
+                    Text("Confirmer", color = Color(0xFFFF3B30))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showProgramSwitchConfirm = false
+                    pendingProgramType = null
+                }) { Text("Annuler") }
             },
         )
     }

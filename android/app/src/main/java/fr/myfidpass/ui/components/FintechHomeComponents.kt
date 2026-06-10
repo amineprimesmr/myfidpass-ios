@@ -16,9 +16,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.TrendingDown
 import androidx.compose.material.icons.automirrored.filled.TrendingUp
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Receipt
 import androidx.compose.material.icons.outlined.History
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -84,6 +86,49 @@ fun FintechTransactionsHeader(
 }
 
 @Composable
+fun FintechLoadMoreTransactionsButton(
+    palette: DashboardFintechPalette = FintechLightPalette,
+    isLoading: Boolean = false,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(MerchantDesignSystem.radiusTransactionPill))
+            .background(palette.transactionPillBg.copy(alpha = 0.65f))
+            .clickable(enabled = !isLoading, onClick = onClick)
+            .padding(horizontal = 18.dp, vertical = 14.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (isLoading) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(18.dp),
+                strokeWidth = 2.dp,
+                color = palette.secondaryText,
+            )
+            Spacer(Modifier.size(8.dp))
+        }
+        Text(
+            if (isLoading) "Chargement…" else "Afficher plus",
+            style = MaterialTheme.typography.bodyLarge,
+            fontWeight = FontWeight.SemiBold,
+            color = palette.accentBlue,
+        )
+        if (!isLoading) {
+            Spacer(Modifier.size(4.dp))
+            Icon(
+                Icons.Default.KeyboardArrowDown,
+                contentDescription = null,
+                tint = palette.accentBlue.copy(alpha = 0.85f),
+                modifier = Modifier.size(20.dp),
+            )
+        }
+    }
+}
+
+@Composable
 fun FintechTransactionsEmptyState(
     palette: DashboardFintechPalette = FintechLightPalette,
     modifier: Modifier = Modifier,
@@ -117,6 +162,7 @@ fun FintechTransactionPill(
     transaction: TransactionDto,
     palette: DashboardFintechPalette = FintechLightPalette,
     isPointsProgram: Boolean = true,
+    pointsPerEuro: Int? = null,
     modifier: Modifier = Modifier,
 ) {
     val kind = transaction.type?.lowercase().orEmpty()
@@ -132,11 +178,16 @@ fun FintechTransactionPill(
         ?: transaction.type
         ?: "Opération"
     val rewardLabel = MerchantTransactionEventLabels.rewardLabelFromMetadata(transaction.metadata)
+    val isVisit = transaction.metadata?.contains("\"visit\":true") == true
+        || transaction.metadata?.contains("\"visit\": true") == true
     val ptsLabel = MerchantTransactionEventLabels.dashboardAmountLine(
         type = transaction.type,
         points = transaction.points,
         isPointsProgram = isPointsProgram,
         rewardLabel = rewardLabel,
+        metadata = transaction.metadata,
+        isVisit = isVisit,
+        pointsPerEuro = pointsPerEuro,
     )
     Row(
         modifier = modifier

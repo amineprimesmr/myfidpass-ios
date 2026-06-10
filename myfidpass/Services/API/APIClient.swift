@@ -50,6 +50,8 @@ enum RefreshTokenOutcome: Sendable, Equatable {
     case missingRefreshToken
     /// HTTP 401 : refresh révoqué, expiré ou déjà consommé (rotation).
     case invalidToken
+    /// Compte supprimé côté serveur (`user_not_found` / `session_revoked`) — déconnexion immédiate.
+    case sessionRevoked
     /// Réseau, 5xx, timeout : ne jamais effacer la session locale tant que le refresh existe encore.
     case transientFailure
 }
@@ -78,6 +80,16 @@ struct GooglePlaceAvailabilityResult: Sendable {
     let placeAvailable: Bool
     /// Texte d’erreur API lorsque `placeAvailable` est false.
     let userFacingMessage: String?
+}
+
+enum AccountSignInAuthMethod: String, Sendable {
+    case emailOtp = "email_otp"
+    case password
+}
+
+struct AccountSignInProbeResult: Sendable {
+    let accountExists: Bool
+    let authMethod: AccountSignInAuthMethod
 }
 
 final class APIClient: @unchecked Sendable {
@@ -164,8 +176,26 @@ final class APIClient: @unchecked Sendable {
         }
     }
 
+    /// Corps JSON 401 indiquant une session invalidée côté serveur (suppression compte admin, reset BDD).
+    private static func isSessionRevokedPayload(_ data: Data) -> Bool {
+        struct Body: Decodable { let code: String? }
+        guard let b = try? JSONDecoder().decode(Body.self, from: data),
+              let raw = b.code?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty else { return false }
+        return raw == "session_revoked" || raw == "user_not_found" || raw == "account_deleted"
+    }
+
+    private func terminateSessionIfServerRevoked(data: Data, endpoint: APIEndpoint) {
+        guard !endpoint.skipsClientSessionBootstrap, Self.isSessionRevokedPayload(data) else { return }
+        terminateSessionAfterAuthFailure()
+    }
+
     /// Ne déconnecte pas sur échec réseau transitoire au réveil (5G affiché mais socket pas prête).
     private func terminateSessionAfterAuthFailureIfAppropriate(afterRefresh refresh: RefreshTokenOutcome?) {
+        if refresh == .sessionRevoked {
+            terminateSessionAfterAuthFailure()
+            return
+        }
         if Self.accessTokenStillWithinValidityWindow() { return }
         if refresh == .transientFailure { return }
         terminateSessionAfterAuthFailure()
@@ -215,6 +245,7 @@ final class APIClient: @unchecked Sendable {
                 throw APIError.decoding(error)
             }
         case 401:
+            terminateSessionIfServerRevoked(data: data, endpoint: endpoint)
             // Tenter un refresh avant de déconnecter (plusieurs essais : rotation / réseau transitoire).
             let refreshOutcome = await refreshAfterUnauthorized()
             if case .success(let newToken) = refreshOutcome {
@@ -236,6 +267,7 @@ final class APIClient: @unchecked Sendable {
                 }
                 guard let retryHttp = retryResponse as? HTTPURLResponse else { throw APIError.noData }
                 if retryHttp.statusCode == 401 {
+                    terminateSessionIfServerRevoked(data: retryData, endpoint: endpoint)
                     if !endpoint.skipsClientSessionBootstrap {
                         terminateSessionAfterAuthFailureIfAppropriate(afterRefresh: refreshOutcome)
                     }
@@ -346,7 +378,10 @@ final class APIClient: @unchecked Sendable {
         // Trop étroite → risque de 401 si l’horloge client/serveur diverge légèrement.
         let leewayBeforeExpiry: TimeInterval = 120
         guard exp.timeIntervalSinceNow < leewayBeforeExpiry else { return }
-        _ = await tryRefreshToken()
+        let outcome = await tryRefreshToken()
+        if outcome == .sessionRevoked {
+            terminateSessionAfterAuthFailure()
+        }
     }
 
     /// Tente de renouveler l'access token (sérialisé — une seule rotation à la fois).
@@ -360,6 +395,7 @@ final class APIClient: @unchecked Sendable {
         for attempt in 0..<3 {
             let outcome = await tryRefreshToken()
             if case .success = outcome { return outcome }
+            if outcome == .sessionRevoked { return outcome }
             if outcome == .invalidToken || outcome == .missingRefreshToken { return outcome }
             guard attempt < 2 else { return outcome }
             let delayNs = UInt64(450_000_000 * UInt64(attempt + 1))
@@ -386,6 +422,9 @@ final class APIClient: @unchecked Sendable {
             guard let http = response as? HTTPURLResponse else { return .transientFailure }
             guard http.statusCode == 200 else {
                 if http.statusCode == 401 {
+                    if Self.isSessionRevokedPayload(data) {
+                        return .sessionRevoked
+                    }
                     // Refresh révoqué ou déjà consommé (rotation, ex. WebView paiement) : ne pas effacer le refresh
                     // tant que l’access JWT est encore utilisable — évite une fenêtre où l’app croit être connectée sans moyen de récupérer.
                     if !Self.accessTokenStillWithinValidityWindow() {
@@ -413,6 +452,31 @@ final class APIClient: @unchecked Sendable {
         }
     }
 
+    /// Réessaie les requêtes scan / caisse quand Railway ou le réseau coupe brièvement (502, timeout).
+    func requestWithTransientRetry<T: Decodable>(
+        _ endpoint: APIEndpoint,
+        maxAttempts: Int = 3,
+        responseType: T.Type = T.self
+    ) async throws -> T {
+        let attempts = max(1, maxAttempts)
+        var lastError: Error = APIError.noData
+        for attempt in 0..<attempts {
+            if attempt > 0 {
+                try await Task.sleep(nanoseconds: UInt64(400_000_000 * UInt64(attempt)))
+            }
+            do {
+                return try await request(endpoint, responseType: responseType)
+            } catch {
+                lastError = error
+                if APIError.isTransientInfrastructureFailure(error), attempt < attempts - 1 {
+                    continue
+                }
+                throw error
+            }
+        }
+        throw lastError
+    }
+
     /// Refresh proactif avec backoff court (réveil app / retour premier plan).
     func ensureValidAccessTokenWithRetry(maxAttempts: Int = 3) async {
         let attempts = max(1, maxAttempts)
@@ -421,6 +485,10 @@ final class APIClient: @unchecked Sendable {
             if Self.accessTokenStillWithinValidityWindow() { return }
             let outcome = await tryRefreshToken()
             if case .success = outcome { return }
+            if outcome == .sessionRevoked {
+                terminateSessionAfterAuthFailure()
+                return
+            }
             if outcome == .invalidToken || outcome == .missingRefreshToken { return }
             guard attempt < attempts - 1 else { return }
             let delayNs = UInt64(350_000_000 * UInt64(attempt + 1))
@@ -500,6 +568,7 @@ final class APIClient: @unchecked Sendable {
         case 200...299:
             return data
         case 401:
+            terminateSessionIfServerRevoked(data: data, endpoint: endpoint)
             let refreshOutcome = await refreshAfterUnauthorized()
             if case .success(let newToken) = refreshOutcome {
                 var retryRequest = try endpoint.urlRequest(base: APIConfig.baseURL, encoder: Self.makeJSONEncoder())
@@ -514,6 +583,7 @@ final class APIClient: @unchecked Sendable {
                 guard let retryHttp = retryResponse as? HTTPURLResponse else { throw APIError.noData }
                 if retryHttp.statusCode >= 200, retryHttp.statusCode < 300 { return retryData }
                 if retryHttp.statusCode == 401 {
+                    terminateSessionIfServerRevoked(data: retryData, endpoint: endpoint)
                     if !endpoint.skipsClientSessionBootstrap {
                         terminateSessionAfterAuthFailureIfAppropriate(afterRefresh: refreshOutcome)
                     }
@@ -569,6 +639,7 @@ final class APIClient: @unchecked Sendable {
         case 200...299:
             return (data, http)
         case 401:
+            terminateSessionIfServerRevoked(data: data, endpoint: endpoint)
             let refreshOutcome = await refreshAfterUnauthorized()
             if case .success(let newToken) = refreshOutcome {
                 var retryRequest = try endpoint.urlRequest(base: APIConfig.baseURL, encoder: Self.makeJSONEncoder())
@@ -583,6 +654,7 @@ final class APIClient: @unchecked Sendable {
                 guard let retryHttp = retryResponse as? HTTPURLResponse else { throw APIError.noData }
                 if retryHttp.statusCode >= 200, retryHttp.statusCode < 300 { return (retryData, retryHttp) }
                 if retryHttp.statusCode == 401 {
+                    terminateSessionIfServerRevoked(data: retryData, endpoint: endpoint)
                     if !endpoint.skipsClientSessionBootstrap {
                         terminateSessionAfterAuthFailureIfAppropriate(afterRefresh: refreshOutcome)
                     }
@@ -635,6 +707,7 @@ final class APIClient: @unchecked Sendable {
         case 200...299:
             return data
         case 401:
+            terminateSessionIfServerRevoked(data: data, endpoint: endpoint)
             let refreshOutcome = await refreshAfterUnauthorized()
             if case .success(let newToken) = refreshOutcome {
                 var retryRequest = try endpoint.urlRequest(base: APIConfig.baseURL, encoder: Self.makeJSONEncoder())
@@ -648,6 +721,7 @@ final class APIClient: @unchecked Sendable {
                 guard let retryHttp = retryResponse as? HTTPURLResponse else { throw APIError.noData }
                 if retryHttp.statusCode >= 200, retryHttp.statusCode < 300 { return retryData }
                 if retryHttp.statusCode == 401 {
+                    terminateSessionIfServerRevoked(data: retryData, endpoint: endpoint)
                     if !endpoint.skipsClientSessionBootstrap {
                         terminateSessionAfterAuthFailureIfAppropriate(afterRefresh: refreshOutcome)
                     }
@@ -706,21 +780,26 @@ final class APIClient: @unchecked Sendable {
         return try Self.parseGooglePlaceAvailability(from: data)
     }
 
-    /// Vérifie `account_exists` sans `Decodable` strict (évite les échecs si le JSON varie ou si le décodage rejette un type mineur).
-    func fetchAccountExistsProbe(identifier: String) async throws -> Bool {
+    /// Vérifie existence + méthode de connexion (`auth_method` côté API).
+    func fetchAccountSignInProbe(identifier: String) async throws -> AccountSignInProbeResult {
         let norm = identifier.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !norm.isEmpty else { throw APIError.noData }
         if norm.contains("@") {
             do {
-                return try await fetchAccountExistsPOST(.authCheckEmail(email: norm))
+                return try await fetchAccountSignInPOST(.authCheckEmail(email: norm))
             } catch {
-                return try await fetchAccountExistsPOST(.authCheckIdentifier(identifier: norm))
+                return try await fetchAccountSignInPOST(.authCheckIdentifier(identifier: norm))
             }
         }
-        return try await fetchAccountExistsPOST(.authCheckIdentifier(identifier: norm))
+        return try await fetchAccountSignInPOST(.authCheckIdentifier(identifier: norm))
     }
 
-    private func fetchAccountExistsPOST(_ endpoint: APIEndpoint) async throws -> Bool {
+    /// Vérifie `account_exists` sans `Decodable` strict (évite les échecs si le JSON varie ou si le décodage rejette un type mineur).
+    func fetchAccountExistsProbe(identifier: String) async throws -> Bool {
+        try await fetchAccountSignInProbe(identifier: identifier).accountExists
+    }
+
+    private func fetchAccountSignInPOST(_ endpoint: APIEndpoint) async throws -> AccountSignInProbeResult {
         var req = try endpoint.urlRequest(base: APIConfig.baseURL, encoder: Self.makeJSONEncoder())
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -736,7 +815,26 @@ final class APIClient: @unchecked Sendable {
             throw Self.resolveNonSuccessHTTPError(statusCode: http.statusCode, data: data)
         }
         guard !data.isEmpty else { throw APIError.noData }
-        return try Self.parseBoolAccountExists(from: data)
+        return try Self.parseAccountSignInProbe(from: data)
+    }
+
+    private static func parseAccountSignInProbe(from data: Data) throws -> AccountSignInProbeResult {
+        let obj = try JSONSerialization.jsonObject(with: data, options: [])
+        guard let dict = obj as? [String: Any] else {
+            throw APIError.decoding(
+                NSError(domain: "myfidpass.accountSignInProbe", code: 0, userInfo: [NSLocalizedDescriptionKey: "Réponse JSON inattendue"])
+            )
+        }
+        let exists = try parseBoolAccountExists(from: data)
+        let rawMethod = dict["auth_method"] ?? dict["authMethod"]
+        let method: AccountSignInAuthMethod
+        if let s = rawMethod as? String {
+            let t = s.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            method = t == "password" ? .password : .emailOtp
+        } else {
+            method = .emailOtp
+        }
+        return AccountSignInProbeResult(accountExists: exists, authMethod: method)
     }
 
     private static func parseGooglePlaceAvailability(from data: Data) throws -> GooglePlaceAvailabilityResult {

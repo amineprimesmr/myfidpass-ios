@@ -74,12 +74,26 @@ data class BusinessDto(
     @SerialName("organization_name") val organizationName: String? = null,
     @SerialName("created_at") val createdAt: String? = null,
     @SerialName("dashboard_token") val dashboardToken: String? = null,
-)
+    @SerialName("loyalty_group_id") val loyaltyGroupId: String? = null,
+) {
+    val isInLoyaltyNetwork: Boolean
+        get() = !loyaltyGroupId.isNullOrBlank()
+}
 
 @Serializable
 data class SubscriptionDto(
     val status: String? = null,
     @SerialName("plan_id") val planId: String? = null,
+)
+
+@Serializable
+data class MerchantEntitlementsDto(
+    @SerialName("allowed_businesses") val allowedBusinesses: Int? = null,
+    @SerialName("used_businesses") val usedBusinesses: Int? = null,
+    @SerialName("can_create_business")
+    @Serializable(with = FlexibleOptionalBooleanSerializer::class)
+    val canCreateBusiness: Boolean? = null,
+    @SerialName("billing_provider") val billingProvider: String? = null,
 )
 
 @Serializable
@@ -96,6 +110,7 @@ data class AuthLoginResponse(
     @Serializable(with = FlexibleOptionalBooleanSerializer::class)
     val hasPaidMerchantSubscription: Boolean? = null,
     @SerialName("merchant_trial_ends_at") val merchantTrialEndsAt: String? = null,
+    val entitlements: MerchantEntitlementsDto? = null,
 )
 
 @Serializable
@@ -110,6 +125,7 @@ data class AuthRefreshResponse(
     @Serializable(with = FlexibleOptionalBooleanSerializer::class)
     val hasPaidMerchantSubscription: Boolean? = null,
     @SerialName("merchant_trial_ends_at") val merchantTrialEndsAt: String? = null,
+    val entitlements: MerchantEntitlementsDto? = null,
 )
 
 @Serializable
@@ -124,6 +140,7 @@ data class AuthMeResponse(
     @Serializable(with = FlexibleOptionalBooleanSerializer::class)
     val hasPaidMerchantSubscription: Boolean? = null,
     @SerialName("merchant_trial_ends_at") val merchantTrialEndsAt: String? = null,
+    val entitlements: MerchantEntitlementsDto? = null,
 )
 
 @Serializable

@@ -102,7 +102,9 @@ struct MyCardEditView: View {
                     onCancel: { imageCropPayload = nil },
                     onComplete: { cropped in
                         imageCropPayload = nil
-                        let path = CardLogoStorage.saveImage(cropped)
+                        let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                        guard !slug.isEmpty else { return }
+                        let path = CardLogoStorage.saveImage(cropped, slug: slug)
                         logoURL = path ?? ""
                     }
                 )

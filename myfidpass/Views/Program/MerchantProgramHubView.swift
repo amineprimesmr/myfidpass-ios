@@ -101,11 +101,8 @@ struct MerchantProgramHubView: View {
         .preferredColorScheme(.dark)
         .toolbar(.hidden, for: .navigationBar)
         .navigationDestination(isPresented: $navigateToMyCard) {
-            MyCardView(context: viewContext)
+            MyCardView(context: viewContext, businessSlug: resolvedMerchantFlyerSlug)
                 .environmentObject(syncService)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .myfidpassOpenProgramMyCard)) { _ in
-            navigateToMyCard = true
         }
         .onAppear {
             if seedOpenMyCard, !didApplyOpenMyCardSeed {

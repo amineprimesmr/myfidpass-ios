@@ -59,10 +59,10 @@ class RefreshTokenCoordinator(
                 return if (JwtAccessExpiry.stillWithinValidityWindow(sessionStore.accessToken)) {
                     RefreshTokenOutcome.Success
                 } else {
-                    performRefresh(rt)
+                    terminateIfSessionRevoked(performRefresh(rt))
                 }
             }
-            return performRefresh(rt)
+            return terminateIfSessionRevoked(performRefresh(rt))
         }
     }
 
@@ -76,7 +76,13 @@ class RefreshTokenCoordinator(
                 .header("Accept", "application/json")
                 .build()
             refreshClient.newCall(refreshReq).execute().use { r ->
-                if (r.code == 401) return RefreshTokenOutcome.InvalidToken
+                if (r.code == 401) {
+                    val errBody = r.body?.string().orEmpty()
+                    if (AuthApiErrorCodes.isSessionRevoked(errBody)) {
+                        return RefreshTokenOutcome.SessionRevoked
+                    }
+                    return RefreshTokenOutcome.InvalidToken
+                }
                 if (!r.isSuccessful) return RefreshTokenOutcome.TransientFailure
                 val respBody = r.body?.string()
                 if (respBody.isNullOrEmpty()) return RefreshTokenOutcome.TransientFailure
@@ -103,6 +109,7 @@ class RefreshTokenCoordinator(
     }
 
     fun shouldTerminateSession(outcome: RefreshTokenOutcome): Boolean {
+        if (outcome == RefreshTokenOutcome.SessionRevoked) return true
         if (JwtAccessExpiry.stillWithinValidityWindow(sessionStore.accessToken)) return false
         if (outcome == RefreshTokenOutcome.TransientFailure) return false
         return outcome == RefreshTokenOutcome.InvalidToken ||
@@ -111,7 +118,18 @@ class RefreshTokenCoordinator(
 
     fun terminateSessionIfAppropriate(outcome: RefreshTokenOutcome) {
         if (!shouldTerminateSession(outcome)) return
+        forceTerminateSession()
+    }
+
+    fun forceTerminateSession() {
         sessionStore.clearSession()
         SessionEvents.notifyInvalidated()
+    }
+
+    private fun terminateIfSessionRevoked(outcome: RefreshTokenOutcome): RefreshTokenOutcome {
+        if (outcome == RefreshTokenOutcome.SessionRevoked) {
+            forceTerminateSession()
+        }
+        return outcome
     }
 }

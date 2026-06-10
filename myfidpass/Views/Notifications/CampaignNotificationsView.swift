@@ -581,14 +581,17 @@ struct CampaignNotificationsView: View {
     @Environment(\.merchantTabIsActive) private var merchantTabIsActive
     @EnvironmentObject private var authService: AuthService
     @EnvironmentObject private var dataService: DataService
+    @EnvironmentObject private var memberSearchCoordinator: MerchantMemberSearchCoordinator
 
+    @State private var searchPresentedMemberOID: NSManagedObjectID?
     @State private var title = ""
     @State private var bodyText = ""
     @State private var segment: String?
     @State private var segments: CampaignSegmentsResponse?
     @State private var dashboardSettings: BusinessSettingsResponse?
     @State private var campaignAutomation: CampaignAutomationConfigDTO = mergedAutomation(from: nil)
-    @State private var message: String?
+    @State private var errorMessage: String?
+    @State private var successFeedback: String?
 
     @State private var isLoadingData = false
     @State private var isLoadingCampaignDataInFlight = false
@@ -635,6 +638,9 @@ struct CampaignNotificationsView: View {
     @State private var notificationLogoPopupPresented = false
     @State private var notificationIconNudgeTask: Task<Void, Never>?
     @State private var showPerimeterMapSheet = false
+    @State private var notificationReadinessRows: [NotificationBusinessReadinessDTO] = []
+    @State private var selectedNotificationSlugs: Set<String> = []
+    @State private var isLoadingNotificationReadiness = false
 
     /// Envoi manuel de campagne : abo payant (sinon aperçu flouté + Déverrouiller avec Pro).
     private var campaignManualSendUnlocked: Bool {
@@ -711,6 +717,11 @@ struct CampaignNotificationsView: View {
     }
 
     private var bannerFieldPromptFallback: String {
+        defaultManualNotificationTitle
+    }
+
+    /// Titre par défaut des notifications manuelles = nom du commerce affiché au client.
+    private var defaultManualNotificationTitle: String {
         let o = dashboardSettings?.organizationName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !o.isEmpty { return o }
         return businessDisplayName
@@ -776,12 +787,21 @@ struct CampaignNotificationsView: View {
     private var campaignNotificationsScrollStack: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: AppTheme.Spacing.md) {
-                previewSection
-                    .padding(.top, 12)
-                automationsContent
-                    .padding(.horizontal, AppTheme.Spacing.md)
+                if memberSearchCoordinator.isActive {
+                    MerchantMemberSearchInlineSection { oid in
+                        searchPresentedMemberOID = oid
+                    }
+                        .padding(.horizontal, AppTheme.Spacing.md)
+                        .padding(.top, 12)
+                } else {
+                    previewSection
+                        .padding(.top, 12)
+                    automationsContent
+                        .padding(.horizontal, AppTheme.Spacing.md)
+                }
             }
             .padding(.bottom, 100)
+            .animation(MerchantMotion.searchBarMorph, value: memberSearchCoordinator.isActive)
             .contentShape(Rectangle())
             .onTapGesture {
                 UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
@@ -789,6 +809,7 @@ struct CampaignNotificationsView: View {
         }
         /// Réduit les conflits de rebond avec le paging horizontal du carrousel (TabView) imbriqué.
         .scrollBounceBehavior(.basedOnSize)
+        .scrollDismissesKeyboard(.interactively)
     }
 
     private var campaignNotificationsWithLifecycle: some View {
@@ -829,6 +850,21 @@ struct CampaignNotificationsView: View {
         .animation(.spring(response: 0.34, dampingFraction: 0.9), value: notificationLogoPopupPresented)
         .animation(.easeInOut(duration: 0.28), value: isSending)
         .toolbar(.hidden, for: .navigationBar)
+        .merchantMemberSearchTabBinding { oid in
+            searchPresentedMemberOID = oid
+        }
+        .sheet(isPresented: Binding(
+            get: { searchPresentedMemberOID != nil },
+            set: { if !$0 { searchPresentedMemberOID = nil } }
+        )) {
+            if let oid = searchPresentedMemberOID,
+               let card = viewContext.object(with: oid) as? ClientCard {
+                MemberDetailView(card: card, context: viewContext)
+                    .environmentObject(syncService)
+                    .environmentObject(dataService)
+                    .memberDetailSheetChrome()
+            }
+        }
         .onAppear {
             scheduleNotificationIconNudgeIfNeeded()
         }
@@ -870,7 +906,7 @@ struct CampaignNotificationsView: View {
                 cancelNotificationIconNudge()
             }
         }
-        .onChange(of: activeSlugForViewChange) { _, _ in
+        .onChange(of: activeSlugForViewChange) { _, newSlug in
             guard merchantTabIsActive else { return }
             if let slug = resolveSlugForAPI(),
                let cached = ScanFlowSettingsCache.cached(for: slug) {
@@ -880,10 +916,19 @@ struct CampaignNotificationsView: View {
             } else {
                 dashboardSettings = nil
             }
+            let trimmed = newSlug.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                if selectedNotificationSlugs.isEmpty || selectedNotificationSlugs.count == 1 {
+                    selectedNotificationSlugs = [trimmed]
+                } else {
+                    selectedNotificationSlugs.insert(trimmed)
+                }
+            }
             segments = nil
             notificationIconReloadNonce &+= 1
             scheduleCampaignDataReload(force: true, debounceNs: 0)
             scheduleNotificationIconNudgeIfNeeded()
+            Task { await loadNotificationReadiness() }
         }
         .onChange(of: syncService.lastSyncDate) { _, _ in
             guard merchantTabIsActive else { return }
@@ -892,10 +937,15 @@ struct CampaignNotificationsView: View {
         .refreshable {
             await loadCampaignData()
         }
-        .alert(merchantAlertTitle, isPresented: .init(get: { message != nil }, set: { if !$0 { message = nil } })) {
+        .alert(merchantAlertTitle, isPresented: .init(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
             Button("OK", role: .cancel) {}
         } message: {
-            if let message { Text(message) }
+            if let errorMessage { Text(errorMessage) }
+        }
+        .alert("Campagne envoyée", isPresented: .init(get: { successFeedback != nil }, set: { if !$0 { successFeedback = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            if let successFeedback { Text(successFeedback) }
         }
         .onChange(of: notificationIconPhotoItem) { _, item in
             guard let item else { return }
@@ -1061,7 +1111,8 @@ struct CampaignNotificationsView: View {
 
     private func assignMerchantAlertMessage(from error: Error) {
         guard let text = APIError.merchantFacingMessage(from: error) else { return }
-        message = text
+        successFeedback = nil
+        errorMessage = text
     }
 
     private var campaignNotificationsTopChrome: some View {
@@ -1089,12 +1140,14 @@ struct CampaignNotificationsView: View {
             hasNotificationIcon: hasCustomNotificationIconFromSettings,
             businesses: authService.businessesForMerchantSwitcher,
             activeBusinessSlug: AuthStorage.currentBusinessSlug,
-            canCreateBusiness: authService.isPlatformAdmin ? false : authService.canCreateBusiness,
-            isPlatformAdminAllCommercesMode: authService.isPlatformAdmin,
-            onOpenAdministration: authService.isPlatformAdmin ? { authService.returnToPlatformAdministrationHub() } : nil,
+            canCreateBusiness: authService.isPlatformAdmin && !authService.adminShowsMerchantWorkspace
+                ? false
+                : authService.canCreateBusiness,
+            isPlatformAdminAllCommercesMode: authService.isPlatformAdmin && !authService.adminShowsMerchantWorkspace,
             onBusinessSwitcherWillOpen: authService.isPlatformAdmin ? {
                 Task { await authService.refreshPlatformAdminBusinesses(force: true) }
             } : nil,
+            onOpenSideMenu: nil,
             onSelectBusiness: { slug in
                 authService.selectBusiness(slug: slug)
                 Task {
@@ -1121,11 +1174,184 @@ struct CampaignNotificationsView: View {
         return businessName.isEmpty ? "Notifs" : businessName
     }
 
+    private var showsMultiCommerceNotificationTargets: Bool {
+        notificationReadinessRows.count > 1
+    }
+
+    private var multiCommerceTargetsSummaryLine: String {
+        let selected = notificationReadinessRows.filter { row in
+            guard let s = row.slug?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty else { return false }
+            return selectedNotificationSlugs.contains(s)
+        }
+        let devices = selected.reduce(0) { $0 + ($1.totalDevices ?? 0) }
+        let readyCount = selected.filter { $0.ready == true }.count
+        if selected.isEmpty { return "Aucun commerce sélectionné" }
+        return "\(selected.count) commerce(s) · \(devices) appareil(s) · \(readyCount) prêt(s)"
+    }
+
+    private var multiCommerceNotificationTargetsSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            GroupedSettingsSectionLabel("Commerces ciblés")
+            Text("Chaque point de vente a sa propre icône notif et ses propres cartes Wallet enregistrées.")
+                .font(AppTheme.Fonts.caption())
+                .foregroundStyle(AppTheme.Colors.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 8) {
+                if isLoadingNotificationReadiness {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(AppTheme.Colors.primary)
+                } else {
+                    multiCommerceTargetQuickAction("Tous") {
+                        selectedNotificationSlugs = Set(
+                            notificationReadinessRows.compactMap {
+                                $0.slug?.trimmingCharacters(in: .whitespacesAndNewlines)
+                            }.filter { !$0.isEmpty }
+                        )
+                    }
+                    multiCommerceTargetQuickAction("Prêts") {
+                        selectedNotificationSlugs = Set(
+                            notificationReadinessRows.compactMap { row -> String? in
+                                guard row.ready == true else { return nil }
+                                let s = row.slug?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                                return s.isEmpty ? nil : s
+                            }
+                        )
+                    }
+                    if let active = resolveSlugForAPI() {
+                        multiCommerceTargetQuickAction("Actif") {
+                            selectedNotificationSlugs = [active]
+                        }
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+
+            GroupedSettingsCard {
+                ForEach(Array(notificationReadinessRows.enumerated()), id: \.element.id) { index, row in
+                    if index > 0 { GroupedSettingsRowDivider() }
+                    multiCommerceNotificationTargetRow(row)
+                }
+            }
+
+            Text(multiCommerceTargetsSummaryLine)
+                .font(AppTheme.Fonts.caption2().weight(.medium))
+                .foregroundStyle(AppTheme.Colors.textSecondary)
+        }
+        .padding(.horizontal, AppTheme.Spacing.md)
+        .padding(.bottom, 6)
+    }
+
+    private func multiCommerceTargetQuickAction(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(AppTheme.Fonts.caption2().weight(.semibold))
+                .foregroundStyle(AppTheme.Colors.primary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(AppTheme.Colors.primary.opacity(0.1), in: Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private func multiCommerceNotificationTargetRow(_ row: NotificationBusinessReadinessDTO) -> some View {
+        let slug = row.slug?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let isSelected = !slug.isEmpty && selectedNotificationSlugs.contains(slug)
+        let ready = row.ready == true
+        let isActive = slug == resolveSlugForAPI()
+
+        Button {
+            guard !slug.isEmpty else { return }
+            if isSelected {
+                if selectedNotificationSlugs.count > 1 {
+                    selectedNotificationSlugs.remove(slug)
+                }
+            } else {
+                selectedNotificationSlugs.insert(slug)
+            }
+        } label: {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(isSelected ? AppTheme.Colors.primary : AppTheme.Colors.textSecondary.opacity(0.45))
+                    .padding(.top, 1)
+
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(row.displayName)
+                            .font(AppTheme.Fonts.subheadline().weight(.semibold))
+                            .foregroundStyle(AppTheme.Colors.textPrimary)
+                            .multilineTextAlignment(.leading)
+                        if isActive {
+                            Text("Actif")
+                                .font(AppTheme.Fonts.caption2().weight(.bold))
+                                .foregroundStyle(AppTheme.Colors.primary)
+                                .padding(.horizontal, 7)
+                                .padding(.vertical, 3)
+                                .background(AppTheme.Colors.primary.opacity(0.12), in: Capsule())
+                        }
+                        Spacer(minLength: 0)
+                        multiCommerceReadinessBadge(ready: ready, previewOnly: row.previewOnly == true)
+                    }
+
+                    if ready, row.previewOnly == true {
+                        // Prêt pour l’auto-test mais 0 vrai client : message d’action, pas un faux « joignable ».
+                        let hint = row.deliveryHint?.trimmingCharacters(in: .whitespacesAndNewlines)
+                        Text(hint?.isEmpty == false
+                            ? hint!
+                            : "Aperçu seulement : partage le lien de ta carte pour que de vrais clients l’ajoutent à Apple Wallet.")
+                            .font(AppTheme.Fonts.caption())
+                            .foregroundStyle(AppTheme.Colors.warning)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else if ready {
+                        let realClients = row.realClientDeviceCount
+                        let deviceLine = "\(realClients) client(s) joignable(s)"
+                        let memberLine = (row.membersCount ?? 0) > 0
+                            ? " · \(row.membersCount ?? 0) client(s) enregistré(s)"
+                            : ""
+                        Text(deviceLine + memberLine)
+                            .font(AppTheme.Fonts.caption())
+                            .foregroundStyle(AppTheme.Colors.success)
+                    } else if let hint = row.blockMessage?.trimmingCharacters(in: .whitespacesAndNewlines), !hint.isEmpty {
+                        Text(hint)
+                            .font(AppTheme.Fonts.caption())
+                            .foregroundStyle(AppTheme.Colors.warning)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+            .padding(.horizontal, GroupedSettingsMetrics.horizontalPadding)
+            .padding(.vertical, GroupedSettingsMetrics.rowVerticalPadding)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(isSelected ? AppTheme.Colors.primary.opacity(0.06) : Color.clear)
+        }
+        .buttonStyle(.plain)
+        .disabled(slug.isEmpty)
+        .accessibilityLabel("\(row.displayName), \(ready ? "prêt" : "non prêt"), \(isSelected ? "sélectionné" : "non sélectionné")")
+    }
+
+    @ViewBuilder
+    private func multiCommerceReadinessBadge(ready: Bool, previewOnly: Bool = false) -> some View {
+        let label = !ready ? "À configurer" : (previewOnly ? "Aperçu" : "Prêt")
+        let tint = (ready && !previewOnly) ? AppTheme.Colors.success : AppTheme.Colors.warning
+        Text(label)
+            .font(AppTheme.Fonts.caption2().weight(.bold))
+            .foregroundStyle(tint)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(tint.opacity(0.14), in: Capsule())
+    }
+
     private var previewSection: some View {
         VStack(alignment: .leading, spacing: AppTheme.Spacing.sm) {
             if let err = loadError {
                 errorCard(err)
                     .padding(.horizontal, AppTheme.Spacing.md)
+            }
+            if showsMultiCommerceNotificationTargets {
+                multiCommerceNotificationTargetsSection
             }
             ZStack {
                 BorderBeamManualNotificationComposerView(
@@ -1150,7 +1376,11 @@ struct CampaignNotificationsView: View {
                         .fill(Color.black.opacity(0.04))
                         .allowsHitTesting(false)
                     MerchantProUnlockTeaserButton(preferDarkGlassTint: false) {
-                        NotificationCenter.default.post(name: .myfidpassOpenMerchantSubscriptionSheet, object: nil)
+                        NotificationCenter.default.postOpenMerchantSubscriptionFromSession(
+                            usedBusinesses: authService.usedBusinesses,
+                            allowedBusinesses: authService.allowedBusinesses,
+                            hasActiveSubscription: authService.hasEncashedMerchantSubscription
+                        )
                     }
                     .accessibilityLabel("Déverrouiller avec Pro pour envoyer des notifications")
                     .accessibilityAddTraits(.isButton)
@@ -2987,7 +3217,6 @@ struct CampaignNotificationsView: View {
     @MainActor
     private func persistBannerTextsToServer(clearAfterSend: Bool = false) async -> Bool {
         guard let slug = resolveSlugForAPI() else { return false }
-        _ = clearAfterSend
         do {
             let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
             let cur = (dashboardSettings?.notificationTitleOverride ?? "")
@@ -3008,6 +3237,27 @@ struct CampaignNotificationsView: View {
     }
 
     /// Chargement initial optimisé : settings + segments en parallèle pour réduire la latence perçue.
+    @MainActor
+    private func loadNotificationReadiness() async {
+        guard authService.businesses.count > 1 || authService.businessesForMerchantSwitcher.count > 1 else {
+            notificationReadinessRows = []
+            return
+        }
+        isLoadingNotificationReadiness = true
+        defer { isLoadingNotificationReadiness = false }
+        do {
+            let resp: NotificationReadinessResponse = try await APIClient.shared.request(.authNotificationReadiness)
+            notificationReadinessRows = resp.businesses ?? []
+            if selectedNotificationSlugs.isEmpty, let slug = resolveSlugForAPI() {
+                selectedNotificationSlugs = [slug]
+            }
+        } catch {
+            if !shouldSuppressCancelledNetworkNoise(error) {
+                notificationReadinessRows = []
+            }
+        }
+    }
+
     @MainActor
     private func loadCampaignData(force: Bool = false) async {
         if isLoadingCampaignDataInFlight { return }
@@ -3032,6 +3282,11 @@ struct CampaignNotificationsView: View {
                 CampaignNotificationImageCache.applyPreviewTimestamps(from: cached, slug: slug)
                 dashboardSettings = cached
                 prewarmNotificationIconIfPossible(slug: slug, settings: cached)
+                if title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    let override = cached.notificationTitleOverride?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    let commerce = cached.organizationName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    title = override.isEmpty ? (commerce.isEmpty ? businessDisplayName : commerce) : override
+                }
             } else {
                 dashboardSettings = nil
             }
@@ -3070,9 +3325,9 @@ struct CampaignNotificationsView: View {
                 hasCustomIcon: iconReady
             )
             isApplyingRemoteSettings = true
-            let t = gotSettings.notificationTitleOverride?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let override = gotSettings.notificationTitleOverride?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             if title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                title = t
+                title = override.isEmpty ? defaultManualNotificationTitle : override
             }
             // Ne pas préremplir le champ campagne avec `notification_change_message` (gabarit PassKit ≠ message de campagne).
             isApplyingRemoteSettings = false
@@ -3080,6 +3335,7 @@ struct CampaignNotificationsView: View {
             isLoadingData = false
             lastCampaignDataLoadAt = Date()
             lastCampaignDataSlug = slug
+            await loadNotificationReadiness()
         } catch {
             if shouldSuppressCancelledNetworkNoise(error) {
                 isLoadingData = false
@@ -3135,12 +3391,12 @@ struct CampaignNotificationsView: View {
     private func uploadCroppedNotificationIcon(_ image: UIImage) async {
         guard let slug = resolveSlugForAPI() else { return }
         guard let jpeg = image.jpegData(compressionQuality: 0.85) else {
-            message = "Impossible d’encoder l’image."
+            errorMessage = "Impossible d’encoder l’image."
             return
         }
         let maxLen = 512 * 1024
         guard jpeg.count <= maxLen else {
-            message = "Image trop volumineuse (max. 512 Ko)."
+            errorMessage = "Image trop volumineuse (max. 512 Ko)."
             return
         }
         let b64 = jpeg.base64EncodedString()
@@ -3151,6 +3407,7 @@ struct CampaignNotificationsView: View {
             var patch = FullDashboardSettingsPatch()
             patch.notificationIconBase64 = payload
             _ = try await APIClient.shared.request(APIEndpoint.patchDashboardSettings(slug: slug, patch: patch)) as EmptyResponse
+            ScanFlowSettingsCache.clear(for: slug)
             CampaignNotificationImageCache.markLocalUploadNow(slug: slug)
             invalidateCachedGETNotificationIconResponses()
             // Bump immédiat : la vue se recrée tout de suite avec le nouveau `?v=` basé sur `localAt`
@@ -3175,13 +3432,41 @@ struct CampaignNotificationsView: View {
     @MainActor
     private func send() async {
         guard campaignManualSendUnlocked else {
-            NotificationCenter.default.post(name: .myfidpassOpenMerchantSubscriptionSheet, object: nil)
+            NotificationCenter.default.postOpenMerchantSubscriptionFromSession(
+                usedBusinesses: authService.usedBusinesses,
+                allowedBusinesses: authService.allowedBusinesses,
+                hasActiveSubscription: authService.hasEncashedMerchantSubscription
+            )
             return
         }
         guard let slug = resolveSlugForAPI() else { return }
-        guard hasCustomNotificationIconFromSettings else {
-            notificationLogoPopupPresented = true
+        let sendSlugs = selectedNotificationSlugs
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        let targetsReady = notificationReadinessRows.filter { row in
+            guard let s = row.slug?.trimmingCharacters(in: .whitespacesAndNewlines), sendSlugs.contains(s) else { return false }
+            return row.ready == true
+        }
+        if showsMultiCommerceNotificationTargets, !sendSlugs.isEmpty, targetsReady.isEmpty {
+            let blocked = notificationReadinessRows.filter { row in
+                guard let s = row.slug, sendSlugs.contains(s) else { return false }
+                return row.ready != true
+            }
+            errorMessage = blocked.compactMap { row in
+                let name = row.displayName
+                let why = row.blockMessage ?? "Non prêt"
+                return "\(name) : \(why)"
+            }.joined(separator: "\n\n")
+            if errorMessage?.isEmpty != false {
+                errorMessage = "Aucun des commerces sélectionnés n’est prêt à envoyer (icône ou appareils manquants)."
+            }
             return
+        }
+        if !showsMultiCommerceNotificationTargets {
+            guard hasCustomNotificationIconFromSettings else {
+                notificationLogoPopupPresented = true
+                return
+            }
         }
         let msg = bodyText
             .replacingOccurrences(of: "\n", with: "")
@@ -3211,21 +3496,64 @@ struct CampaignNotificationsView: View {
                 segment: segment
             )
             payload.testSelfOnly = false
+            if sendSlugs.count > 1 {
+                payload.businessSlugs = sendSlugs
+            }
             let sendResult: NotificationSendResponse = try await APIClient.shared.request(
                 .dashboardNotificationSend(slug: slug, body: payload)
             )
-            _ = sendResult.accepted ?? sendResult.ok
+
+            if sendResult.code == "no_real_clients" {
+                errorMessage = sendResult.message
+                    ?? "Aucun vrai client n’a encore ajouté la carte. Partage le lien de ta carte pour que tes clients l’ajoutent à Apple Wallet."
+                return
+            }
+
             let touched = sendResult.total ?? sendResult.sent ?? 0
-            NotificationSendLocalHistoryStore.recordSuccess(
-                slug: slug,
-                title: payload.title,
-                message: msg,
-                count: touched
-            )
+            // 0 cible = échec, même si le serveur a répondu « accepted » (sinon faux succès silencieux).
+            if touched == 0 {
+                let serverMsg = sendResult.message?.trimmingCharacters(in: .whitespacesAndNewlines)
+                errorMessage = (serverMsg?.isEmpty == false ? serverMsg : nil)
+                    ?? "Aucun client n’a pu être notifié. Vérifiez que vos clients ont ajouté la carte (Apple Wallet ou navigateur)."
+                return
+            }
+
+            var pendingSuccessFeedback: String?
             withAnimation(.easeInOut(duration: 0.58)) { notificationSendProgress = 0.64 }
 
-            // Affiche brièvement le résultat dans le bouton avant de vider le champ.
-            withAnimation(.easeInOut(duration: 0.22)) { sendSuccessCount = touched }
+            // Suivi livraison async (son + pop-up déclenchés à la fin de la barre de progression).
+            if sendResult.multi == true, let results = sendResult.results {
+                for row in results where row.ok == true {
+                    NotificationDeliveryFollowUp.trackAsyncSend(
+                        slug: row.slug ?? slug,
+                        title: payload.title,
+                        message: msg,
+                        jobId: row.jobId,
+                        batchId: row.batchId,
+                        expectedDevices: row.deliverableDevices ?? row.totalDevices,
+                        playsSoundOnDelivered: false
+                    )
+                }
+                let okCount = results.filter { $0.ok == true }.count
+                let skipped = results.filter { $0.ok != true }
+                var text = "Notification envoyée vers \(okCount) commerce\(okCount > 1 ? "s" : "")."
+                if !skipped.isEmpty {
+                    let names = skipped.map { $0.businessName ?? $0.slug ?? "Commerce" }.joined(separator: ", ")
+                    text += "\nIgnoré : \(names)."
+                }
+                pendingSuccessFeedback = text
+            } else {
+                NotificationDeliveryFollowUp.trackAsyncSend(
+                    slug: slug,
+                    title: payload.title,
+                    message: msg,
+                    jobId: sendResult.jobId,
+                    batchId: sendResult.batchId,
+                    expectedDevices: sendResult.total ?? touched,
+                    playsSoundOnDelivered: false
+                )
+                pendingSuccessFeedback = "Notification envoyée à \(touched) client\(touched > 1 ? "s" : "")."
+            }
             withAnimation(.easeInOut(duration: 0.45)) { notificationSendProgress = 0.72 }
 
             try? await Task.sleep(nanoseconds: 1_400_000_000)
@@ -3235,7 +3563,6 @@ struct CampaignNotificationsView: View {
             keepManualMessageFieldClearedAfterSend = true
             withAnimation(.easeOut(duration: 0.2)) {
                 bodyText = ""
-                sendSuccessCount = nil
             }
             withAnimation(.easeInOut(duration: 0.38)) { notificationSendProgress = 0.86 }
 
@@ -3252,11 +3579,18 @@ struct CampaignNotificationsView: View {
             withAnimation(.easeInOut(duration: 0.38)) { notificationSendProgress = 1.0 }
 
             try? await Task.sleep(nanoseconds: 260_000_000)
+            if let pendingSuccessFeedback {
+                MerchantUXFeedback.shared.playNotificationSent()
+                successFeedback = pendingSuccessFeedback
+                withAnimation(.easeInOut(duration: 0.22)) { sendSuccessCount = touched }
+            }
+            try? await Task.sleep(nanoseconds: 1_400_000_000)
+            withAnimation(.easeOut(duration: 0.2)) { sendSuccessCount = nil }
         } catch let api as APIError {
             if case .notificationIconRequired = api {
                 notificationLogoPopupPresented = true
             } else {
-                message = api.errorDescription ?? "Erreur lors de l’envoi de la notification."
+                errorMessage = api.errorDescription ?? "Erreur lors de l’envoi de la notification."
             }
         } catch {
             assignMerchantAlertMessage(from: error)
@@ -3538,6 +3872,7 @@ private struct AutomationCarouselLiquidNotificationBanner: View {
             .environmentObject(SyncService(container: container))
             .environmentObject(MainTabRouter())
             .environmentObject(AuthService())
+            .environmentObject(MerchantMemberSearchCoordinator())
     }
 }
 #endif

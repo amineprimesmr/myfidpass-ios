@@ -21,4 +21,5 @@ data class PlacesPlaceDetailsResponse(
     @SerialName("place_id") val placeId: String,
     val name: String? = null,
     @SerialName("formatted_address") val formattedAddress: String? = null,
+    @SerialName("google_maps_reviews_uri") val googleMapsReviewsUri: String? = null,
 )

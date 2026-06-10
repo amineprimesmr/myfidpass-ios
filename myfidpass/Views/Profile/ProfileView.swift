@@ -17,6 +17,9 @@ struct ProfileView: View {
     @Environment(\.merchantTabIsActive) private var merchantTabIsActive
     @Environment(\.isSoftwareKeyboardVisible) private var isSoftwareKeyboardVisible
     @EnvironmentObject private var dataService: DataService
+    @EnvironmentObject private var memberSearchCoordinator: MerchantMemberSearchCoordinator
+    @State private var profileNavigationPath = NavigationPath()
+    @State private var memberDetailSheetItem: MemberDetailSheetItem?
     @State private var organizationName: String = ""
     @State private var settingsSnapshot: BusinessSettingsResponse?
     @State private var flyerLooksCustomized = false
@@ -65,7 +68,7 @@ struct ProfileView: View {
     }
 
     private var commerceNavigationStack: some View {
-        NavigationStack {
+        NavigationStack(path: $profileNavigationPath) {
             MerchantTabScaffold(
                 panelBackground: profileCanvas,
                 topBar: { commerceTopBar },
@@ -85,6 +88,17 @@ struct ProfileView: View {
             }
         }
             .toolbar(.hidden, for: .navigationBar)
+            .merchantMemberSearchTabBinding { oid in
+                memberDetailSheetItem = MemberDetailSheetItem(objectID: oid)
+            }
+            .sheet(item: $memberDetailSheetItem) { item in
+                if let card = viewContext.object(with: item.objectID) as? ClientCard {
+                    MemberDetailView(card: card, context: viewContext)
+                        .environmentObject(syncService)
+                        .environmentObject(dataService)
+                        .memberDetailSheetChrome()
+                }
+            }
             .onAppear {
                 loadProfile()
                 hydrateCommerceFromDiskCache()
@@ -180,12 +194,14 @@ struct ProfileView: View {
             hasNotificationIcon: hasCommerceNotificationIconConfigured,
             businesses: authService.businessesForMerchantSwitcher,
             activeBusinessSlug: AuthStorage.currentBusinessSlug,
-            canCreateBusiness: authService.isPlatformAdmin ? false : authService.canCreateBusiness,
-            isPlatformAdminAllCommercesMode: authService.isPlatformAdmin,
-            onOpenAdministration: authService.isPlatformAdmin ? { authService.returnToPlatformAdministrationHub() } : nil,
+            canCreateBusiness: authService.isPlatformAdmin && !authService.adminShowsMerchantWorkspace
+                ? false
+                : authService.canCreateBusiness,
+            isPlatformAdminAllCommercesMode: authService.isPlatformAdmin && !authService.adminShowsMerchantWorkspace,
             onBusinessSwitcherWillOpen: authService.isPlatformAdmin ? {
                 Task { await authService.refreshPlatformAdminBusinesses(force: true) }
             } : nil,
+            onOpenSideMenu: nil,
             onSelectBusiness: { slug in
                 settingsSnapshot = nil
                 mountCommerceStats = false
@@ -309,7 +325,9 @@ struct ProfileView: View {
                 ScanFlowSettingsCache.store(settings, for: slug)
                 prewarmCommerceNotificationIconIfPossible(for: settings)
                 let cacheRegistered = CommerceFlyerStore.shared.snapshot(for: slug)?.flyerRegistered ?? false
-                flyerLooksCustomized = flyer.commerceIndicatesFlyerRegistered || cacheRegistered
+                flyerLooksCustomized = flyer.commerceIndicatesFlyerRegistered
+                    || cacheRegistered
+                    || (settings.hasFlyerPrefs == true)
                 let trimmedShare = (flyer.shareUrl ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
                 if trimmedShare.isEmpty {
                     commerceFlyerShareURL = LegalURLs.fidelityCardPage(slug: slug)?.absoluteString ?? ""
@@ -367,7 +385,7 @@ struct ProfileView: View {
                     customBgDataUrl: flyer.flyerPrefs?.customBgDataUrl,
                     revisionKey: flyer.updatedAt
                 )
-                MerchantLogoAssetCache.applyMerchantLogoTimestamps(from: settings)
+                MerchantLogoAssetCache.applyMerchantLogoTimestamps(from: settings, slug: slug)
                 CampaignNotificationImageCache.applyPreviewTimestamps(from: settings, slug: slug)
                 if let name = settings.organizationName, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     organizationName = name
@@ -430,4 +448,5 @@ private extension View {
         .environmentObject(AuthService())
         .environmentObject(SyncService(container: container))
         .environmentObject(MainTabRouter())
+        .environmentObject(MerchantMemberSearchCoordinator())
 }

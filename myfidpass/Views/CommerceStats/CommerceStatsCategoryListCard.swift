@@ -11,6 +11,7 @@ struct CommerceStatsCategoryListCard: View {
     @Environment(\.commerceStatsGlassOverlay) private var commerceStatsGlassOverlay
 
     let rows: [CommerceCategoryRowData]
+    var onViewGoogleReviews: (() -> Void)? = nil
     var onRowTap: ((String) -> Void)? = nil
 
     /// Hauteur unique pour chaque bouton « Plus de données », alignée sur la carte « Votre récompense du mois ».
@@ -20,6 +21,7 @@ struct CommerceStatsCategoryListCard: View {
     /// Fond 3D sur le conteneur « composite » (plusieurs `Button` internes), pas de `ButtonStyle` global.
     private func rowUseStatic3DSurface(_ row: CommerceCategoryRowData) -> Bool {
         if row.id == "audienceSplit", row.audienceSplit != nil { return true }
+        if row.id == "freq", row.visitFrequencyDetail != nil { return true }
         if row.id == "pts", row.pointsAttributedDetail != nil { return true }
         if row.id == "rewards", row.rewardsUsedDetail != nil { return true }
         if row.id == "grev", row.googleReviewsDetail != nil { return true }
@@ -27,15 +29,27 @@ struct CommerceStatsCategoryListCard: View {
         return false
     }
 
+    private func rowChartPinsToBottom(_ row: CommerceCategoryRowData) -> Bool {
+        if row.id == "freq", row.visitFrequencyDetail != nil { return true }
+        if row.id == "pts", row.pointsAttributedDetail != nil { return true }
+        if row.id.hasPrefix("social-"), row.socialFollowsDetail != nil { return true }
+        return false
+    }
+
     private func rowTileMinHeight(for row: CommerceCategoryRowData) -> CGFloat {
-        Self.rowTileMinHeight
+        if row.id == "grev", row.googleReviewsDetail != nil { return 244 }
+        return Self.rowTileMinHeight
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Self.rowSpacing) {
             ForEach(rows) { row in
                 rowShell(for: row)
-                    .frame(maxWidth: .infinity, minHeight: rowTileMinHeight(for: row), alignment: .topLeading)
+                    .frame(
+                        maxWidth: .infinity,
+                        minHeight: rowTileMinHeight(for: row),
+                        alignment: rowChartPinsToBottom(row) ? .bottomLeading : .topLeading
+                    )
                     .modifier(CommerceStatsDataTileModifier(
                         cornerRadius: CommerceStatsIndicatorLiquidGlass.kpiCornerRadius,
                         controlSize: .large,
@@ -54,10 +68,26 @@ struct CommerceStatsCategoryListCard: View {
                 onRowTap: { onRowTap?(row.id) }
             )
         } else if let detail = row.googleReviewsDetail, row.id == "grev" {
-            CommerceStatsGoogleReviewsListButtonRow(
+            CommerceStatsGoogleReviewsDisplayRow(
                 row: row,
                 detail: detail,
-                onRowTap: { onRowTap?(row.id) }
+                onViewReviews: { onViewGoogleReviews?() }
+            )
+        } else if let detail = row.visitFrequencyDetail, row.id == "freq" {
+            let sanitizedValue: String = {
+                let raw = row.rightPrimary.trimmingCharacters(in: .whitespacesAndNewlines)
+                if raw.hasSuffix(" visites") { return String(raw.dropLast(8)) }
+                return raw
+            }()
+            CommerceStatsLargeMetricCard(
+                title: row.title,
+                value: sanitizedValue,
+                valueCaption: row.subtitle.isEmpty ? nil : row.subtitle,
+                subtitle: nil,
+                membersWeeklySparkline: detail.sparkline,
+                segments: [],
+                onTap: nil,
+                chartLineColor: CommerceStatisticsTheme.accentBlue
             )
         } else if let detail = row.pointsAttributedDetail, row.id == "pts" {
             let sanitizedValue: String = {
@@ -82,10 +112,23 @@ struct CommerceStatsCategoryListCard: View {
                 onRowTap: { onRowTap?(row.id) }
             )
         } else if let detail = row.socialFollowsDetail, row.id.hasPrefix("social-") {
-            CommerceStatsSocialNetworkListButtonRow(
-                row: row,
-                detail: detail,
-                onRowTap: { onRowTap?(row.id) }
+            let sanitizedValue: String = {
+                let raw = row.rightPrimary.trimmingCharacters(in: .whitespacesAndNewlines)
+                if raw.hasPrefix("+") { return String(raw.dropFirst()) }
+                return raw
+            }()
+            let netColor = CommerceStatsSocialNetworkPalette.lineColor(for: detail.networkId)
+            CommerceStatsLargeMetricCard(
+                title: row.title,
+                value: sanitizedValue,
+                valueCaption: nil,
+                subtitle: row.subtitle,
+                membersWeeklySparkline: detail.sparkline,
+                segments: [],
+                onTap: onRowTap.map { handler in { handler(row.id) } },
+                chartLineColor: netColor,
+                headerIconAsset: CommerceStatsSocialNetworkPalette.assetName(for: detail.networkId),
+                chartAreaGradientColors: CommerceStatsSocialNetworkPalette.areaColors(for: detail.networkId)
             )
         } else if onRowTap != nil {
             Button {
@@ -256,7 +299,7 @@ private struct CommerceStatsGoogleReviewsCard: View {
             impactBars
         }
         .padding(.top, 16)
-        .padding(.bottom, 14)
+        .padding(.bottom, 10)
         .padding(.leading, 18)
         .padding(.trailing, 16)
         .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -382,12 +425,13 @@ private struct CommerceStatsGoogleReviewsCard: View {
         let key = normalizedMonthKey(detail.monthKey)
         guard let prev = cachedMonthHistory[previousMonthKey(from: key)], prev > 0 else { return nil }
         let cur = max(0, detail.newReviewsInPeriod)
-        return (Double(cur - prev) / Double(prev)) * 100.0
+        let delta = (Double(cur - prev) / Double(prev)) * 100.0
+        guard delta > 0 else { return nil }
+        return delta
     }
 
     private func impactTrendText(from delta: Double) -> String {
-        let sign = delta >= 0 ? "+" : "−"
-        return "\(sign)\(StatsFR.formatDoubleSmart(abs(delta)))%"
+        "+\(StatsFR.formatDoubleSmart(delta))%"
     }
 
     private func persistMonthValueIfNeeded() {
@@ -450,16 +494,42 @@ private struct CommerceStatsGoogleReviewsCard: View {
     }
 }
 
-private struct CommerceStatsGoogleReviewsListButtonRow: View {
+private struct CommerceStatsGoogleReviewsDisplayRow: View {
+    @Environment(\.commerceStatsGlassOverlay) private var commerceStatsGlassOverlay
+
     let row: CommerceCategoryRowData
     let detail: CommerceGoogleReviewsDetail
-    let onRowTap: () -> Void
+    let onViewReviews: () -> Void
+
+    private var g: Bool { commerceStatsGlassOverlay }
 
     var body: some View {
-        Button {
-            onRowTap()
-        } label: {
+        VStack(alignment: .leading, spacing: 0) {
             CommerceStatsGoogleReviewsCard(row: row, detail: detail)
+
+            Button(action: onViewReviews) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "map.fill")
+                            .font(CommerceStatisticsTheme.statsText(size: 13, weight: .semibold))
+                        Text("Voir les avis")
+                            .font(CommerceStatisticsTheme.statsText(size: 14, weight: .semibold))
+                        Spacer(minLength: 0)
+                        Image(systemName: "chevron.right")
+                            .font(CommerceStatisticsTheme.statsText(size: 12, weight: .bold))
+                    }
+                    .foregroundStyle(Color.white)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 11)
+                    .frame(maxWidth: .infinity)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(Color.black)
+                    )
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 14)
+                .accessibilityLabel("Voir les avis Google du commerce")
         }
     }
 }
@@ -473,38 +543,15 @@ private struct CommerceStatsAudienceSplitCard: View {
     let split: CommerceAudienceSplitData
 
     private var g: Bool { commerceStatsGlassOverlay }
-    private let activeColor = Color(red: 0.33, green: 0.94, blue: 0.66)
+    private let activeColor = CommerceStatisticsTheme.brandGreen
     private let inactiveColor = Color(red: 0.98, green: 0.42, blue: 0.42)
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .top, spacing: 10) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(row.title)
-                        .font(CommerceStatisticsTheme.kpiTileTitleFont())
-                        .foregroundStyle(CommerceStatisticsTheme.kpiTileTitleGradient(forGlassOverlay: g))
-                    Text(row.subtitle)
-                        .font(CommerceStatisticsTheme.statsText(size: 12, weight: .medium))
-                        .foregroundStyle(CommerceStatisticsTheme.onCardSecondary(forGlassOverlay: g))
-                }
-                Spacer(minLength: 8)
-            }
-            .padding(.bottom, 10)
-
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                compactPercentValue(
-                    split.activeFraction * 100,
-                    numberSize: 30,
-                    percentSize: 18,
-                    color: CommerceStatisticsTheme.onCardPrimary(forGlassOverlay: g)
-                )
-
-                Text("actifs")
-                    .font(CommerceStatisticsTheme.statsText(size: 15, weight: .semibold))
-                    .foregroundStyle(activeColor)
-                Spacer(minLength: 0)
-            }
-            .padding(.bottom, 14)
+            Text(row.title)
+                .font(CommerceStatisticsTheme.kpiTileTitleFont())
+                .foregroundStyle(CommerceStatisticsTheme.kpiTileTitleGradient(forGlassOverlay: g))
+                .padding(.bottom, 14)
 
             audienceBarsBlock
         }
@@ -656,12 +703,14 @@ struct CommerceStatsSectionHeader: View {
     }
 }
 
-// MARK: - Connecter les réseaux (liquid glass)
+// MARK: - Connecter les réseaux
 
 struct CommerceStatsConnectNetworksButton: View {
     @Environment(\.commerceStatsGlassOverlay) private var commerceStatsGlassOverlay
 
     let subtitle: String
+    /// Réseaux déjà connectés (`instagram`, `tiktok`, `facebook`, `x`) — masqués dans la rangée d’icônes.
+    var connectedNetworkIds: Set<String> = []
     var glassOverlayMode: Bool = false
     var isStampsProgram: Bool = false
     let action: () -> Void
@@ -669,62 +718,64 @@ struct CommerceStatsConnectNetworksButton: View {
     private var g: Bool { commerceStatsGlassOverlay || glassOverlayMode }
     private let cornerRadius = CommerceStatsIndicatorLiquidGlass.kpiCornerRadius
 
-    private static let networkAssets: [(id: String, asset: String?, symbol: String, color: Color)] = [
-        ("social-instagram", "SocialInstagram", "camera.fill", Color(red: 0.87, green: 0.17, blue: 0.48)),
-        ("social-tiktok", "SocialTikTok", "music.note", Color(red: 0.41, green: 0.79, blue: 0.82)),
-        ("social-facebook", "SocialFacebook", "person.2.fill", Color(red: 0.24, green: 0.47, blue: 0.95)),
-        ("social-twitter", nil, "bubble.left.fill", Color(red: 0.10, green: 0.10, blue: 0.10)),
+    struct NetworkBrand: Identifiable {
+        let id: String
+        let asset: String
+        let cornerRadius: CGFloat
+    }
+
+    static let allNetworks: [NetworkBrand] = [
+        NetworkBrand(id: "instagram", asset: "SocialInstagram", cornerRadius: 0),
+        NetworkBrand(id: "tiktok", asset: "SocialTikTok", cornerRadius: 0),
+        NetworkBrand(id: "facebook", asset: "SocialFacebook", cornerRadius: 0),
+        NetworkBrand(id: "x", asset: "SocialX", cornerRadius: 7),
     ]
 
-    var body: some View {
-        ZStack {
-            networkPreviewBackdrop
-                .blur(radius: 5, opaque: false)
-                .opacity(0.72)
-                .allowsHitTesting(false)
+    private var pendingNetworks: [NetworkBrand] {
+        Self.allNetworks.filter { !connectedNetworkIds.contains($0.id) }
+    }
 
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(spacing: 10) {
-                    ForEach(Self.networkAssets, id: \.id) { net in
-                        networkMiniIcon(net)
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 16) {
+                if !pendingNetworks.isEmpty {
+                    HStack(spacing: 14) {
+                        ForEach(pendingNetworks) { net in
+                            brandIcon(net)
+                        }
+                        Spacer(minLength: 0)
                     }
-                    Spacer(minLength: 0)
                 }
 
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 5) {
                     Text(subtitle)
-                        .font(CommerceStatisticsTheme.statsText(size: 13, weight: .medium))
-                        .foregroundStyle(CommerceStatisticsTheme.onCardSecondary(forGlassOverlay: g))
-                        .lineLimit(2)
+                        .font(CommerceStatisticsTheme.statsText(size: 14, weight: .semibold))
+                        .foregroundStyle(CommerceStatisticsTheme.onCardPrimary(forGlassOverlay: g))
+                        .lineLimit(3)
                         .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
                     if isStampsProgram {
                         Text("1 tampon offert au total pour tous les réseaux")
-                            .font(CommerceStatisticsTheme.statsText(size: 12, weight: .semibold))
-                            .foregroundStyle(CommerceStatisticsTheme.onCardPrimary(forGlassOverlay: g).opacity(0.82))
+                            .font(CommerceStatisticsTheme.statsText(size: 12, weight: .medium))
+                            .foregroundStyle(CommerceStatisticsTheme.onCardSecondary(forGlassOverlay: g))
                     }
                 }
 
-                Button(action: action) {
-                    Text("Connecter mes réseaux")
-                        .font(CommerceStatisticsTheme.statsText(size: 16, weight: .bold))
-                        .foregroundStyle(CommerceStatisticsTheme.onCardPrimary(forGlassOverlay: g))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 14)
-                }
-                .buttonStyle(.plain)
-                .background {
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .fill(Color.white.opacity(g ? 0.12 : 0.18))
-                }
-                .overlay {
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.22), lineWidth: 0.5)
-                }
+                Text("Connecter mes réseaux")
+                    .font(CommerceStatisticsTheme.statsText(size: 16, weight: .bold))
+                    .foregroundStyle(Color.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 15)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(Color.black)
+                    )
             }
             .padding(.horizontal, 18)
-            .padding(.vertical, 16)
+            .padding(.vertical, 18)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(maxWidth: .infinity, minHeight: 200, alignment: .topLeading)
+        .buttonStyle(.plain)
         .commerceStatsLiquidGlassTileButton(
             cornerRadius: cornerRadius,
             controlSize: .large,
@@ -734,38 +785,21 @@ struct CommerceStatsConnectNetworksButton: View {
         .accessibilityHint(subtitle)
     }
 
-    private var networkPreviewBackdrop: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            ForEach(Self.networkAssets.prefix(2), id: \.id) { net in
-                HStack(spacing: 10) {
-                    networkMiniIcon(net)
-                    RoundedRectangle(cornerRadius: 4, style: .continuous)
-                        .fill(Color.white.opacity(0.14))
-                        .frame(height: 10)
-                    Spacer()
-                }
-            }
-        }
-        .padding(.horizontal, 18)
-        .padding(.top, 18)
-    }
-
     @ViewBuilder
-    private func networkMiniIcon(_ net: (id: String, asset: String?, symbol: String, color: Color)) -> some View {
-        ZStack {
-            Circle()
-                .fill(net.color.opacity(g ? 0.28 : 0.18))
-            if let asset = net.asset, UIImage(named: asset) != nil {
-                Image(asset)
+    private func brandIcon(_ net: NetworkBrand) -> some View {
+        Group {
+            if UIImage(named: net.asset) != nil {
+                Image(net.asset)
                     .resizable()
+                    .interpolation(.high)
                     .scaledToFit()
-                    .frame(width: 18, height: 18)
             } else {
-                Image(systemName: net.symbol)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(net.color)
+                Image(systemName: "network")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(Color.black.opacity(0.55))
             }
         }
-        .frame(width: 36, height: 36)
+        .frame(width: 30, height: 30)
+        .clipShape(RoundedRectangle(cornerRadius: net.cornerRadius, style: .continuous))
     }
 }

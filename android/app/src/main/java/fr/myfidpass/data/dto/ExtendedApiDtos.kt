@@ -26,8 +26,13 @@ data class DashboardEvolutionResponse(
 @Serializable
 data class EvolutionWeekDto(
     @SerialName("week_index") val weekIndex: Int? = null,
+    @SerialName("day_of_month") val dayOfMonth: Int? = null,
     @SerialName("operations_count") val operationsCount: Int? = null,
     @SerialName("members_count") val membersCount: Int? = null,
+    @SerialName("new_members_in_month") val newMembersInMonth: Int? = null,
+    @SerialName("avg_basket_eur_in_month") val avgBasketEurInMonth: Double? = null,
+    @SerialName("avg_basket_eur_in_interval") val avgBasketEurInInterval: Double? = null,
+    @SerialName("basket_total_eur_in_month") val basketTotalEurInMonth: Double? = null,
 )
 
 @Serializable
@@ -73,14 +78,6 @@ data class PaymentReconcileResponse(
 )
 
 @Serializable
-data class DevSimulatePaymentResponse(
-    val ok: Boolean? = null,
-    val status: String? = null,
-    val simulated: Boolean? = null,
-    @SerialName("has_active_subscription") val hasActiveSubscription: Boolean? = null,
-)
-
-@Serializable
 data class CreateMemberRequest(val email: String, val name: String)
 
 @Serializable
@@ -120,6 +117,10 @@ data class MemberTicketsResponse(
 data class AdminOverviewResponse(
     @SerialName("users_count") val usersCount: Int? = null,
     @SerialName("businesses_count") val businessesCount: Int? = null,
+    @SerialName("merchant_owners_count") val merchantOwnersCount: Int? = null,
+    @SerialName("team_member_accounts_count") val teamMemberAccountsCount: Int? = null,
+    @SerialName("platform_admin_accounts_count") val platformAdminAccountsCount: Int? = null,
+    @SerialName("orphan_accounts_count") val orphanAccountsCount: Int? = null,
     @SerialName("active_subscriptions_count") val activeSubscriptionsCount: Int? = null,
 )
 

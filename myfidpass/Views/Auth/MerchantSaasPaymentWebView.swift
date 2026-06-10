@@ -144,7 +144,10 @@ struct MerchantSaasPaymentWebView: View {
                 commerceSlots: embeddedCommerceSlots
             )
         }
-        return LegalURLs.merchantSaasProPaymentPage(prefilledEmail: email)
+        return LegalURLs.merchantSaasProPaymentPage(
+            prefilledEmail: email,
+            commerceSlots: embeddedCommerceSlots
+        )
     }
 
     /// Commerce actif (`slug` stocké) ou premier commerce du compte — affiché comme contexte de paiement.

@@ -22,31 +22,43 @@ extension View {
 struct DynamicIslandToastViewModifier: ViewModifier {
     @Binding var isPresented: Bool
     var value: Toast
-    /// View Properties
     @State private var overlayWindow: PassThroughWindow?
     @State private var overlayController: CustomHostingView?
+    @State private var autoDismissTask: Task<Void, Never>?
+
+    private static let visibleDurationNs: UInt64 = 2_000_000_000
+
     func body(content: Content) -> some View {
         content
             .background(WindowExtractor { mainWindow in
                 createOverlayWindow(mainWindow)
             })
-            .onChange(of: isPresented, initial: true) { oldValue, newValue in
+            .onChange(of: isPresented, initial: true) { _, newValue in
                 guard let overlayWindow else { return }
+                autoDismissTask?.cancel()
+                autoDismissTask = nil
                 if newValue {
-                    /// Setting Current Toast
                     overlayWindow.toast = value
+                    autoDismissTask = Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: Self.visibleDurationNs)
+                        guard !Task.isCancelled else { return }
+                        if overlayWindow.isPresented, overlayWindow.toast?.id == value.id {
+                            isPresented = false
+                        }
+                    }
                 }
-
                 overlayWindow.isPresented = newValue
-                /// Updating Status Bar
                 overlayController?.isStatusBarHidden = newValue
             }
-            /// If the toast is closed outside we need to update the isPresented Property as well!
-            .onChange(of: overlayWindow?.isPresented) { oldValue, newValue in
+            .onChange(of: overlayWindow?.isPresented) { _, newValue in
                 if let newValue, let overlayWindow,
                    overlayWindow.toast?.id == value.id, newValue != isPresented {
                     isPresented = false
                 }
+            }
+            .onDisappear {
+                autoDismissTask?.cancel()
+                autoDismissTask = nil
             }
     }
 
@@ -87,26 +99,24 @@ struct ToastView: View {
             let safeArea = $0.safeAreaInsets
             let size = $0.size
 
-            /// Dynamic Island
             let haveDynamicIsland: Bool = safeArea.top >= 59
             let dynamicIslandWidth: CGFloat = 120
             let dynamicIslandHeight: CGFloat = 36
             let topOffset: CGFloat = 11 + max((safeArea.top - 59), 0)
 
-            /// Expanded Properties
             let expandedWidth = size.width - 20
             let expandedHeight: CGFloat = haveDynamicIsland ? 90 : 70
             let scaleX: CGFloat = isExpanded ? 1 : (dynamicIslandWidth / expandedWidth)
             let scaleY: CGFloat = isExpanded ? 1 : (dynamicIslandHeight / expandedHeight)
 
             ZStack {
-                MFConcentricShapeFallback(minimumCorner: 30)
-                    .fill(.black)
+                Color.clear
                     .overlay {
                         ToastContent(haveDynamicIsland)
                             .frame(width: expandedWidth, height: expandedHeight)
                             .scaleEffect(x: scaleX, y: scaleY)
                     }
+                    .mfDynamicIslandToastGlass(minimumCorner: 30, preferDark: false)
                     .frame(
                         width: isExpanded ? expandedWidth : dynamicIslandWidth,
                         height: isExpanded ? expandedHeight : dynamicIslandHeight
@@ -152,11 +162,11 @@ struct ToastView: View {
                     Text(toast.title)
                         .font(.callout)
                         .fontWeight(.semibold)
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Color.primary)
 
                     Text(toast.message)
                         .font(.caption)
-                        .foregroundStyle(.white.secondary)
+                        .foregroundStyle(Color.secondary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.bottom, haveDynamicIsland ? 12 : 0)

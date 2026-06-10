@@ -42,6 +42,13 @@ struct CommercePointsAttributedDetail: Hashable {
     var trendIsPositive: Bool
 }
 
+/// Données d’affichage pour la tuile **Fréquence d’achat** (courbe + tendance).
+struct CommerceVisitFrequencyDetail: Hashable {
+    var sparkline: [CGFloat]
+    var trendPct: Double?
+    var trendIsPositive: Bool
+}
+
 /// Ligne (style « in stock ») : chiffre + indicateur, nom de la récompense à droite.
 struct CommerceRewardUsedLineItem: Hashable {
     let label: String
@@ -90,6 +97,8 @@ struct CommerceCategoryRowData: Identifiable, Hashable {
     let rewardsUsedDetail: CommerceRewardsUsedDetail?
     /// Carte dédiée « Avis Google » (impact mensuel + cumul local).
     let googleReviewsDetail: CommerceGoogleReviewsDetail?
+    /// Carte « Fréquence d'achat » (section Plus de données).
+    let visitFrequencyDetail: CommerceVisitFrequencyDetail?
     /// Carte dédiée réseau social (Instagram / TikTok / Facebook / X).
     let socialFollowsDetail: CommerceSocialFollowsDetail?
     /// Pseudo configuré (@…) — affiché sur la carte réseau.
@@ -108,6 +117,7 @@ struct CommerceCategoryRowData: Identifiable, Hashable {
         pointsAttributedDetail: CommercePointsAttributedDetail? = nil,
         rewardsUsedDetail: CommerceRewardsUsedDetail? = nil,
         googleReviewsDetail: CommerceGoogleReviewsDetail? = nil,
+        visitFrequencyDetail: CommerceVisitFrequencyDetail? = nil,
         socialFollowsDetail: CommerceSocialFollowsDetail? = nil,
         socialHandle: String? = nil
     ) {
@@ -123,6 +133,7 @@ struct CommerceCategoryRowData: Identifiable, Hashable {
         self.pointsAttributedDetail = pointsAttributedDetail
         self.rewardsUsedDetail = rewardsUsedDetail
         self.googleReviewsDetail = googleReviewsDetail
+        self.visitFrequencyDetail = visitFrequencyDetail
         self.socialFollowsDetail = socialFollowsDetail
         self.socialHandle = socialHandle
     }
@@ -154,13 +165,20 @@ struct CommerceStatisticsPresentation {
     let trendPanierDeltaEuro: Double?
     let trendFrequenceDelta: Double?
     let donutSegments: [CommerceDonutSegment]
-    /// Section « Plus de données » (actifs, points, récompenses — hors engagement).
+    /// Section « Plus de données » (fréquence, actifs, points, récompenses).
     let categoryRows: [CommerceCategoryRowData]
-    /// Section « Engagement » : avis Google + réseaux (missions fidélité).
+    /// Tuile KPI « Avis Google » (à côté du panier moyen).
+    let googleReviewsNewInPeriod: Int
+    /// Section « Engagement réseaux sociaux » (missions follow).
     let engagementRows: [CommerceCategoryRowData]
     let barWeeksOperations: [CommerceBarWeekData]
-    /// Courbe haute de la tuile **Membres** : **une** valeur normalisée [0,1] par semaine (API), préf. `membersCount`, sinon `operationsCount`. Pas les parts du donut.
+    /// Courbe haute de la tuile **Membres** : valeurs normalisées [0,1] (cumul inscriptions dans le mois).
     let membersWeeklySparkline: [CGFloat]
+    /// Jalons jour affichés sous la courbe (alignés sur `dayOfMonth` API).
+    let membersMonthAxisDays: [Int]
+    /// Courbe tuile **Panier moyen** : évolution du panier cumulé dans le mois (normalisée [0,1]).
+    let panierWeeklySparkline: [CGFloat]
+    let panierMonthAxisDays: [Int]
     let membersTotal: Int?
     let activeMembers: Int?
     let retentionPct: Double?
@@ -228,12 +246,12 @@ enum CommerceStatisticsDataBuilder {
         let indicatorRows: [CommerceCategoryRowData] = [
             .init(
                 id: "audienceSplit",
-                title: "Clients actifs / inactifs",
-                subtitle: "Actif = au moins 1 passage · Inactif = 0",
-                rightPrimary: "\(StatsFR.formatPct(Double(actI) / Double(max(1, members)))) actifs",
-                rightSecondary: "\(StatsFR.formatPct(Double(inactiveN) / Double(max(1, members)))) inactifs",
+                title: "Activité client (+1 visite /mois)",
+                subtitle: "",
+                rightPrimary: "\(StatsFR.formatInt(actI)) actifs",
+                rightSecondary: "\(StatsFR.formatInt(inactiveN)) inactifs",
                 iconName: "person.2.fill",
-                swatch: colors[3],
+                swatch: CommerceStatisticsTheme.brandGreen,
                 audienceSplit: CommerceAudienceSplitData(activeCount: actI, inactiveCount: inactiveN)
             ),
             .init(
@@ -254,9 +272,9 @@ enum CommerceStatisticsDataBuilder {
             .init(
                 id: "rewards",
                 title: "Récompenses utilisées",
-                subtitle: "Sur la période",
+                subtitle: "",
                 rightPrimary: StatsFR.formatInt(rewardsN),
-                rightSecondary: weightPctIndicator(wRew),
+                rightSecondary: "",
                 iconName: "gift.fill",
                 swatch: Color(red: 0.98, green: 0.42, blue: 0.42),
                 audienceSplit: nil,
@@ -268,21 +286,6 @@ enum CommerceStatisticsDataBuilder {
                 )
             ),
         ]
-
-        let googleReviewRow = CommerceCategoryRowData(
-            id: "grev",
-            title: "Google",
-            subtitle: "Nouveaux avis Google",
-            rightPrimary: "+\(StatsFR.formatInt(googleRev))",
-            rightSecondary: weightPctGoogle(wG),
-            iconName: "star.bubble.fill",
-            swatch: Color(red: 0.26, green: 0.52, blue: 0.96),
-            audienceSplit: nil,
-            googleReviewsDetail: .init(
-                monthKey: stats?.periodKey ?? stats?.period,
-                newReviewsInPeriod: max(0, googleRev)
-            )
-        )
 
         let panier: Double? = {
             guard let api = stats?.avgBasketEur, api > 0 else { return nil }
@@ -298,11 +301,7 @@ enum CommerceStatisticsDataBuilder {
             return (m - r) / r * 100.0
         }()
 
-        let freq: Double? = {
-            if let api = stats?.avgVisitsPerActiveMember, api > 0 { return api }
-            guard actI > 0, txI > 0 else { return nil }
-            return Double(txI) / Double(actI)
-        }()
+        let freq: Double? = Self.resolvedPurchaseFrequency(stats: stats, activeMembers: actI, transactionsInPeriod: txI)
 
         let opsSeries: [Int] = evolution.map { $0.operationsCount ?? 0 }
         let bars: [CommerceBarWeekData] = {
@@ -312,8 +311,36 @@ enum CommerceStatisticsDataBuilder {
         }()
 
         let membersSpark: [CGFloat] = normalizedMemberSparkline(from: evolution)
+        let membersAxisDays: [Int] = memberMonthAxisDays(from: evolution)
+        let panierSpark: [CGFloat] = normalizedPanierSparkline(from: evolution)
+        let panierAxisDays: [Int] = memberMonthAxisDays(from: evolution)
 
         let (dPanier, dFreq) = trendDeltas(evolution: evolution, stats: stats)
+
+        let freqValueText: String = {
+            guard let f = freq, f >= 1 else { return "—" }
+            return "\(StatsFR.formatDoubleSmart(max(1, f))) visites"
+        }()
+
+        let frequencyRow = CommerceCategoryRowData(
+            id: "freq",
+            title: "Fréquence d'achat",
+            subtitle: "/mois",
+            rightPrimary: freqValueText,
+            rightSecondary: "",
+            iconName: "chart.line.uptrend.xyaxis",
+            swatch: colors[1],
+            audienceSplit: nil,
+            visitFrequencyDetail: .init(
+                sparkline: bars.map(\.value),
+                trendPct: dFreq,
+                trendIsPositive: (dFreq ?? 0) >= 0
+            )
+        )
+
+        let detailCategoryRows: [CommerceCategoryRowData] = [
+            frequencyRow,
+        ] + indicatorRows
 
         let socialEngagementRows: [CommerceCategoryRowData] = {
             guard !configuredSocialHandles.isEmpty, let sf = stats?.socialFollowsClaimed else { return [] }
@@ -347,7 +374,7 @@ enum CommerceStatisticsDataBuilder {
             }
         }()
 
-        let engagementRows = [googleReviewRow] + socialEngagementRows
+        let engagementRows = socialEngagementRows
 
         return CommerceStatisticsPresentation(
             panierMoyenEuro: panier,
@@ -357,10 +384,14 @@ enum CommerceStatisticsDataBuilder {
             trendPanierDeltaEuro: dPanier,
             trendFrequenceDelta: dFreq,
             donutSegments: donut,
-            categoryRows: indicatorRows,
+            categoryRows: detailCategoryRows,
+            googleReviewsNewInPeriod: max(0, googleRev),
             engagementRows: engagementRows,
             barWeeksOperations: bars,
             membersWeeklySparkline: membersSpark,
+            membersMonthAxisDays: membersAxisDays,
+            panierWeeklySparkline: panierSpark,
+            panierMonthAxisDays: panierAxisDays,
             membersTotal: members,
             activeMembers: active30,
             retentionPct: stats?.retentionPct
@@ -378,9 +409,13 @@ enum CommerceStatisticsDataBuilder {
             trendFrequenceDelta: mock.trendFrequenceDelta,
             donutSegments: real.donutSegments,
             categoryRows: mock.categoryRows,
+            googleReviewsNewInPeriod: mock.googleReviewsNewInPeriod,
             engagementRows: mock.engagementRows,
             barWeeksOperations: mock.barWeeksOperations,
             membersWeeklySparkline: real.membersWeeklySparkline,
+            membersMonthAxisDays: real.membersMonthAxisDays,
+            panierWeeklySparkline: mock.panierWeeklySparkline,
+            panierMonthAxisDays: mock.panierMonthAxisDays,
             membersTotal: real.membersTotal,
             activeMembers: real.activeMembers,
             retentionPct: mock.retentionPct
@@ -460,16 +495,30 @@ enum CommerceStatisticsDataBuilder {
         }
         var trend: Double?
         var positive = true
-        if opsSeries.count >= 2 {
-            let last = opsSeries[opsSeries.count - 1]
-            let prev = opsSeries[opsSeries.count - 2]
-            if prev > 0 {
-                let d = Double(last - prev) / Double(prev) * 100.0
-                trend = d
-                positive = d >= 0
-            }
+        if let pair = operationsTrendPair(opsSeries), pair.prev > 0, pair.last > 0 {
+            let d = Double(pair.last - pair.prev) / Double(pair.prev) * 100.0
+            trend = d
+            positive = d >= 0
         }
         return (spark, trend, positive)
+    }
+
+    /// Fréquence d’achat affichée : moyenne de passages par membre **acheteur** (≥ 1 quand il y a des passages).
+    static func resolvedPurchaseFrequency(
+        stats: BusinessStatsResponse?,
+        activeMembers: Int,
+        transactionsInPeriod: Int
+    ) -> Double? {
+        if let api = stats?.avgVisitsPerActiveMember, api > 0 {
+            return max(1.0, api)
+        }
+        let visits = stats?.visitsInPeriod ?? transactionsInPeriod
+        guard visits > 0 else { return nil }
+        if let active = stats?.activeMembersInPeriod, active > 0, visits >= active {
+            return max(1.0, Double(visits) / Double(active))
+        }
+        guard activeMembers > 0 else { return nil }
+        return max(1.0, Double(visits) / Double(activeMembers))
     }
 
     /// Barres d’**activité** (opérations) : min–max sur la période (sinon toutes semaines = même hauteur lisible).
@@ -488,20 +537,70 @@ enum CommerceStatisticsDataBuilder {
         }
     }
 
-    /// Série hebdo pour la tuile **Membres** : privilégie `membersCount`, sinon repli `operationsCount` (même période que l’API).
+    /// Courbe Membres : cumul d’inscriptions dans le mois (`newMembersInMonth`), alignée sur les jalons jour 1…30.
+    private static let membersMonthMilestoneCount = 7
+    private static let membersMonthSparklineFloor: CGFloat = 0.06
+
     private static func normalizedMemberSparkline(from evolution: [EvolutionWeekDTO]) -> [CGFloat] {
         guard !evolution.isEmpty else { return [] }
-        let mPresent = evolution.contains { $0.membersCount != nil }
-        let mRaw: [CGFloat] = evolution.map { w in
-            if mPresent, let m = w.membersCount { return CGFloat(m) }
-            return CGFloat(w.operationsCount ?? 0)
+
+        let hasMonthSeries = evolution.contains { $0.newMembersInMonth != nil && $0.dayOfMonth != nil }
+        if hasMonthSeries {
+            let raw = evolution.map { CGFloat(max(0, $0.newMembersInMonth ?? 0)) }
+            return sparklineFromMonthGrowth(raw)
         }
-        let minV = mRaw.min() ?? 0
-        let maxV = mRaw.max() ?? 0
-        if maxV <= 0 { return mRaw.map { _ in 0.5 } }
-        if maxV - minV < 1e-4 { return mRaw.map { _ in 0.5 } }
-        let span = maxV - minV
-        return mRaw.map { v in (v - minV) / span }
+
+        // Rétrocompat (ancienne API 4 segments) : croissance relative du stock cumulé.
+        let cumulative = evolution.map { CGFloat(max(0, $0.membersCount ?? $0.operationsCount ?? 0)) }
+        guard let baseline = cumulative.first else { return [] }
+        let growth = cumulative.map { max(0, $0 - baseline) }
+        return sparklineFromMonthGrowth(growth)
+    }
+
+    private static func sparklineFromMonthGrowth(_ raw: [CGFloat]) -> [CGFloat] {
+        guard !raw.isEmpty else { return [] }
+        var monotonic = raw
+        for i in 1 ..< monotonic.count where monotonic[i] < monotonic[i - 1] {
+            monotonic[i] = monotonic[i - 1]
+        }
+        let maxV = max(monotonic.max() ?? 0, 0)
+        if maxV < 1e-4 {
+            return Array(repeating: membersMonthSparklineFloor, count: max(monotonic.count, membersMonthMilestoneCount))
+        }
+        return monotonic.map { v in
+            let norm = v / maxV
+            return min(1, max(membersMonthSparklineFloor, norm))
+        }
+    }
+
+    private static func memberMonthAxisDays(from evolution: [EvolutionWeekDTO]) -> [Int] {
+        let days = evolution.compactMap(\.dayOfMonth).filter { $0 > 0 }
+        if !days.isEmpty { return days }
+        return [1, 5, 10, 15, 20, 25, 30]
+    }
+
+    /// Cumul des ventes € du mois — courbe ascendante alignée sur les jours (comme « entrées d’argent »).
+    private static func normalizedPanierSparkline(from evolution: [EvolutionWeekDTO]) -> [CGFloat] {
+        guard !evolution.isEmpty else { return [] }
+        var cumulative: CGFloat = 0
+        let raw: [CGFloat] = evolution.map { point in
+            if let total = point.basketTotalEurInMonth, total > 0 { return CGFloat(total) }
+            let unit = point.avgBasketEurInInterval ?? point.avgBasketEurInMonth ?? 0
+            let ops = CGFloat(max(0, point.operationsCount ?? 0))
+            if unit > 0, ops > 0 {
+                cumulative += CGFloat(unit) * ops
+                return cumulative
+            }
+            return cumulative
+        }
+        guard let maxTotal = raw.max(), maxTotal > 0 else {
+            return Array(repeating: membersMonthSparklineFloor, count: max(evolution.count, membersMonthMilestoneCount))
+        }
+        return raw.map { v in
+            guard v > 0 else { return membersMonthSparklineFloor }
+            let norm = v / maxTotal
+            return min(1, max(membersMonthSparklineFloor + 0.08, membersMonthSparklineFloor + norm * 0.9))
+        }
     }
 
     private static func segmentLabel(index: Int, total: Int) -> String {
@@ -519,17 +618,25 @@ enum CommerceStatisticsDataBuilder {
         return [0.28, 0.44, 0.58, 0.74, 0.88, 1.0]
     }
 
-    /// Tendance grossière : compare les deux dernières valeurs d’évolution (opérations).
+    /// Paire d’intervalles pour la tendance : évite −100 % quand le dernier jalon du mois en cours est encore vide (0 op.).
+    private static func operationsTrendPair(_ ops: [Int]) -> (last: Int, prev: Int)? {
+        guard ops.count >= 2 else { return nil }
+        if ops.count >= 3, ops[ops.count - 1] == 0 {
+            return (ops[ops.count - 2], ops[ops.count - 3])
+        }
+        return (ops[ops.count - 1], ops[ops.count - 2])
+    }
+
+    /// Tendance grossière : compare deux intervalles d’activité (opérations), pas le jalon courant s’il est à 0.
     private static func trendDeltas(evolution: [EvolutionWeekDTO], stats: BusinessStatsResponse?) -> (Double?, Double?) {
         let ops = evolution.compactMap { $0.operationsCount }
-        guard ops.count >= 2 else { return (nil, nil) }
-        let last = ops[ops.count - 1]
-        let prev = ops[ops.count - 2]
-        guard prev > 0 else { return (nil, nil) }
-        let freqDelta = (Double(last - prev) / Double(prev)) * 100
+        guard let pair = operationsTrendPair(ops), pair.prev > 0 else { return (nil, nil) }
+        let freqDelta: Double? = pair.last > 0
+            ? (Double(pair.last - pair.prev) / Double(pair.prev)) * 100
+            : nil
         var dPanier: Double? = nil
-        if let basket = stats?.avgBasketEur, basket > 0 {
-            dPanier = Double(last - prev) * basket
+        if let basket = stats?.avgBasketEur, basket > 0, pair.last > 0 {
+            dPanier = Double(pair.last - pair.prev) * basket
         }
         return (dPanier, freqDelta)
     }
@@ -663,5 +770,82 @@ enum CommerceStatsMonthNavigator {
         let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if isCalendarMonthPeriod(t) { return t }
         return sixMonthKeysEndingCurrentMonth().first ?? t
+    }
+}
+
+// MARK: - Historique mensuel avis Google (tendance % vs mois précédent)
+
+enum CommerceGoogleReviewsMonthHistory {
+    static let storageKey = "myfidpass.stats.googleReviews.monthlyHistory.v1"
+
+    static func parse(_ rawJSON: String) -> [String: Int] {
+        guard let data = rawJSON.data(using: .utf8),
+              let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return [:] }
+        var out: [String: Int] = [:]
+        for (k, v) in raw {
+            if let n = v as? Int {
+                out[k] = max(0, n)
+            } else if let n = v as? NSNumber {
+                out[k] = max(0, n.intValue)
+            }
+        }
+        return out
+    }
+
+    static func encode(_ history: [String: Int]) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: history, options: [.sortedKeys]),
+              let s = String(data: data, encoding: .utf8)
+        else { return "{}" }
+        return s
+    }
+
+    static func normalizedMonthKey(_ raw: String?) -> String {
+        let candidate = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if CommerceStatsMonthNavigator.isCalendarMonthPeriod(candidate) { return candidate }
+        return CommerceStatsMonthNavigator.calendarMonthKey()
+    }
+
+    static func previousMonthKey(from key: String) -> String {
+        let parts = key.split(separator: "-")
+        guard parts.count == 2, let y = Int(parts[0]), let m = Int(parts[1]) else { return key }
+        let cal = Calendar(identifier: .gregorian)
+        guard let d = cal.date(from: DateComponents(year: y, month: m, day: 1)),
+              let prev = cal.date(byAdding: .month, value: -1, to: d)
+        else { return key }
+        return CommerceStatsMonthNavigator.calendarMonthKey(for: prev)
+    }
+
+    static func trendPct(monthKey: String?, newReviews: Int, historyJSON: String) -> Double? {
+        let key = normalizedMonthKey(monthKey)
+        let hist = parse(historyJSON)
+        guard let prev = hist[previousMonthKey(from: key)], prev > 0 else { return nil }
+        let cur = max(0, newReviews)
+        return (Double(cur - prev) / Double(prev)) * 100.0
+    }
+
+    static func trendText(monthKey: String?, newReviews: Int, historyJSON: String) -> String? {
+        guard let delta = trendPct(monthKey: monthKey, newReviews: newReviews, historyJSON: historyJSON),
+              delta > 0
+        else { return nil }
+        return "+\(StatsFR.formatDoubleSmart(delta))%"
+    }
+
+    static func trendIsPositive(monthKey: String?, newReviews: Int, historyJSON: String) -> Bool? {
+        guard let delta = trendPct(monthKey: monthKey, newReviews: newReviews, historyJSON: historyJSON),
+              delta > 0
+        else { return nil }
+        return true
+    }
+
+    /// Met à jour l’historique local si le mois courant a plus d’avis que la valeur enregistrée.
+    static func persistIfNeeded(monthKey: String?, newReviews: Int, historyJSON: inout String) {
+        let key = normalizedMonthKey(monthKey)
+        let cur = max(0, newReviews)
+        var hist = parse(historyJSON)
+        let existing = hist[key] ?? 0
+        guard cur > existing else { return }
+        hist[key] = cur
+        historyJSON = encode(hist)
     }
 }

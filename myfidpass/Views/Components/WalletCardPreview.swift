@@ -64,6 +64,8 @@ struct WalletCardPreview: View {
     var compact: Bool = false
     /// Tap sur une zone → édition ciblée (Ma Carte). `nil` = aperçu passif.
     var onEditZoneTap: ((CardPreviewEditZone) -> Void)? = nil
+    /// Pastilles « Touchez » (complétion) — ouvre l’éditeur sans déclencher le zoom logo.
+    var onCompletionPillTap: ((CardPreviewEditZone) -> Void)? = nil
     /// URL encodée dans le QR (page carte fidélité). Si `nil`, QR de démonstration.
     var fidelityQRPayloadURL: String? = nil
     var completionHighlightZones: Set<CardPreviewEditZone> = []
@@ -118,7 +120,7 @@ struct WalletCardPreview: View {
                         .frame(width: w, height: h)
                         .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
                         .overlay {
-                            if !completionHighlightZones.isEmpty, let onTap = onEditZoneTap {
+                            if !completionHighlightZones.isEmpty, let onTap = onCompletionPillTap ?? onEditZoneTap {
                                 CardPreviewCompletionPillsOverlay(
                                     cardWidth: w,
                                     totalHeight: h,
@@ -170,7 +172,7 @@ struct WalletCardPreview: View {
                 HStack(alignment: .top, spacing: 0) {
                     CardPreviewTappableZone(
                         zone: .logoBand,
-                        accessibilityLabel: "Modifier le logo ou le texte du bandeau",
+                        accessibilityLabel: "Agrandir le logo",
                         onEditZoneTap: onEditZoneTap
                     ) {
                         logoInStrip(maxWidth: logoSlot.maxWidth, maxHeight: logoSlot.maxHeight, cardWidth: cardWidth)

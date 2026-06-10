@@ -27,6 +27,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import fr.myfidpass.data.dto.AdminBusinessRowDto
 import fr.myfidpass.data.dto.AdminEventRowDto
+import fr.myfidpass.data.dto.AdminOverviewResponse
 import fr.myfidpass.data.dto.AdminUserRowDto
 import fr.myfidpass.data.local.SessionStore
 import fr.myfidpass.data.repo.DashboardRepository
@@ -39,9 +40,7 @@ fun PlatformAdminRootScreen(
 ) {
     var tab by remember { mutableIntStateOf(0) }
     var loading by remember { mutableStateOf(true) }
-    var usersCount by remember { mutableStateOf<Int?>(null) }
-    var businessesCount by remember { mutableStateOf<Int?>(null) }
-    var subsCount by remember { mutableStateOf<Int?>(null) }
+    var overview by remember { mutableStateOf<AdminOverviewResponse?>(null) }
     var users by remember { mutableStateOf<List<AdminUserRowDto>>(emptyList()) }
     var businesses by remember { mutableStateOf<List<AdminBusinessRowDto>>(emptyList()) }
     var events by remember { mutableStateOf<List<AdminEventRowDto>>(emptyList()) }
@@ -51,12 +50,7 @@ fun PlatformAdminRootScreen(
         loading = true
         error = null
         runCatching {
-            if (tab == 0) {
-                val o = repository.adminOverview()
-                usersCount = o.usersCount
-                businessesCount = o.businessesCount
-                subsCount = o.activeSubscriptionsCount
-            }
+            if (tab == 0) overview = repository.adminOverview()
             if (tab == 1) users = repository.adminUsers(limit = 60).users
             if (tab == 2) businesses = repository.adminBusinesses(limit = 80).businesses
             if (tab == 3) events = repository.adminEvents(limit = 50).events
@@ -97,15 +91,22 @@ fun PlatformAdminRootScreen(
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 when (tab) {
                     0 -> {
-                        Text("Utilisateurs : ${usersCount ?: "—"}")
-                        Text("Commerces : ${businessesCount ?: "—"}")
-                        Text("Abonnements actifs : ${subsCount ?: "—"}")
+                        val o = overview
+                        Text("Utilisateurs : ${o?.usersCount ?: "—"}")
+                        Text("Commerces : ${o?.businessesCount ?: "—"}")
+                        Text("Abonnements actifs : ${o?.activeSubscriptionsCount ?: "—"}")
+                        Text(
+                            "Détail : ${o?.merchantOwnersCount ?: 0} proprio · ${o?.teamMemberAccountsCount ?: 0} équipe · ${o?.platformAdminAccountsCount ?: 0} admin · ${o?.orphanAccountsCount ?: 0} orphelins",
+                        )
                     }
                     1 -> users.forEach { u ->
                         AdminCard("${u.email ?: u.id}${if (u.isAdmin == 1) " · admin" else ""}")
                     }
                     2 -> businesses.forEach { b ->
-                        AdminCard("${b.name ?: b.slug} · ${b.slug}")
+                        val email = b.ownerEmail?.trim().orEmpty().ifBlank { "E-mail non renseigné" }
+                        val members = (b.memberCount ?: 0).coerceAtLeast(0)
+                        val memberLabel = if (members == 1) "1 membre" else "$members membres"
+                        AdminCard("${b.name ?: b.slug}\n$email · $memberLabel")
                     }
                     3 -> events.forEach { e ->
                         AdminCard("${e.eventType ?: "event"} · ${e.createdAt?.take(16) ?: ""}")

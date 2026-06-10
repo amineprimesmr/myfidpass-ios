@@ -158,12 +158,13 @@ struct AuthSignUpOtpFlowView: View {
     private func submitVerification() {
         guard viewModel.code.filter(\.isNumber).count == 6,
               !viewModel.isVerifying,
+              !viewModel.otpSubmitInFlight,
               let email = signupEmail else { return }
         hapticManager.impact(.medium)
+        viewModel.errorMessage = nil
+        viewModel.isVerifying = true
+        viewModel.otpSubmitInFlight = true
         Task {
-            viewModel.errorMessage = nil
-            viewModel.isVerifying = true
-            viewModel.otpSubmitInFlight = true
             defer {
                 viewModel.isVerifying = false
                 viewModel.otpSubmitInFlight = false
@@ -290,6 +291,10 @@ struct AuthEmailOtpVerificationView: View {
     @State private var cursorVisible = true
     @State private var cursorTimerTask: Task<Void, Never>?
     @State private var verifyPulse = false
+    @State private var keyboardHeight: CGFloat = 0
+    @State private var autoSubmitInFlight = false
+    @State private var blockedAutoSubmitCode: String?
+    @State private var lastSubmittedCode: String?
     @FocusState private var otpFieldFocused: Bool
 
     private let boxCount = 6
@@ -298,10 +303,16 @@ struct AuthEmailOtpVerificationView: View {
         isVerifying || showSuccessCelebration
     }
 
+    private var keyboardBottomInset: CGFloat {
+        keyboardHeight > 0 ? max(12, keyboardHeight + 8) : 0
+    }
+
     var body: some View {
         ZStack {
             VStack(spacing: 0) {
-                Spacer(minLength: 0)
+                if keyboardHeight <= 0 {
+                    Spacer(minLength: 0)
+                }
 
                 VStack(spacing: 28) {
                     headerBlock
@@ -318,6 +329,7 @@ struct AuthEmailOtpVerificationView: View {
                             .transition(.opacity.combined(with: .move(edge: .top)))
                     }
                 }
+                .padding(.top, keyboardHeight > 0 ? 20 : 0)
                 .opacity(contentDimmed ? 0.35 : 1)
                 .scaleEffect(showSuccessCelebration ? 0.94 : (isVerifying ? 0.98 : 1))
                 .blur(radius: showSuccessCelebration ? 3 : 0)
@@ -326,6 +338,7 @@ struct AuthEmailOtpVerificationView: View {
 
                 Spacer(minLength: 0)
             }
+            .padding(.bottom, keyboardBottomInset)
 
             if showSuccessCelebration {
                 AuthOtpSuccessCelebrationView()
@@ -334,6 +347,18 @@ struct AuthEmailOtpVerificationView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .animation(.spring(response: 0.5, dampingFraction: 0.78), value: showSuccessCelebration)
+        .animation(.easeOut(duration: 0.2), value: keyboardHeight)
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { note in
+            guard
+                let userInfo = note.userInfo,
+                let endFrame = userInfo[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect
+            else { return }
+            let screenH = UIScreen.main.bounds.height
+            keyboardHeight = max(0, screenH - endFrame.origin.y)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            keyboardHeight = 0
+        }
         .onAppear {
             startResendCountdown()
             startCursorBlink()
@@ -350,6 +375,7 @@ struct AuthEmailOtpVerificationView: View {
                 }
             } else {
                 verifyPulse = false
+                autoSubmitInFlight = false
                 if !showSuccessCelebration {
                     focusOtpField()
                 }
@@ -362,12 +388,18 @@ struct AuthEmailOtpVerificationView: View {
             }
         }
         .onChange(of: interactionLocked) { _, locked in
-            if !locked, !showSuccessCelebration, !isVerifying {
+            if locked {
+                autoSubmitInFlight = false
+            } else if !showSuccessCelebration, !isVerifying {
                 focusOtpField()
             }
         }
         .onChange(of: errorMessage) { _, message in
             guard let message, !message.isEmpty, !showSuccessCelebration else { return }
+            if let submitted = lastSubmittedCode, submitted.count == boxCount {
+                blockedAutoSubmitCode = submitted
+            }
+            autoSubmitInFlight = false
             focusOtpField(after: 0.12)
         }
         .onChange(of: code) { _, newValue in
@@ -377,7 +409,16 @@ struct AuthEmailOtpVerificationView: View {
                 code = filtered
                 return
             }
-            guard filtered.count == boxCount, !interactionLocked, !isVerifying else { return }
+            if filtered.count < boxCount {
+                if !filtered.isEmpty {
+                    blockedAutoSubmitCode = nil
+                }
+                return
+            }
+            guard !interactionLocked, !isVerifying, !autoSubmitInFlight else { return }
+            guard filtered != blockedAutoSubmitCode else { return }
+            autoSubmitInFlight = true
+            lastSubmittedCode = filtered
             onCodeComplete?()
         }
     }
@@ -503,6 +544,10 @@ struct AuthEmailOtpVerificationView: View {
             } else {
                 Button {
                     guard !isSendingCode else { return }
+                    blockedAutoSubmitCode = nil
+                    lastSubmittedCode = nil
+                    autoSubmitInFlight = false
+                    code = ""
                     onResend()
                     startResendCountdown()
                     focusOtpField(after: 0.1)

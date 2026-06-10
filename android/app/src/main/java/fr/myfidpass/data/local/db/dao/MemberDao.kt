@@ -20,4 +20,7 @@ interface MemberDao {
 
     @Query("DELETE FROM members WHERE businessSlug = :slug")
     suspend fun deleteForSlug(slug: String)
+
+    @Query("SELECT COUNT(*) FROM members WHERE businessSlug = :slug")
+    suspend fun countForSlug(slug: String): Int
 }

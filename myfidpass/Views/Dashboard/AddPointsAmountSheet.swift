@@ -163,18 +163,9 @@ struct AddPointsAmountSheet: View {
     @ObservedObject var receiptCoordinator: ReceiptValidationCoordinator
     var onDismiss: () -> Void
     var onSubmit: (Double) async -> Bool
-    /// Crédit + redeem si besoin ; retourne le nouveau solde (programme points uniquement).
-    let onRedeemTier: ((ScanRewardTier, Double) async -> Int?)?
 
     @Environment(\.colorScheme) private var colorScheme
     @State private var entry = AmountEntry()
-    @State private var displayedPoints: Int = 0
-    @State private var redeemConfirmTier: ScanRewardTier?
-    @State private var redeemUsesCreditFirst = false
-
-    private var redeemConfirmationDialogTitle: String {
-        redeemUsesCreditFirst ? "Créditer puis offrir ?" : "Offrir la récompense ?"
-    }
 
     init(
         mode: AddPointsAmountMode = .credit,
@@ -188,8 +179,7 @@ struct AddPointsAmountSheet: View {
         isSubmitting: Binding<Bool>,
         receiptCoordinator: ReceiptValidationCoordinator,
         onDismiss: @escaping () -> Void,
-        onSubmit: @escaping (Double) async -> Bool,
-        onRedeemTier: ((ScanRewardTier, Double) async -> Int?)? = nil
+        onSubmit: @escaping (Double) async -> Bool
     ) {
         self.mode = mode
         self.memberName = memberName
@@ -203,7 +193,6 @@ struct AddPointsAmountSheet: View {
         _receiptCoordinator = ObservedObject(wrappedValue: receiptCoordinator)
         self.onDismiss = onDismiss
         self.onSubmit = onSubmit
-        self.onRedeemTier = onRedeemTier
     }
 
     /// Toujours « mode sombre » : la zone haut (titre, EUR, carte) a son propre fond en dégradé gris / noir (`darkRadialBackground`), y compris en apparence claire.
@@ -223,14 +212,10 @@ struct AddPointsAmountSheet: View {
         ScanCreditLimits.effectivePoints(raw: pointsFromAmount, maxPerTransaction: scanMaxPointsPerTransaction)
     }
 
-    private var creditLimitedByScanSecurity: Bool {
-        mode == .credit && ScanCreditLimits.isCapped(raw: pointsFromAmount, maxPerTransaction: scanMaxPointsPerTransaction)
-    }
-
     /// Points effectivement retirés (plafonnés au solde affiché).
     private var effectiveDebitPoints: Int {
         let raw = pointsFromAmount
-        let cap = memberPoints ?? displayedPoints
+        let cap = memberPoints ?? 0
         return min(raw, max(0, cap))
     }
 
@@ -244,121 +229,8 @@ struct AddPointsAmountSheet: View {
         }
     }
 
-    private static let ptsFormatter: NumberFormatter = {
-        let f = NumberFormatter()
-        f.numberStyle = .decimal
-        f.locale = Locale(identifier: "fr_FR")
-        f.groupingSeparator = " "
-        return f
-    }()
-
-    private static let eurFormatter: NumberFormatter = {
-        let f = NumberFormatter()
-        f.numberStyle = .decimal
-        f.locale = Locale(identifier: "fr_FR")
-        f.minimumFractionDigits = 0
-        f.maximumFractionDigits = 2
-        return f
-    }()
-
-    private func formatPts(_ n: Int) -> String {
-        Self.ptsFormatter.string(from: NSNumber(value: n)) ?? "\(n)"
-    }
-
-    private func maskedBarcode(_ raw: String) -> String {
-        let alnum = raw.filter { $0.isNumber || $0.isLetter }
-        if alnum.count >= 4 {
-            return "•••• •••• \(String(alnum.suffix(4)).uppercased())"
-        }
-        return "•••• \(raw.prefix(12))"
-    }
-
-    /// Sous-titre carte : palier atteint avec ce montant, prochain palier, ou crédit / retrait de points.
-    private var rewardProgressCaption: String {
-        let before = displayedPoints
-        let earned = mode == .credit ? creditPointsApplied : pointsFromAmount
-        let tiers = rewardTiers.sorted { $0.points < $1.points }
-
-        if creditLimitedByScanSecurity {
-            let raw = pointsFromAmount
-            let cap = scanMaxPointsPerTransaction ?? 0
-            return "Plafond sécurité : \(formatPts(raw)) pts calculés → \(formatPts(earned)) crédité(s) (max \(formatPts(cap)) / op.). Réglages → Sécurité caisse pour illimité."
-        }
-
-        if let minEur = pointsMinAmountEur, amountValue > 0, amountValue < minEur - 1e-9 {
-            let s = Self.eurFormatter.string(from: NSNumber(value: minEur)) ?? "\(minEur)"
-            return mode == .debit
-                ? "Montant min. \(s) € pour calculer un retrait en points"
-                : "Montant min. \(s) € pour créditer des points"
-        }
-
-        if mode == .debit {
-            if earned <= 0 {
-                return "Saisissez un montant (équivalence en points pour la correction)"
-            }
-            let eff = effectiveDebitPoints
-            let after = before - eff
-            if eff < earned {
-                return "Retrait plafonné au solde : −\(formatPts(eff)) pt (équiv. \(formatPts(earned)) pt) — solde après : \(formatPts(after))"
-            }
-            return "Retrait : −\(formatPts(eff)) pt — solde après : \(formatPts(after))"
-        }
-
-        let after = before + earned
-
-        guard !tiers.isEmpty else {
-            if earned > 0 {
-                return "+\(formatPts(earned)) pt avec ce montant"
-            }
-            return "Saisissez le montant du panier"
-        }
-
-        if earned > 0 {
-            let crossed = tiers.filter { $0.points <= after && before < $0.points }
-            if let top = crossed.max(by: { $0.points < $1.points }) {
-                return "Palier atteint : \(top.label)"
-            }
-        }
-
-        if let next = tiers.first(where: { after < $0.points }) {
-            let prog = "\(formatPts(after)) / \(formatPts(next.points)) pts"
-            return "Prochaine récompense : \(next.label) — \(prog)"
-        }
-
-        if let last = tiers.last, after >= last.points {
-            return "Palier max atteint — \(last.label)"
-        }
-
-        return "Récompenses fidélité"
-    }
-
-    /// Palier le plus haut franchi avec le solde simulé (actuel + points du panier).
-    private var justCrossedTier: ScanRewardTier? {
-        guard mode == .credit, onRedeemTier != nil else { return nil }
-        let before = displayedPoints
-        let earned = creditPointsApplied
-        guard earned > 0 else { return nil }
-        if let minEur = pointsMinAmountEur, amountValue > 0, amountValue < minEur - 1e-9 { return nil }
-        let tiers = rewardTiers.filter { $0.points > 0 }.sorted { $0.points < $1.points }
-        guard !tiers.isEmpty else { return nil }
-        let after = before + earned
-        let crossed = tiers.filter { $0.points <= after && before < $0.points }
-        return crossed.max(by: { $0.points < $1.points })
-    }
-
-    /// Récompenses utilisables tout de suite avec le solde actuel.
-    private var balanceReadyTiers: [ScanRewardTier] {
-        guard mode == .credit, onRedeemTier != nil else { return [] }
-        let b = displayedPoints
-        return rewardTiers.filter { $0.points > 0 && $0.points <= b }.sorted { $0.points > $1.points }
-    }
-
-    private var showRedeemSection: Bool {
-        mode == .credit && onRedeemTier != nil && rewardTiers.contains(where: { $0.points > 0 })
-    }
-
     private func lightTap() {
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        MerchantUXFeedback.shared.play(.tap)
     }
 
     /// Calcul hors `ViewBuilder` : évite « Type '()' cannot conform to 'View' » dans le `GeometryReader`.
@@ -517,11 +389,6 @@ struct AddPointsAmountSheet: View {
                             .padding(.bottom, compactDark ? 6 : 8)
                             .animation(.snappy(duration: 0.11), value: entry.displayInteger)
                             .animation(.snappy(duration: 0.11), value: entry.displayFraction)
-
-                            rewardRewardsColumn
-                                .padding(.horizontal, 16)
-                                .padding(.top, 4)
-                                .padding(.bottom, 4)
                         }
                     }
                     .frame(width: w, height: darkColumnH)
@@ -570,31 +437,6 @@ struct AddPointsAmountSheet: View {
                 .frame(width: w, height: layoutH)
             }
             .ignoresSafeArea(edges: [.bottom, .top])
-        }
-        .onAppear { displayedPoints = memberPoints ?? 0 }
-        .alert(
-            redeemConfirmationDialogTitle,
-            isPresented: Binding(
-                get: { redeemConfirmTier != nil },
-                set: { if !$0 { redeemConfirmTier = nil } }
-            )
-        ) {
-            Button("Annuler", role: .cancel) {
-                redeemConfirmTier = nil
-            }
-            Button("Confirmer") {
-                guard let t = redeemConfirmTier else { return }
-                redeemConfirmTier = nil
-                Task { await runRedeemConfirmedForTier(t) }
-            }
-        } message: {
-            if let t = redeemConfirmTier {
-                if redeemUsesCreditFirst {
-                    Text("Les points du panier seront crédités, puis \(formatPts(t.points)) pts seront déduits pour « \(t.label) ».")
-                } else {
-                    Text("\(formatPts(t.points)) pts seront déduits pour « \(t.label) ».")
-                }
-            }
         }
         .overlay {
             if isSubmitting {
@@ -733,171 +575,6 @@ struct AddPointsAmountSheet: View {
         }
     }
 
-    private var rewardProgressCaptionLabel: some View {
-        Text(rewardProgressCaption)
-            .font(.system(size: 15, weight: .medium, design: .default))
-            .foregroundStyle(topChrome.primary)
-            .multilineTextAlignment(.leading)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 14)
-            .padding(.horizontal, 18)
-    }
-
-    private var balanceCaptionLine: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "star.circle.fill")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(topChrome.secondary)
-            Text("Solde actuel : \(formatPts(displayedPoints)) pts")
-                .font(.system(size: 13, weight: .semibold, design: .default))
-                .foregroundStyle(topChrome.secondary)
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 18)
-        .padding(.top, 4)
-    }
-
-    /// Progression + actions « utiliser une récompense » (débit de points via API redeem).
-    @ViewBuilder
-    private var rewardRewardsColumn: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if showRedeemSection || mode == .debit {
-                balanceCaptionLine
-            }
-
-            Group {
-                if #available(iOS 26.0, *) {
-                    rewardProgressCaptionLabel
-                        .background {
-                            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                                .fill(Color.white.opacity(0.06))
-                        }
-                        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                                .strokeBorder(topChrome.glassStroke, lineWidth: 1)
-                        }
-                } else {
-                    rewardProgressCaptionLabel
-                        .background {
-                            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                                .fill(.ultraThinMaterial)
-                                .overlay {
-                                    RoundedRectangle(cornerRadius: 22, style: .continuous)
-                                        .fill(Color.white.opacity(0.06))
-                                        .blendMode(.plusLighter)
-                                }
-                                .overlay {
-                                    RoundedRectangle(cornerRadius: 22, style: .continuous)
-                                        .strokeBorder(topChrome.glassStroke, lineWidth: 1)
-                                }
-                        }
-                        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-                }
-            }
-            .environment(\.colorScheme, .dark)
-            .animation(.easeOut(duration: 0.12), value: rewardProgressCaption)
-
-            if showRedeemSection {
-                redeemActionsStack
-            }
-        }
-        .accessibilityElement(children: .contain)
-    }
-
-    @ViewBuilder
-    private var redeemActionsStack: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if let crossed = justCrossedTier {
-                let canNow = displayedPoints >= crossed.points
-                let afterSim = displayedPoints + creditPointsApplied
-                let canAfterCredit = creditPointsApplied > 0 && afterSim >= crossed.points
-                let enabled = canNow || canAfterCredit
-                redeemCTAButton(
-                    tier: crossed,
-                    title: canNow ? "Offrir : \(crossed.label)" : "Créditer le panier puis offrir : \(crossed.label)",
-                    subtitle: canNow
-                        ? "−\(formatPts(crossed.points)) pts"
-                        : (canAfterCredit ? "Après crédit : \(formatPts(afterSim)) pts → −\(formatPts(crossed.points)) pts" : "Montant insuffisant pour ce palier"),
-                    enabled: enabled && !isSubmitting
-                )
-            }
-
-            let others = balanceReadyTiers.filter { t in
-                guard let crossed = justCrossedTier else { return true }
-                return t.points != crossed.points || t.label != crossed.label
-            }
-            if !others.isEmpty {
-                Text("Autres récompenses au solde actuel")
-                    .font(.system(size: 12, weight: .semibold, design: .default))
-                    .foregroundStyle(topChrome.tertiary)
-                    .padding(.top, 4)
-                ForEach(others, id: \.self) { tier in
-                    redeemCTAButton(
-                        tier: tier,
-                        title: tier.label,
-                        subtitle: "−\(formatPts(tier.points)) pts",
-                        enabled: !isSubmitting
-                    )
-                }
-            }
-        }
-    }
-
-    private func redeemCTAButton(tier: ScanRewardTier, title: String, subtitle: String, enabled: Bool) -> some View {
-        Button {
-            lightTap()
-            redeemUsesCreditFirst = displayedPoints < tier.points
-            redeemConfirmTier = tier
-        } label: {
-            HStack(alignment: .center, spacing: 12) {
-                Image(systemName: "gift.fill")
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(enabled ? Color(red: 1, green: 0.84, blue: 0.35) : topChrome.tertiary)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .font(.system(size: 16, weight: .semibold, design: .default))
-                        .foregroundStyle(enabled ? topChrome.primary : topChrome.tertiary)
-                        .multilineTextAlignment(.leading)
-                    Text(subtitle)
-                        .font(.system(size: 13, weight: .medium, design: .default))
-                        .foregroundStyle(topChrome.secondary)
-                }
-                Spacer(minLength: 0)
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(topChrome.tertiary)
-            }
-            .padding(.vertical, 14)
-            .padding(.horizontal, 16)
-            .background {
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(Color.white.opacity(enabled ? 0.11 : 0.05))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .strokeBorder(topChrome.glassStroke.opacity(enabled ? 1 : 0.5), lineWidth: 1)
-                    }
-            }
-        }
-        .buttonStyle(.plain)
-        .disabled(!enabled)
-        .opacity(enabled ? 1 : 0.55)
-    }
-
-    private func runRedeemConfirmedForTier(_ tier: ScanRewardTier) async {
-        guard let handler = onRedeemTier else { return }
-        let amount = amountValue
-        await MainActor.run { isSubmitting = true }
-        let newBal = await handler(tier, amount)
-        await MainActor.run {
-            isSubmitting = false
-            if let b = newBal {
-                displayedPoints = b
-                UINotificationFeedbackGenerator().notificationOccurred(.success)
-            }
-        }
-    }
-
     // MARK: Pavé numérique (chiffres uniquement, touches centrées)
 
     private func keypadBlock(totalWidth: CGFloat, keyHeight: CGFloat, spacing: CGFloat) -> some View {
@@ -994,7 +671,7 @@ struct AddPointsAmountSheet: View {
         let tint = mode == .debit ? Color(red: 0.98, green: 0.48, blue: 0.22) : AppTheme.Colors.primary
         let title = mode == .debit ? "Retirer les points" : "Créditer les points"
         Button {
-            UINotificationFeedbackGenerator().notificationOccurred(.success)
+            MerchantUXFeedback.shared.play(.success)
             commitSubmit()
         } label: {
             Text(title)

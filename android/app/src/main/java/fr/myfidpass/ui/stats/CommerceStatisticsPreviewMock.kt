@@ -29,14 +29,32 @@ object CommerceStatisticsPreviewMock {
     fun monthPayload(monthKey: String, indexFromNewest: Int): CommerceStatisticsPreviewMonthPayload {
         val seed = maxOf(1, 6 - indexFromNewest)
         val opsBase = 14 + indexFromNewest * 5
-        val evolutionPattern = listOf(
+        val milestones = listOf(1, 2, 3, 5, 6, 7, 8)
+        val newInMonthCumulative = listOf(2, 7, 12, 18, 24, 31, 38).map { it + seed * 2 - indexFromNewest }
+        val opsIntervals = listOf(
             opsBase + seed,
-            opsBase + seed * 2 + 4,
-            opsBase + seed + 8,
-            opsBase + seed * 3,
+            opsBase + seed + 3,
+            opsBase + seed + 5,
+            opsBase + seed * 2,
+            opsBase + seed + 4,
+            opsBase + seed * 2 + 2,
+            opsBase + seed + 6,
         )
-        val evolution = evolutionPattern.mapIndexed { i, ops ->
-            EvolutionWeekDto(weekIndex = i, operationsCount = ops, membersCount = 3650 + (5 - indexFromNewest) * 48 + i * 6)
+        val membersBase = 3650 + (5 - indexFromNewest) * 48
+        val basketBase = 18.2 + indexFromNewest * 0.6
+        val basketTotals = listOf(120.0, 248.0, 395.0, 510.0, 688.0, 842.0, 1015.0, 1188.0)
+            .map { it + indexFromNewest * 42.0 }
+        val evolution = milestones.mapIndexed { i, day ->
+            val newInMonth = maxOf(0, newInMonthCumulative[i])
+            EvolutionWeekDto(
+                weekIndex = i,
+                dayOfMonth = day,
+                operationsCount = opsIntervals[i],
+                membersCount = membersBase + newInMonth,
+                newMembersInMonth = newInMonth,
+                avgBasketEurInMonth = basketBase + i * 0.45,
+                basketTotalEurInMonth = basketTotals[i],
+            )
         }
         val members = 3920 - indexFromNewest * 62
         val newInMonth = 38 + seed * 4 - indexFromNewest * 3
@@ -101,15 +119,21 @@ object CommerceStatisticsPreviewMock {
     fun mockPage(monthKey: String, index: Int): CommerceStatsMonthPage {
         val payload = monthPayload(monthKey, index)
         val s = payload.stats
+        val pres = CommerceStatisticsDataBuilder.build(
+            stats = s,
+            evolution = payload.evolution,
+        )
         return CommerceStatsMonthPage(
             monthKey = monthKey,
             membersCount = s.membersCount,
             newMembers = s.newMembersInPeriod ?: s.newMembersLast30Days,
             avgBasketEur = s.avgBasketEur,
             visitFrequency = s.avgVisitsPerActiveMember,
-            sparkline = payload.evolution.map { (it.membersCount ?: 0).toFloat() }.ifEmpty {
-                demoSparklines[index % demoSparklines.size]
-            },
+            googleReviewsNewInPeriod = s.googleReviewsNewInPeriod ?: 0,
+            sparkline = pres.membersWeeklySparkline.ifEmpty { demoSparklines[index % demoSparklines.size] },
+            monthAxisDays = pres.membersMonthAxisDays,
+            panierSparkline = pres.panierWeeklySparkline,
+            panierMonthAxisDays = pres.panierMonthAxisDays,
         )
     }
 }

@@ -404,7 +404,7 @@ struct MerchantProUnlockTeaserButton: View {
 
     var body: some View {
         Button {
-            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            MerchantUXFeedback.shared.play(.emphasis)
             withAnimation(.spring(response: 0.34, dampingFraction: 0.78)) {
                 lockOpen = true
             }
@@ -434,5 +434,45 @@ struct MerchantProUnlockTeaserButton: View {
             preferDarkGlassTint ? .regularTint(LiquidGlassNativeTint.darkRegular) : .adaptive,
             cornerRadius: 20
         )
+    }
+}
+
+// MARK: - Pilule Dynamic Island (toast, scanner)
+
+extension View {
+    /// Fond Liquid Glass pour pilule type îlot (coins concentriques).
+    @ViewBuilder
+    func mfDynamicIslandLiquidGlass(minimumCorner: CGFloat = 30) -> some View {
+        mfDynamicIslandToastGlass(minimumCorner: minimumCorner, preferDark: true)
+    }
+
+    /// Toast scan « Client détecté » — verre clair type barre d’onglets (pas pilule noire opaque).
+    @ViewBuilder
+    func mfDynamicIslandToastGlass(minimumCorner: CGFloat = 30, preferDark: Bool = false) -> some View {
+        let shape = MFConcentricShapeFallback(minimumCorner: minimumCorner)
+        if #available(iOS 26.0, *) {
+            if preferDark {
+                self
+                    .glassEffect(.regular.tint(LiquidGlassNativeTint.darkRegular), in: shape)
+                    .overlay(shape.stroke(Color.white.opacity(0.16), lineWidth: 1))
+            } else {
+                self
+                    .glassEffect(.regular, in: shape)
+                    .overlay(shape.stroke(Color.black.opacity(0.07), lineWidth: 0.5))
+            }
+        } else {
+            self
+                .background {
+                    ZStack {
+                        shape.fill(.ultraThinMaterial)
+                        if preferDark {
+                            shape.fill(LiquidGlassNativeTint.darkRegular.opacity(0.68))
+                        }
+                    }
+                }
+                .clipShape(shape)
+                .overlay(shape.stroke((preferDark ? Color.white : Color.black).opacity(preferDark ? 0.2 : 0.08), lineWidth: preferDark ? 1 : 0.5))
+                .shadow(color: .black.opacity(preferDark ? 0.2 : 0.1), radius: 16, y: 6)
+        }
     }
 }

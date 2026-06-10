@@ -9,8 +9,8 @@
 import Foundation
 
 enum MerchantAppleSubscriptionProducts {
-    /// **Temporaire** : masquer l’annuel dans l’app (paywall + achat). Repasser à `true` pour désactiver.
-    static let annualPlansTemporarilyDisabled = false
+    /// **Temporaire** : masquer l’annuel dans l’app (paywall + achat). Repasser à `false` pour réactiver.
+    static let annualPlansTemporarilyDisabled = true
 
     /// Mensuel — 1 commerce (`MFPmensuel`).
     static let monthly = "MFPmensuel"

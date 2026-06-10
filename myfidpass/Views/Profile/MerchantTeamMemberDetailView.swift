@@ -440,11 +440,7 @@ enum TeamFormatting {
     }
 
     static func formatEuro(_ value: Double) -> String {
-        let f = NumberFormatter()
-        f.locale = Locale(identifier: "fr_FR")
-        f.numberStyle = .currency
-        f.currencyCode = "EUR"
-        return f.string(from: NSNumber(value: value)) ?? "\(value) €"
+        "\(StatsFR.formatTransactionEuro(value)) €"
     }
 
     static func formatDate(_ iso: String?) -> String? {

@@ -1,5 +1,6 @@
 package fr.myfidpass.data.repo
 
+import android.content.Context
 import fr.myfidpass.core.auth.JwtAccessExpiry
 import fr.myfidpass.core.auth.RefreshTokenCoordinator
 import fr.myfidpass.data.dto.AppleAuthRequest
@@ -15,6 +16,9 @@ import fr.myfidpass.data.dto.LogoutRequest
 import fr.myfidpass.data.dto.PlaceAutocompletePrediction
 import fr.myfidpass.data.dto.PlacesPlaceDetailsResponse
 import fr.myfidpass.data.dto.RegisterRequest
+import fr.myfidpass.data.local.CardPreviewSnapshotStore
+import fr.myfidpass.data.local.CommerceFlyerStore
+import fr.myfidpass.data.local.NotificationSendLocalHistoryStore
 import fr.myfidpass.data.local.FirstLaunchPreferences
 import fr.myfidpass.data.local.SessionStore
 import fr.myfidpass.data.network.MyfidpassApi
@@ -30,6 +34,7 @@ sealed class EmailLoginResult {
 }
 
 class AuthRepository(
+    private val appContext: Context,
     private val api: MyfidpassApi,
     private val sessionStore: SessionStore,
     private val firstLaunch: FirstLaunchPreferences,
@@ -233,6 +238,7 @@ class AuthRepository(
         runCatching {
             api.logout(LogoutRequest(refreshToken = sessionStore.refreshToken))
         }
+        clearLocalMerchantCachesForSessionEnd()
         sessionStore.clearSession()
     }
 
@@ -242,8 +248,16 @@ class AuthRepository(
 
     suspend fun deleteAccount() {
         api.deleteAccount()
+        clearLocalMerchantCachesForSessionEnd()
         sessionStore.clearSession()
         firstLaunch.resetAfterAccountDeletion()
+    }
+
+    private fun clearLocalMerchantCachesForSessionEnd() {
+        CardPreviewSnapshotStore.clearAll(appContext)
+        CommerceFlyerStore.clearAll(appContext)
+        NotificationSendLocalHistoryStore.clearAll(appContext)
+        appContext.getSharedPreferences("myfidpass.post_card_flyer_promo", Context.MODE_PRIVATE).edit().clear().apply()
     }
 
     private fun mapLoginError(e: HttpException): String = when (e.code()) {

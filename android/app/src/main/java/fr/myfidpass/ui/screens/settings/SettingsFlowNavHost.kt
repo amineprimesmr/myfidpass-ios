@@ -18,6 +18,7 @@ import fr.myfidpass.ui.screens.commerce.AddCommerceScreen
 import fr.myfidpass.ui.screens.commerce.MatchPredictionsScreen
 import fr.myfidpass.ui.screens.commerce.ScanSecuritySettingsScreen
 import fr.myfidpass.ui.screens.commerce.TeamManagementScreen
+import fr.myfidpass.ui.screens.settings.LoyaltyNetworkSettingsScreen
 import fr.myfidpass.ui.screens.commerce.TeamMemberDetailScreen
 import fr.myfidpass.ui.viewModelFactory
 import fr.myfidpass.ui.viewmodel.AccountSettingsViewModel
@@ -33,7 +34,7 @@ fun SettingsFlowNavHost(
     appScope: CoroutineScope,
     onDismiss: () -> Unit,
     onLogout: () -> Unit,
-    onOpenPaywall: () -> Unit,
+    onOpenPaywall: (addingAnotherCommerce: Boolean, pendingCommerceName: String?) -> Unit,
     onOpenFlyerHub: () -> Unit = {},
     modifier: Modifier = Modifier,
     showFlyerShortcuts: Boolean = false,
@@ -59,6 +60,7 @@ fun SettingsFlowNavHost(
                 onAppSettings = { nav.navigate(CommerceRoutes.SETTINGS_APP) },
                 onScanSecurity = { nav.navigate(CommerceRoutes.SCAN_SECURITY) },
                 onTeam = { nav.navigate(CommerceRoutes.TEAM) },
+                onLoyaltyNetwork = { nav.navigate(CommerceRoutes.LOYALTY_NETWORK) },
                 onMatchPredictions = { nav.navigate(CommerceRoutes.MATCH_PREDICTIONS) },
                 onAccounting = { nav.navigate(CommerceRoutes.ACCOUNTING) },
                 onOpenFlyerHub = onOpenFlyerHub,
@@ -88,6 +90,13 @@ fun SettingsFlowNavHost(
                 repository = container.dashboardRepository,
                 sessionStore = container.sessionStore,
                 snackbar = snackbarHostState,
+                onBack = { nav.popBackStack() },
+            )
+        }
+        composable(CommerceRoutes.LOYALTY_NETWORK) {
+            LoyaltyNetworkSettingsScreen(
+                api = container.api,
+                sessionStore = container.sessionStore,
                 onBack = { nav.popBackStack() },
             )
         }
@@ -135,6 +144,11 @@ fun SettingsFlowNavHost(
                 snackbar = snackbarHostState,
                 onBack = { nav.popBackStack() },
                 onCreated = { nav.popBackStack() },
+                onQuotaBlocked = { name ->
+                    nav.popBackStack()
+                    onDismiss()
+                    onOpenPaywall(true, name)
+                },
             )
         }
     }

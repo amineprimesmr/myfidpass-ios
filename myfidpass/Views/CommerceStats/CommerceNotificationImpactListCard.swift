@@ -93,6 +93,21 @@ struct CommerceNotificationImpactListCard: View {
     /// Même ressource que l’onglet Campagnes (`…/notification-icon` ou bundle `logonotif`).
     let notificationIconURL: String?
     var onTap: (() -> Void)? = nil
+    /// Nombre de campagnes visibles avant « Voir plus ».
+    private static let collapsedVisibleCount = 2
+
+    @State private var showsAllCampaigns = false
+
+    private var visibleCampaigns: [NotificationCampaignInsightDTO] {
+        if showsAllCampaigns || campaigns.count <= Self.collapsedVisibleCount {
+            return campaigns
+        }
+        return Array(campaigns.prefix(Self.collapsedVisibleCount))
+    }
+
+    private var hiddenCampaignCount: Int {
+        max(0, campaigns.count - Self.collapsedVisibleCount)
+    }
 
     var body: some View {
         Group {
@@ -123,7 +138,7 @@ struct CommerceNotificationImpactListCard: View {
             .padding(.trailing, 14)
             .padding(.bottom, 8)
 
-            ForEach(Array(campaigns.prefix(24).enumerated()), id: \.element.id) { idx, c in
+            ForEach(Array(visibleCampaigns.enumerated()), id: \.element.id) { idx, c in
                 if idx > 0 {
                     Divider()
                         .background(CommerceStatisticsTheme.subtleBorder(forGlassOverlay: commerceStatsGlassOverlay))
@@ -133,6 +148,44 @@ struct CommerceNotificationImpactListCard: View {
                     campaign: c,
                     notificationIconURL: notificationIconURL
                 )
+            }
+
+            if !showsAllCampaigns, hiddenCampaignCount > 0 {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.22)) { showsAllCampaigns = true }
+                } label: {
+                    HStack(spacing: 6) {
+                        Text("Voir plus (\(hiddenCampaignCount))")
+                            .font(CommerceStatisticsTheme.statsText(size: 13, weight: .semibold))
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 11, weight: .semibold))
+                    }
+                    .foregroundStyle(CommerceStatisticsTheme.onCardSecondary(forGlassOverlay: commerceStatsGlassOverlay))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 10)
+                    .padding(.bottom, 14)
+                    .padding(.leading, 16)
+                    .padding(.trailing, 14)
+                }
+                .buttonStyle(.plain)
+            } else if showsAllCampaigns, campaigns.count > Self.collapsedVisibleCount {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.22)) { showsAllCampaigns = false }
+                } label: {
+                    HStack(spacing: 6) {
+                        Text("Voir moins")
+                            .font(CommerceStatisticsTheme.statsText(size: 13, weight: .semibold))
+                        Image(systemName: "chevron.up")
+                            .font(.system(size: 11, weight: .semibold))
+                    }
+                    .foregroundStyle(CommerceStatisticsTheme.onCardSecondary(forGlassOverlay: commerceStatsGlassOverlay))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 10)
+                    .padding(.bottom, 14)
+                    .padding(.leading, 16)
+                    .padding(.trailing, 14)
+                }
+                .buttonStyle(.plain)
             }
         }
     }
@@ -169,8 +222,7 @@ private struct CommerceNotificationImpactRow: View {
                     Text("Membres touchés")
                         .font(CommerceStatisticsTheme.statsText(size: 11, weight: .semibold))
                         .foregroundStyle(CommerceStatisticsTheme.onCardSecondary(forGlassOverlay: commerceStatsGlassOverlay))
-                    let n = max(campaign.recipientsDistinct ?? 0, campaign.sentTotal ?? 0)
-                    Text(StatsFR.formatInt(n))
+                    Text(StatsFR.formatInt(campaign.confirmedRecipientsCount))
                         .font(CommerceStatisticsTheme.statisticNumbers(size: 16, weight: .semibold))
                         .foregroundStyle(CommerceStatisticsTheme.onCardPrimary(forGlassOverlay: commerceStatsGlassOverlay))
                     Spacer(minLength: 8)

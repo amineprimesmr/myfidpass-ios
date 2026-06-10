@@ -26,6 +26,9 @@ enum MerchantTransactionEventLabels {
         if let label = parseRewardLabel(fromMetadata: metadata), !label.isEmpty {
             segments.append("l:\(encodeSegmentValue(label))")
         }
+        if let eur = parseAmountEur(fromMetadata: metadata), eur > 0 {
+            segments.append("e:\(encodeAmountEurSegment(eur))")
+        }
         return segments.joined(separator: "|")
     }
 
@@ -70,9 +73,17 @@ enum MerchantTransactionEventLabels {
         return parseRewardLabel(fromMetadata: note)
     }
 
+    static func parseAmountEur(fromStampNote note: String?) -> Double? {
+        if let raw = segmentValue(in: note, prefix: "e:") {
+            let normalized = raw.replacingOccurrences(of: ",", with: ".")
+            if let v = Double(normalized), v > 0 { return v }
+        }
+        return parseAmountEur(fromMetadata: note)
+    }
+
     private static func segmentValue(in note: String?, prefix: String) -> String? {
         let raw = note?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard raw.hasPrefix("txn:") else { return nil }
+        guard raw.hasPrefix("txn:") || raw.hasPrefix("pending:") else { return nil }
         for part in raw.split(separator: "|") {
             let s = String(part)
             if s.hasPrefix(prefix) {
@@ -141,7 +152,9 @@ enum MerchantTransactionEventLabels {
         points: Int?,
         isVisit: Bool,
         isPointsProgram: Bool,
-        rewardLabel: String? = nil
+        rewardLabel: String? = nil,
+        amountEur: Double? = nil,
+        pointsPerEuro: Int? = nil
     ) -> String {
         let normalized = type?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
         if normalized == "reward_redeem" {
@@ -151,20 +164,53 @@ enum MerchantTransactionEventLabels {
             return "Récompense"
         }
         if normalized == "welcome_bonus" {
-            return "Nouveau membre"
+            return "Nouveau"
         }
         if normalized == "points_correction" {
+            if let eur = resolvedDashboardAmountEur(amountEur: amountEur, points: points, pointsPerEuro: pointsPerEuro) {
+                return formatDashboardEuro(eur, sign: "−")
+            }
             if let p = points, p < 0 { return "−\(abs(p)) pts" }
             return "Correction"
         }
         if isVisit || (!isPointsProgram && normalized == "points_add") {
-            return isPointsProgram ? "+ Visite" : stampCreditAmountLine(points: points)
+            if isPointsProgram, isVisit,
+               resolvedDashboardAmountEur(amountEur: amountEur, points: points, pointsPerEuro: pointsPerEuro) == nil {
+                return "+ Visite"
+            }
+            if !isPointsProgram {
+                return stampCreditAmountLine(points: points)
+            }
+        }
+        if isPointsProgram,
+           let eur = resolvedDashboardAmountEur(amountEur: amountEur, points: points, pointsPerEuro: pointsPerEuro) {
+            return formatDashboardEuro(eur, sign: "+")
         }
         if let p = points, isPointsProgram {
             if p > 0 { return "+\(p) pts" }
             if p < 0 { return "−\(abs(p)) pts" }
         }
         return isPointsProgram ? "+ Visite" : stampCreditAmountLine(points: points)
+    }
+
+    private static func resolvedDashboardAmountEur(
+        amountEur: Double?,
+        points: Int?,
+        pointsPerEuro: Int?
+    ) -> Double? {
+        if let eur = amountEur, eur > 0 { return eur }
+        guard let p = points, p > 0, let ppe = pointsPerEuro, ppe > 0 else { return nil }
+        return Double(p) / Double(ppe)
+    }
+
+    private static func formatDashboardEuro(_ amount: Double, sign: String) -> String {
+        let formatted = StatsFR.formatTransactionEuro(amount)
+        return "\(sign)\(formatted) €"
+    }
+
+    private static func encodeAmountEurSegment(_ amount: Double) -> String {
+        String(format: "%.4f", amount)
+            .replacingOccurrences(of: #"\.?0+$"#, with: "", options: .regularExpression)
     }
 
     /// Libellé droit du fil d’activité en mode tampons (remplace « Visite »).
@@ -184,6 +230,20 @@ enum MerchantTransactionEventLabels {
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
         let label = (obj["reward_label"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return label.isEmpty ? nil : label
+    }
+
+    static func parseAmountEur(fromMetadata metadata: String?) -> Double? {
+        let raw = metadata?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !raw.isEmpty,
+              let data = raw.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        if let n = obj["amount_eur"] as? Double, n > 0 { return n }
+        if let n = obj["amount_eur"] as? Int, n > 0 { return Double(n) }
+        if let s = obj["amount_eur"] as? String {
+            let normalized = s.replacingOccurrences(of: ",", with: ".")
+            if let n = Double(normalized), n > 0 { return n }
+        }
+        return nil
     }
 
     private static func encodeSegmentValue(_ value: String) -> String {

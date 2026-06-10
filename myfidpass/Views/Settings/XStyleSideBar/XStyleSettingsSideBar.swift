@@ -18,6 +18,8 @@ struct XStyleSettingsSideBar: View {
     var onOpenFlyer: () -> Void
     var onOpenFootballGame: () -> Void
     var onOpenLiveGame: () -> Void
+    /// Admin plateforme en pilotage : retour console Administration.
+    var onOpenAdministration: (() -> Void)? = nil
 
     @State private var showsFlyerCreationAttention = false
 
@@ -39,6 +41,12 @@ struct XStyleSettingsSideBar: View {
 
     private var commerceCountLabel: String {
         "\(authService.businesses.count)"
+    }
+
+    private var showsAdministrationEntry: Bool {
+        authService.isPlatformAdmin
+            && authService.adminShowsMerchantWorkspace
+            && onOpenAdministration != nil
     }
 
     var body: some View {
@@ -78,7 +86,7 @@ struct XStyleSettingsSideBar: View {
                         onOpenFootballGame()
                     }
 
-                    sideMenuButton(icon: "play.circle", title: "Jeu en direct", showsTrailingArrow: true, dismissMenuOnTap: false) {
+                    sideMenuButton(title: "Jeu en direct", showsInlineExternalArrow: true, dismissMenuOnTap: false) {
                         onOpenLiveGame()
                     }
 
@@ -100,6 +108,12 @@ struct XStyleSettingsSideBar: View {
             }
             .padding(.top, 15)
             .scrollClipDisabled()
+
+            if showsAdministrationEntry, let onOpenAdministration {
+                administrationMenuButton(action: onOpenAdministration)
+                    .padding(.top, 12)
+                    .padding(.bottom, 8)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         .padding([.horizontal, .top], 15)
@@ -162,12 +176,32 @@ struct XStyleSettingsSideBar: View {
             .frame(width: size, height: size)
     }
 
+    private func administrationMenuButton(action: @escaping () -> Void) -> some View {
+        Button {
+            isExpanded = false
+            action()
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "shield.lefthalf.filled")
+                    .font(.title3)
+                    .frame(width: 30)
+                    .symbolVariant(.fill)
+                Text("Administration")
+                    .font(.title3)
+                    .fontWeight(.bold)
+            }
+            .foregroundStyle(AppTheme.Colors.primary)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Retour Administration")
+    }
+
     @ViewBuilder
     private func sideMenuButton(
-        icon: String,
+        icon: String? = nil,
         title: String,
         showsAttentionDot: Bool = false,
-        showsTrailingArrow: Bool = false,
+        showsInlineExternalArrow: Bool = false,
         dismissMenuOnTap: Bool = true,
         action: @escaping () -> Void
     ) -> some View {
@@ -178,27 +212,27 @@ struct XStyleSettingsSideBar: View {
             action()
         } label: {
             HStack(spacing: 10) {
-                Image(systemName: icon)
-                    .font(.title3)
-                    .frame(width: 30)
-                    .symbolVariant(.fill)
+                if let icon {
+                    Image(systemName: icon)
+                        .font(.title3)
+                        .frame(width: 30)
+                        .symbolVariant(.fill)
+                }
 
-                HStack(spacing: 8) {
+                HStack(spacing: showsInlineExternalArrow ? 5 : 8) {
                     Text(title)
                         .font(.title3)
                         .fontWeight(.bold)
+                    if showsInlineExternalArrow {
+                        Image(systemName: "arrow.up.right")
+                            .font(.subheadline.weight(.bold))
+                    }
                     if showsAttentionDot {
                         Circle()
                             .fill(Color.red)
                             .frame(width: 9, height: 9)
                             .accessibilityHidden(true)
                     }
-                }
-
-                if showsTrailingArrow {
-                    Spacer(minLength: 0)
-                    Image(systemName: "arrow.right")
-                        .font(.body.weight(.bold))
                 }
             }
             .foregroundStyle(.white)

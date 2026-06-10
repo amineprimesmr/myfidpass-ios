@@ -1,6 +1,7 @@
 package fr.myfidpass.data.network
 
 import fr.myfidpass.BuildConfig
+import fr.myfidpass.core.auth.AuthApiErrorCodes
 import fr.myfidpass.core.auth.RefreshTokenCoordinator
 import fr.myfidpass.core.auth.RefreshTokenOutcome
 import fr.myfidpass.data.local.SessionStore
@@ -75,6 +76,12 @@ class NetworkModule(
         if (request.header("X-Retry") == "1") {
             return@Interceptor response
         }
+        val sessionRevokedBody = response.peekBody(8192).string()
+        if (AuthApiErrorCodes.isSessionRevoked(sessionRevokedBody)) {
+            response.close()
+            refreshCoordinator.forceTerminateSession()
+            return@Interceptor chain.proceed(request.newBuilder().header("X-Retry", "1").build())
+        }
         response.close()
 
         val outcome = refreshCoordinator.refreshSync(force = true)
@@ -101,6 +108,10 @@ class NetworkModule(
                         return@Interceptor chain.proceed(retry)
                     }
                 }
+                return@Interceptor chain.proceed(request.newBuilder().header("X-Retry", "1").build())
+            }
+            RefreshTokenOutcome.SessionRevoked -> {
+                refreshCoordinator.forceTerminateSession()
                 return@Interceptor chain.proceed(request.newBuilder().header("X-Retry", "1").build())
             }
             RefreshTokenOutcome.InvalidToken,

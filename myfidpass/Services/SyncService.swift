@@ -59,6 +59,8 @@ final class SyncService: ObservableObject {
     @Published private(set) var lastError: String?
     /// Incrémenté à chaque échec de synchro (hors annulation) : l’UI peut réafficher le bandeau d’erreur.
     @Published private(set) var syncErrorRevision: Int = 0
+    /// Slug pour lequel une passe sync a tenté l’hydratation flyer (succès ou échec réseau géré).
+    @Published private(set) var flyerHydrationCompletedForSlug: String?
 
     private static let lastSyncKey = "myfidpass.sync.lastSyncDate"
     private static let templateLastSavedKey = "myfidpass.templateLastSavedAt"
@@ -89,7 +91,14 @@ final class SyncService: ObservableObject {
     func resetForSessionEnd() {
         sessionGeneration += 1
         lastError = nil
+        flyerHydrationCompletedForSlug = nil
         invalidateSyncThrottle()
+    }
+
+    func hasCompletedFlyerHydration(for slugRaw: String) -> Bool {
+        let slug = slugRaw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !slug.isEmpty else { return false }
+        return flyerHydrationCompletedForSlug == slug
     }
 
     private func syncStillOwnedByCurrentSession(_ capturedGeneration: Int) -> Bool {
@@ -122,8 +131,11 @@ final class SyncService: ObservableObject {
     private static let transactionsAPIPageSize = 100
     /// Mode perf : limite volontairement le volume synchronisé par passe (200 × pages).
     private static let maxMemberPages = 25
-    /// `sort=desc` : transactions récentes en priorité (100 × pages = 1000 lignes).
-    private static let maxTransactionPages = 10
+    /// `sort=desc` : transactions récentes en priorité (100 × pages = 5000 lignes).
+    private static let maxTransactionPages = 50
+    /// Pilotage admin : assez pour l’accueil (200 membres + 200 tx récentes) sans bloquer l’UI.
+    private static let pilotMaxMemberPages = 1
+    private static let pilotMaxTransactionPages = 2
     /// Plafond aligné export SaaS (`GET …/transactions/export`, limit 25000).
     private static let maxMemberHistoryTransactions = 25_000
     private static let memberHistoryPageSize = 200
@@ -148,11 +160,6 @@ final class SyncService: ObservableObject {
     private func postSyncFailureBanner() {
         guard let msg = lastError, !msg.isEmpty else { return }
         syncErrorRevision += 1
-        NotificationCenter.default.post(
-            name: .myfidpassRemoteSyncDidFail,
-            object: nil,
-            userInfo: ["message": msg as Any]
-        )
     }
 
     /// Recharge serveur → Core Data après une mutation locale enregistrée côté API.
@@ -178,10 +185,64 @@ final class SyncService: ObservableObject {
         }
     }
 
+    /// Entrée pilotage admin : sync allégée (récent + flyer) pour afficher l’accueil sans tirer 5000 transactions.
+    func syncPilotEntry(force: Bool = false) async {
+        await syncSerialExecutor.enqueue { [self] in
+            await self.performPilotEntrySync(force: force)
+        }
+    }
+
     /// Récupère user + businesses, puis pour le commerce courant (slug) : settings, stats, membres, transactions.
     func syncIfNeeded(force: Bool = false) async {
         await syncSerialExecutor.enqueue { [self] in
             await self.performSyncIfNeeded(force: force)
+        }
+    }
+
+    private func performPilotEntrySync(force: Bool) async {
+        let syncGeneration = sessionGeneration
+        guard syncStillOwnedByCurrentSession(syncGeneration),
+              let token = APIClient.shared.authToken, !token.isEmpty else { return }
+        guard authService?.isPlatformAdmin == true, authService?.adminShowsMerchantWorkspace == true else { return }
+        if !force, let last = lastSyncDate, Date().timeIntervalSince(last) < Self.syncThrottleInterval, !isSyncing {
+            return
+        }
+        isSyncing = true
+        lastError = nil
+        defer { isSyncing = false }
+        do {
+            await APIClient.shared.ensureValidAccessTokenWithRetry(maxAttempts: 3)
+            let cachedSlug = AuthStorage.currentBusinessSlug.flatMap { s -> String? in
+                let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+                return t.isEmpty ? nil : t
+            }
+            let lastSaved = UserDefaults.standard.object(forKey: Self.templateLastSavedKey) as? Date
+            let skipTemplate = (lastSaved != nil && lastSyncDate != nil && lastSaved! > lastSyncDate!)
+
+            let me: AuthMeResponse = try await APIClient.shared.request(.authMe)
+            guard syncStillOwnedByCurrentSession(syncGeneration) else { return }
+            authService?.applyAuthMeResponse(me)
+
+            let slug = resolvedSlug(from: me) ?? cachedSlug
+            if let slug {
+                try await syncBusiness(
+                    slug: slug,
+                    skipTemplateOverwrite: skipTemplate,
+                    syncGeneration: syncGeneration,
+                    maxMemberPages: Self.pilotMaxMemberPages,
+                    maxTransactionPages: Self.pilotMaxTransactionPages
+                )
+            }
+
+            lastSyncDate = Date()
+            UserDefaults.standard.set(lastSyncDate, forKey: Self.lastSyncKey)
+            if let slug = slug?.trimmingCharacters(in: .whitespacesAndNewlines), !slug.isEmpty {
+                MerchantStatisticsDiskCache.removePeriod(slug: slug, period: Self.currentStatsMonthKey())
+            }
+        } catch SyncSessionEnded.sessionEnded {
+            return
+        } catch {
+            presentSyncFailure(error, syncGeneration: syncGeneration)
         }
     }
 
@@ -308,22 +369,33 @@ final class SyncService: ObservableObject {
         return (error as? URLError)?.code == .cancelled
     }
 
-    private func syncBusiness(slug: String, skipTemplateOverwrite: Bool = false, syncGeneration: Int) async throws {
+    private func syncBusiness(
+        slug: String,
+        skipTemplateOverwrite: Bool = false,
+        syncGeneration: Int,
+        maxMemberPages: Int? = nil,
+        maxTransactionPages: Int? = nil
+    ) async throws {
+        let memberPageLimit = maxMemberPages ?? Self.maxMemberPages
+        let transactionPageLimit = maxTransactionPages ?? Self.maxTransactionPages
         guard syncStillOwnedByCurrentSession(syncGeneration) else { throw SyncSessionEnded.sessionEnded }
         // Vague 1 : séquentielle, plus sûre que trois requêtes parallèles au démarrage.
         let settings: BusinessSettingsResponse = try await APIClient.shared.request(.businessSettings(slug: slug))
         guard syncStillOwnedByCurrentSession(syncGeneration) else { throw SyncSessionEnded.sessionEnded }
+        reconcileProgramModeSwitchFromServerSettings(settings, slug: slug)
         ScanFlowSettingsCache.store(settings, for: slug)
         let stats: BusinessStatsResponse = try await APIClient.shared.request(.businessStats(slug: slug, period: nil))
         guard syncStillOwnedByCurrentSession(syncGeneration) else { throw SyncSessionEnded.sessionEnded }
         updateSnapshotRemoteBackground(settings: settings, slug: slug)
 
         // Vague 2 : membres + transactions en parallèle, puis un seul merge Core Data (UI notifiée).
-        async let membersTask = fetchAllMembers(slug: slug)
-        async let transactionsTask = fetchAllTransactions(slug: slug)
+        async let membersTask = fetchMembers(slug: slug, maxPages: memberPageLimit)
+        async let transactionsTask = fetchTransactions(slug: slug, maxPages: transactionPageLimit)
         let members = try await membersTask
         let transactions = try await transactionsTask
         guard syncStillOwnedByCurrentSession(syncGeneration) else { throw SyncSessionEnded.sessionEnded }
+
+        AuthStorage.clearProgramModeSwitchExpectEmptyHistory(slug: slug)
 
         try await mergeOnBackground(
             slug: slug,
@@ -334,6 +406,123 @@ final class SyncService: ObservableObject {
             skipTemplateOverwrite: skipTemplateOverwrite,
             notifyUI: true
         )
+        await hydrateFlyerFromServer(slug: slug, syncGeneration: syncGeneration, settingsHint: settings)
+    }
+
+    /// Alimente `CommerceFlyerStore` depuis l’API (évite le faux « Créer le flyer » après déconnexion / sync).
+    private func hydrateFlyerFromServer(
+        slug: String,
+        syncGeneration: Int,
+        settingsHint: BusinessSettingsResponse? = nil
+    ) async {
+        let trimmed = slug.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        guard syncStillOwnedByCurrentSession(syncGeneration) else { return }
+        defer {
+            if syncStillOwnedByCurrentSession(syncGeneration) {
+                flyerHydrationCompletedForSlug = trimmed
+                NotificationCenter.default.post(
+                    name: .myfidpassFlyerCacheDidHydrateFromSync,
+                    object: nil,
+                    userInfo: ["slug": trimmed]
+                )
+            }
+        }
+        do {
+            let flyer: DashboardFlyerGetResponse = try await APIClient.shared.request(.dashboardFlyerGet(slug: trimmed))
+            guard syncStillOwnedByCurrentSession(syncGeneration) else { return }
+            CommerceFlyerStore.shared.hydrateFromDiskIfNeeded(slug: trimmed)
+            let cacheRegistered = CommerceFlyerStore.shared.snapshot(for: trimmed)?.flyerRegistered ?? false
+            let settingsRegistered = settingsHint?.hasFlyerPrefs == true
+            let flyerRegistered = flyer.commerceIndicatesFlyerRegistered || cacheRegistered || settingsRegistered
+            let shareURL: String = {
+                let trimmedShare = (flyer.shareUrl ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                if trimmedShare.isEmpty {
+                    return LegalURLs.fidelityCardPage(slug: trimmed)?.absoluteString ?? ""
+                }
+                return trimmedShare
+            }()
+            let customBg = flyer.flyerPrefs?.customBgDataUrl
+            let priorBootstrapRaw = CommerceFlyerStore.shared.snapshot(for: trimmed)?.bootstrapPreviewB64
+                ?? CommerceFlyerStateCache.load(slug: trimmed)?.bootstrapPreviewB64
+            let priorBootstrap = priorBootstrapRaw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let fallbackState: FlyerStateDTO? = priorBootstrap.isEmpty
+                ? nil
+                : FlyerBootstrapPreviewPayloadBuilder.flyerStateFromBootstrapBase64(priorBootstrap)
+            var bootstrapB64 = FlyerBootstrapPreviewPayloadBuilder.base64(
+                from: flyer,
+                businessSlug: trimmed,
+                fallbackStateIfMissing: fallbackState
+            )
+            if bootstrapB64 == nil, !priorBootstrap.isEmpty { bootstrapB64 = priorBootstrap }
+            CommerceFlyerStateCache.save(
+                slug: trimmed,
+                flyerRegistered: flyerRegistered,
+                shareURL: shareURL,
+                bootstrapB64: bootstrapB64,
+                engagementStepDone: false,
+                customBgDataURL: customBg,
+                revisionKey: flyer.updatedAt ?? settingsHint?.flyerPrefsUpdatedAt
+            )
+            CommerceFlyerStore.shared.upsert(
+                slug: trimmed,
+                snapshot: .init(
+                    flyerRegistered: flyerRegistered,
+                    shareURL: shareURL,
+                    bootstrapPreviewB64: bootstrapB64,
+                    customBgDataURL: customBg,
+                    revisionKey: flyer.updatedAt ?? settingsHint?.flyerPrefsUpdatedAt
+                )
+            )
+        } catch {
+            syncServiceLog.debug("Flyer hydrate fallback: \(String(describing: error))")
+            applyFlyerCacheFromSettingsHintIfNeeded(slug: trimmed, settings: settingsHint)
+        }
+    }
+
+    /// GET flyer indisponible : si settings confirment des prefs serveur, éviter le sheet « Créer le flyer ».
+    private func applyFlyerCacheFromSettingsHintIfNeeded(slug: String, settings: BusinessSettingsResponse?) {
+        guard settings?.hasFlyerPrefs == true else { return }
+        let trimmed = slug.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let shareURL = LegalURLs.fidelityCardPage(slug: trimmed)?.absoluteString ?? ""
+        CommerceFlyerStateCache.save(
+            slug: trimmed,
+            flyerRegistered: true,
+            shareURL: shareURL,
+            bootstrapB64: CommerceFlyerStateCache.load(slug: trimmed)?.bootstrapPreviewB64,
+            engagementStepDone: false,
+            customBgDataURL: CommerceFlyerStateCache.load(slug: trimmed)?.customBgDataURL,
+            revisionKey: settings?.flyerPrefsUpdatedAt
+        )
+        CommerceFlyerStore.shared.upsert(
+            slug: trimmed,
+            snapshot: .init(
+                flyerRegistered: true,
+                shareURL: shareURL,
+                bootstrapPreviewB64: CommerceFlyerStateCache.load(slug: trimmed)?.bootstrapPreviewB64,
+                customBgDataURL: CommerceFlyerStateCache.load(slug: trimmed)?.customBgDataURL,
+                revisionKey: settings?.flyerPrefsUpdatedAt
+            )
+        )
+    }
+
+    private static func normalizedProgramTypeFromSettings(_ settings: BusinessSettingsResponse) -> String {
+        let raw = (settings.programType ?? "points").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return raw == "stamps" ? "stamps" : "points"
+    }
+
+    private static func lastSyncedProgramTypeKey(slug: String) -> String {
+        "myfidpass.lastSyncedProgramType.\(slug)"
+    }
+
+    /// Mémorise le type de programme serveur (Points / Tampons) sans effacer l’historique local.
+    private func reconcileProgramModeSwitchFromServerSettings(_ settings: BusinessSettingsResponse, slug: String) {
+        let trimmed = slug.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let serverType = Self.normalizedProgramTypeFromSettings(settings)
+        let key = Self.lastSyncedProgramTypeKey(slug: trimmed)
+        UserDefaults.standard.set(serverType, forKey: key)
     }
 
     /// Met à jour le snapshot d'aperçu carte depuis GET settings pour que l'accueil reflète
@@ -367,11 +556,11 @@ final class SyncService: ObservableObject {
         CardPreviewSnapshotBuilder.fromSettings(settings, slug: slug, preserving: existing)
     }
 
-    private func fetchAllMembers(slug: String) async throws -> BusinessMembersResponse {
+    private func fetchMembers(slug: String, maxPages: Int) async throws -> BusinessMembersResponse {
         var collected: [MemberDTO] = []
         var offset = 0
         var serverTotal: Int?
-        for _ in 0..<Self.maxMemberPages {
+        for _ in 0..<maxPages {
             let page = try await APIClient.shared.request(
                 .businessMembers(
                     slug: slug,
@@ -391,12 +580,12 @@ final class SyncService: ObservableObject {
         return BusinessMembersResponse(members: collected, total: serverTotal ?? collected.count)
     }
 
-    private func fetchAllTransactions(slug: String) async throws -> BusinessTransactionsResponse {
+    private func fetchTransactions(slug: String, maxPages: Int) async throws -> BusinessTransactionsResponse {
         var collected: [TransactionDTO] = []
         var seenIds = Set<String>()
         var offset = 0
         var serverTotal: Int?
-        for _ in 0..<Self.maxTransactionPages {
+        for _ in 0..<maxPages {
             let page = try await APIClient.shared.request(
                 .businessTransactions(
                     slug: slug,
@@ -433,8 +622,8 @@ final class SyncService: ObservableObject {
         notifyUI: Bool = true
     ) async throws {
         let c = container
-        let logoKey = SyncMergeUserDefaults.lastLogoUploadAt
-        let logoIconKey = SyncMergeUserDefaults.lastLogoIconUploadAt
+        let logoKey = "myfidpass.lastLogoUploadAt.\(slug)"
+        let logoIconKey = "myfidpass.lastLogoIconUploadAt.\(slug)"
         // Contexte enfant → parent : aucun `mergeChanges` global (observateur supprimé dans Persistence).
         // Sauvegarde du parent sur la file principale, sans `perform` + `Task` imbriqués (réentrance / malloc).
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
@@ -575,12 +764,14 @@ final class SyncService: ObservableObject {
                         context: child
                     )
                     SyncCoreDataMerge.dedupeStamps(on: card, txnStampsByKey: &txnStampsByKey, context: child)
-                    SyncCoreDataMerge.purgeOrphanTxnStamps(
-                        for: card,
-                        serverTxnIds: serverTxnIds,
-                        txnStampsByKey: &txnStampsByKey,
-                        context: child
-                    )
+                    if !serverTxnIds.isEmpty {
+                        let reconciledMemberIds: Set<String> = [memberId]
+                        SyncCoreDataMerge.purgeReconciledPendingScanStamps(
+                            for: template,
+                            reconciledMemberIds: reconciledMemberIds,
+                            context: child
+                        )
+                    }
                     try child.save()
                     DispatchQueue.main.async {
                         do {
@@ -645,7 +836,7 @@ fileprivate enum SyncCoreDataMerge {
         let template = findOrCreateCardTemplate(business: business, context: context)
         let existingCardsByMemberId = existingCardsIndex(for: template, context: context)
         var txnStampsByKey = existingTxnStampIndex(for: template, context: context)
-        MerchantLogoAssetCache.applyMerchantLogoTimestamps(from: settings)
+        MerchantLogoAssetCache.applyMerchantLogoTimestamps(from: settings, slug: slug)
         if !skipTemplateOverwrite {
             template.displayName = settings.organizationName ?? "Ma Carte"
             template.primaryColorHex = settings.backgroundColor?.replacingOccurrences(of: "#", with: "")
@@ -655,7 +846,7 @@ fileprivate enum SyncCoreDataMerge {
             if let s = settings.requiredStamps, s > 0 { template.requiredStamps = Int32(s) }
             if let url = settings.logoUrl, !url.isEmpty {
                 let current = template.logoURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                let pendingLocal = CardLogoStorage.isLocalPendingLogoReference(current)
+                let pendingLocal = CardLogoStorage.isLocalPendingLogoReference(current, slug: slug)
                 if !pendingLocal {
                     let serverLogoAt = settings.logoUpdatedAt.flatMap { parseISO8601($0) }
                     let localUploadAt = UserDefaults.standard.object(forKey: lastLogoUploadKey) as? Date
@@ -665,7 +856,7 @@ fileprivate enum SyncCoreDataMerge {
             }
             if let url = settings.logoIconUrl, !url.isEmpty {
                 let current = template.logoIconURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                let pendingLocal = CardLogoStorage.isLocalPendingLogoIconReference(current)
+                let pendingLocal = CardLogoStorage.isLocalPendingLogoIconReference(current, slug: slug)
                 if !pendingLocal {
                     let serverAt = settings.logoIconUpdatedAt.flatMap { parseISO8601($0) }
                     let localUploadAt = UserDefaults.standard.object(forKey: lastLogoIconUploadKey) as? Date
@@ -679,6 +870,7 @@ fileprivate enum SyncCoreDataMerge {
 
         var cardsByMemberId = existingCardsByMemberId
         for m in members.members {
+            if WalletPreviewMember.shouldExcludeFromMerchantActivity(clientEmail: m.email) { continue }
             let card = cardsByMemberId[m.id] ?? {
                 let created = ClientCard(context: context)
                 created.id = UUID()
@@ -704,16 +896,38 @@ fileprivate enum SyncCoreDataMerge {
             card.updatedAt = parseISO8601(m.lastVisitAt) ?? card.updatedAt
         }
 
+        for card in (try? context.fetch(ClientCard.fetchRequest())) ?? [] where card.template == template {
+            if WalletPreviewMember.isGuestPlaceholderEmail(card.clientEmail) {
+                context.delete(card)
+            }
+        }
+
         deduplicateClientCards(for: template, context: context)
         cardsByMemberId = rebuildCardsByMemberId(for: template, context: context)
         txnStampsByKey = existingTxnStampIndex(for: template, context: context)
 
+        let serverTransactions = transactions.transactions
+
         mergeTransactions(
-            transactions.transactions,
+            serverTransactions,
             cardsByMemberId: cardsByMemberId,
             txnStampsByKey: &txnStampsByKey,
             context: context
         )
+
+        if !serverTransactions.isEmpty {
+            let reconciledMemberIds = Set(
+                serverTransactions.compactMap { t -> String? in
+                    let mid = t.memberId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    return mid.isEmpty ? nil : mid
+                }
+            )
+            purgeReconciledPendingScanStamps(
+                for: template,
+                reconciledMemberIds: reconciledMemberIds,
+                context: context
+            )
+        }
     }
 
     // MARK: - Fusion transactions
@@ -897,20 +1111,21 @@ fileprivate enum SyncCoreDataMerge {
         }
     }
 
-    static func purgeOrphanTxnStamps(
-        for card: ClientCard,
-        serverTxnIds: Set<String>,
-        txnStampsByKey: inout [String: Stamp],
+    /// Tampons optimistes (`pending:`) : retirés seulement pour les membres qui ont reçu une transaction serveur dans ce merge.
+    /// Évite d’effacer un scan tout juste enregistré si la sync n’a pas encore la ligne API.
+    static func purgeReconciledPendingScanStamps(
+        for template: CardTemplate,
+        reconciledMemberIds: Set<String>,
         context: NSManagedObjectContext
     ) {
-        guard !serverTxnIds.isEmpty else { return }
-        guard let stamps = card.stamps?.allObjects as? [Stamp] else { return }
+        guard !reconciledMemberIds.isEmpty else { return }
+        let request = Stamp.fetchRequest()
+        request.predicate = NSPredicate(format: "clientCard.template == %@ AND note BEGINSWITH %@", template, "pending:")
+        let stamps = (try? context.fetch(request)) ?? []
         for stamp in stamps {
-            guard let key = normalizedTxnDedupKey(fromStampNote: stamp.note) else { continue }
-            let txnId = String(key.dropFirst(4))
-            guard !serverTxnIds.contains(txnId) else { continue }
+            let memberId = stamp.clientCard?.qrCodeValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard reconciledMemberIds.contains(memberId) else { continue }
             context.delete(stamp)
-            if txnStampsByKey[key]?.objectID == stamp.objectID { txnStampsByKey.removeValue(forKey: key) }
         }
     }
 

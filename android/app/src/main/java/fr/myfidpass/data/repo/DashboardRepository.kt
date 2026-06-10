@@ -30,8 +30,14 @@ import fr.myfidpass.data.dto.MemberTicketsResponse
 import fr.myfidpass.data.dto.MerchantAccountingPackResponse
 import fr.myfidpass.data.dto.TransactionExportJsonResponse
 import fr.myfidpass.data.dto.NotifyClientsRequest
+import fr.myfidpass.data.dto.NotificationCampaignInsightDto
+import fr.myfidpass.data.dto.NotificationReadinessResponse
 import fr.myfidpass.data.dto.NotificationSendRequest
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.decodeFromJsonElement
+import kotlinx.serialization.json.jsonArray
 import fr.myfidpass.data.dto.PatchGameRequest
+import fr.myfidpass.data.dto.PlacesPlaceDetailsResponse
 import fr.myfidpass.data.dto.BusinessCheckoutSessionRequest
 import fr.myfidpass.data.dto.PaymentCheckoutRequest
 import fr.myfidpass.data.dto.PaymentReconcileResponse
@@ -139,6 +145,12 @@ class DashboardRepository(
 
     suspend fun businessSettings(slug: String): BusinessSettingsResponse =
         api.businessSettings(slug)
+
+    suspend fun publicBusinessInfo(slug: String) =
+        api.publicBusinessInfo(slug)
+
+    suspend fun placesPlaceDetails(placeId: String): PlacesPlaceDetailsResponse =
+        api.placesPlaceDetails(placeId.trim())
 
     suspend fun patchDashboardSettings(slug: String, patch: JsonObject) {
         api.patchDashboardSettings(slug, patch)
@@ -312,14 +324,37 @@ class DashboardRepository(
     suspend fun notificationStats(slug: String): JsonObject =
         api.notificationStats(slug)
 
+    suspend fun notificationJobStatus(slug: String, jobId: String): JsonObject =
+        api.notificationJobStatus(slug, jobId)
+
+    suspend fun notificationCampaignsFromStats(slug: String): List<NotificationCampaignInsightDto> {
+        val payload = notificationStats(slug)
+        val arr = payload["notification_campaigns"]?.jsonArray ?: return emptyList()
+        val codec = Json { ignoreUnknownKeys = true }
+        return arr.mapNotNull { el ->
+            runCatching {
+                codec.decodeFromJsonElement(NotificationCampaignInsightDto.serializer(), el)
+            }.getOrNull()
+        }
+    }
+
+    suspend fun notificationReadiness(): NotificationReadinessResponse =
+        api.notificationReadiness()
+
     suspend fun sendNotification(
         slug: String,
         message: String,
         title: String? = null,
         segment: String? = null,
+        businessSlugs: List<String>? = null,
     ): JsonObject = api.notificationSend(
         slug,
-        NotificationSendRequest(message = message, title = title, segment = segment),
+        NotificationSendRequest(
+            message = message,
+            title = title,
+            segment = segment,
+            businessSlugs = businessSlugs?.takeIf { it.size > 1 },
+        ),
     )
 
     suspend fun paymentCheckout(planId: String? = null): CheckoutUrlResponse =
@@ -332,8 +367,6 @@ class DashboardRepository(
 
     suspend fun paymentReconcile(): PaymentReconcileResponse =
         api.paymentReconcile()
-
-    suspend fun devSimulatePayment(slug: String) = api.devSimulatePayment(slug)
 
     suspend fun paymentPortal(): PortalUrlResponse =
         api.paymentPortal()

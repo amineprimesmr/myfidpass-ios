@@ -9,6 +9,7 @@ import fr.myfidpass.core.auth.SessionEvents
 import fr.myfidpass.data.local.FirstLaunchPreferences
 import fr.myfidpass.data.local.SessionStore
 import fr.myfidpass.data.repo.AuthRepository
+import fr.myfidpass.services.sync.SyncService
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
@@ -25,6 +26,7 @@ class RootViewModel(
     private val authRepository: AuthRepository,
     private val sessionStore: SessionStore,
     private val firstLaunch: FirstLaunchPreferences,
+    private val syncService: SyncService,
 ) : ViewModel() {
 
     var state: RootUiState by mutableStateOf(RootUiState.Loading)
@@ -113,6 +115,7 @@ class RootViewModel(
     fun onLogout() {
         viewModelScope.launch {
             authRepository.performLogout()
+            syncService.resetFlyerHydrationState()
             sessionStore.adminMerchantPilotMode = false
             state = RootUiState.AuthLanding
         }

@@ -15,6 +15,7 @@ struct DashboardActivityFullView: View {
     @StateObject private var dataService: DataService
     @State private var filter: MemberActivityFilter
     @State private var searchText = ""
+    @State private var memberDetailSheetItem: MemberDetailSheetItem?
 
     private let context: NSManagedObjectContext
 
@@ -67,13 +68,12 @@ struct DashboardActivityFullView: View {
                 .listRowSeparator(.hidden)
             } else {
                 ForEach(filteredSummaries) { summary in
-                    NavigationLink {
-                        MemberDetailView(card: summary.card, context: context)
-                            .environmentObject(syncService)
-                            .environmentObject(dataService)
+                    Button {
+                        memberDetailSheetItem = MemberDetailSheetItem(objectID: summary.card.objectID)
                     } label: {
                         RevolutMemberActivityRow(summary: summary, palette: palette)
                     }
+                    .buttonStyle(.plain)
                     .listRowBackground(
                         RoundedRectangle(cornerRadius: 18, style: .continuous)
                             .fill(palette.card)
@@ -95,6 +95,14 @@ struct DashboardActivityFullView: View {
         .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Nom, e-mail ou code…")
         .refreshable {
             await syncService.syncAfterServerMutation()
+        }
+        .sheet(item: $memberDetailSheetItem) { item in
+            if let card = context.object(with: item.objectID) as? ClientCard {
+                MemberDetailView(card: card, context: context)
+                    .environmentObject(syncService)
+                    .environmentObject(dataService)
+                    .memberDetailSheetChrome()
+            }
         }
     }
 

@@ -5,6 +5,7 @@ import android.os.Build
 import android.webkit.WebView
 import fr.myfidpass.di.AppContainer
 import fr.myfidpass.services.notifications.MerchantNotificationHelper
+import fr.myfidpass.util.MerchantUXFeedback
 import org.osmdroid.config.Configuration
 
 class MyFidpassApplication : Application() {
@@ -13,6 +14,7 @@ class MyFidpassApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        MerchantUXFeedback.init(this)
         prepareWebViewStorage()
         Configuration.getInstance().userAgentValue = packageName
         container = AppContainer(this)

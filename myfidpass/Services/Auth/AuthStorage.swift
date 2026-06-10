@@ -38,10 +38,35 @@ enum AuthStorage {
         static let merchantWorkspaceRole = "myfidpass.auth.merchantWorkspaceRole"
         /// Compte administrateur plateforme (`is_admin`) — évite d’afficher l’UI commerçant au cold start avant `/me`.
         static let isPlatformAdmin = "myfidpass.auth.isPlatformAdmin"
+        /// Admin plateforme en mode pilotage commerçant (évite promos flyer locales).
+        static let adminPilotMerchantWorkspace = "myfidpass.auth.adminPilotMerchantWorkspace"
         /// Abonnement payant actif (Apple/Stripe) — relances onboarding locales (`NotificationsService`).
         static let merchantHasEncashedSubscription = "myfidpass.auth.merchantHasEncashedSubscription"
         /// Accès bench commerçant (combinaison plafonds scan) — app uniquement.
         static let merchantScanBenchAccessActive = "myfidpass.auth.merchantScanBenchAccessActive"
+    }
+
+    private static func programModeSwitchExpectEmptyTxKey(slug: String) -> String {
+        "myfidpass.programSwitch.expectEmptyTx.\(slug)"
+    }
+
+    /// Après bascule Points ↔ Tampons enregistrée : ne pas réimporter l’historique serveur tant qu’il n’est pas vide.
+    static func markProgramModeSwitchExpectEmptyHistory(slug: String) {
+        let s = slug.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !s.isEmpty else { return }
+        defaults.set(Date().timeIntervalSince1970, forKey: programModeSwitchExpectEmptyTxKey(slug: s))
+    }
+
+    static func shouldSuppressTransactionImportAfterProgramSwitch(slug: String) -> Bool {
+        let s = slug.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !s.isEmpty else { return false }
+        return defaults.object(forKey: programModeSwitchExpectEmptyTxKey(slug: s)) != nil
+    }
+
+    static func clearProgramModeSwitchExpectEmptyHistory(slug: String) {
+        let s = slug.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !s.isEmpty else { return }
+        defaults.removeObject(forKey: programModeSwitchExpectEmptyTxKey(slug: s))
     }
 
     static var isLoggedIn: Bool {
@@ -180,6 +205,11 @@ enum AuthStorage {
         set { defaults.set(newValue, forKey: Key.isPlatformAdmin) }
     }
 
+    static var adminPilotMerchantWorkspace: Bool {
+        get { defaults.bool(forKey: Key.adminPilotMerchantWorkspace) }
+        set { defaults.set(newValue, forKey: Key.adminPilotMerchantWorkspace) }
+    }
+
     /// Dernier état connu : commerçant a un abo payant encaissé (pas staff, pas essai gratuit seul).
     static var merchantHasEncashedSubscription: Bool {
         get { defaults.bool(forKey: Key.merchantHasEncashedSubscription) }
@@ -208,6 +238,7 @@ enum AuthStorage {
         defaults.removeObject(forKey: Key.pendingShowMerchantHomeTutorialAfterSignup)
         defaults.removeObject(forKey: Key.merchantWorkspaceRole)
         defaults.removeObject(forKey: Key.isPlatformAdmin)
+        defaults.removeObject(forKey: Key.adminPilotMerchantWorkspace)
         defaults.removeObject(forKey: Key.merchantHasEncashedSubscription)
         defaults.removeObject(forKey: Key.merchantScanBenchAccessActive)
         defaults.removeObject(forKey: "myfidpass.merchantHomeTutorial.v2")

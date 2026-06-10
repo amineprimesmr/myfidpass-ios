@@ -187,10 +187,7 @@ struct DashboardHomeCardModel {
         /// Fond local : mode points uniquement.
         let localCardBgRelative: String? = {
             guard pt == "points", snap?.hasLocalCardBackground == true else { return nil }
-            let rel = CardLogoStorage.relativeCardBackgroundPath
-            guard let full = CardLogoStorage.fullPath(forRelative: rel),
-                  FileManager.default.fileExists(atPath: full) else { return nil }
-            return rel
+            return CardLogoStorage.localCardBackgroundPathIfExists(for: slug)
         }()
         let headerRightTrimmed = snap.map { $0.headerRightText.trimmingCharacters(in: .whitespacesAndNewlines) } ?? ""
         let headerRightText = headerRightTrimmed.isEmpty ? nil : headerRightTrimmed
@@ -382,6 +379,7 @@ struct FintechTransactionRow: View {
     let palette: DashboardRevolutPalette
     /// `true` quand le programme fidélité est en points (pas tampons) — aligné sur `CardPreviewDisplaySnapshot.programType`.
     var isPointsProgram: Bool = false
+    var pointsPerEuro: Int? = nil
 
     private static let relativeDateFormatter: RelativeDateTimeFormatter = {
         let f = RelativeDateTimeFormatter()
@@ -414,9 +412,11 @@ struct FintechTransactionRow: View {
                 points: entry.scanPointsGranted,
                 isVisit: entry.isVisit,
                 isPointsProgram: isPointsProgram,
-                rewardLabel: entry.rewardLabel
+                rewardLabel: entry.rewardLabel,
+                amountEur: entry.scanAmountEur,
+                pointsPerEuro: pointsPerEuro
             )
-        case .newCard: return "Nouveau membre"
+        case .newCard: return "Nouveau"
         }
     }
 
@@ -558,6 +558,42 @@ struct FintechTransactionsSectionHeader: View {
     }
 }
 
+/// Bouton « Afficher plus » sous la liste « Dernières transactions » (accueil + listes paginées).
+struct FintechLoadMoreTransactionsButton: View {
+    let palette: DashboardRevolutPalette
+    var isLoading: Bool = false
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                if isLoading {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(palette.secondaryText)
+                }
+                Text(isLoading ? "Chargement…" : "Afficher plus")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(palette.accentBlue)
+                if !isLoading {
+                    Image(systemName: "chevron.down")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(palette.accentBlue.opacity(0.85))
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 14)
+            .background(
+                palette.transactionPillBG.opacity(0.65),
+                in: RoundedRectangle(cornerRadius: 32, style: .continuous)
+            )
+        }
+        .buttonStyle(MerchantPressableButtonStyle(scalePressed: 0.98, opacityPressed: 0.92))
+        .disabled(isLoading)
+        .accessibilityLabel(isLoading ? "Chargement des transactions" : "Afficher plus de transactions")
+    }
+}
+
 // MARK: - Chrome onglets (barre noire + panneau arrondi)
 
 /// Panneau scroll partagé Accueil / Notifications / Statistiques.
@@ -620,6 +656,7 @@ struct MerchantTabScaffold<TopBar: View, Panel: View>: View {
 
 struct DashboardHomeMinimalTopBar: View {
     @Environment(\.merchantTabIsActive) private var merchantTabIsActive
+    @EnvironmentObject private var memberSearchCoordinator: MerchantMemberSearchCoordinator
 
     let title: String
     var merchantName: String? = nil
@@ -631,11 +668,14 @@ struct DashboardHomeMinimalTopBar: View {
     var canCreateBusiness: Bool = true
     /// Admin plateforme : liste = tous les commerces ; masque « Ajouter un commerce » et affiche « Tous les commerces ».
     var isPlatformAdminAllCommercesMode: Bool = false
-    var onOpenAdministration: (() -> Void)? = nil
     /// Admin : recharger la liste plateforme à l’ouverture du popover.
     var onBusinessSwitcherWillOpen: (() -> Void)? = nil
     /// Accueil : ouvre le menu latéral style X (☰ en haut à gauche).
     var onOpenSideMenu: (() -> Void)? = nil
+    /// Recherche client (liquid glass). Si nil : notification `.myfidpassOpenMemberSearch`.
+    var onOpenMemberSearch: (() -> Void)? = nil
+    /// Bouton loupe dans la barre (désactivable sur écrans sans clients).
+    var showsMemberSearch: Bool = true
     /// Affiche l’avatar commerce (Notifications / Statistiques). Masqué sur l’Accueil.
     var showsBusinessSwitcher: Bool = true
     /// Forcer la pastille (rare) ; par défaut calculée depuis l’état flyer du commerce actif.
@@ -650,31 +690,25 @@ struct DashboardHomeMinimalTopBar: View {
     @State private var switcherSearchText = ""
     @Namespace private var businessSwitcherAnimation
     @State private var autoSettingsAttentionDot = false
+    @FocusState private var memberSearchFieldFocused: Bool
 
     private var effectiveSettingsAttentionDot: Bool {
         showSettingsAttentionDot || autoSettingsAttentionDot
     }
 
+    private var memberSearchModeActive: Bool {
+        showsMemberSearch && memberSearchCoordinator.isActive
+    }
+
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
-            if let onOpenSideMenu {
-                sideMenuButton(action: onOpenSideMenu)
-            }
-
-            Text(title)
-                .font(.system(size: 20, weight: .bold, design: .default))
-                .foregroundStyle(.white)
-                .lineLimit(1)
-                .truncationMode(.tail)
-
-            Spacer(minLength: 0)
-
-            if let onOpenSettings {
-                settingsButton(action: onOpenSettings)
-            }
-
-            if showsBusinessSwitcher {
-                businessSwitcherButton
+            if memberSearchModeActive {
+                memberSearchCancelButton
+                memberSearchTopBarField
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+            } else {
+                topBarIdleContent
+                    .transition(.opacity)
             }
         }
         .frame(height: DashboardHomeMinimalTopBarLayout.barContentHeight)
@@ -685,6 +719,7 @@ struct DashboardHomeMinimalTopBar: View {
             Color.black
                 .ignoresSafeArea(edges: .top)
         }
+        .animation(MerchantMotion.searchBarMorph, value: memberSearchCoordinator.isActive)
         .onAppear { refreshSettingsAttentionDot() }
         .onChange(of: activeBusinessSlug) { _, newValue in
             let incoming = newValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -701,7 +736,50 @@ struct DashboardHomeMinimalTopBar: View {
             refreshSettingsAttentionDot()
         }
         .onChange(of: merchantTabIsActive) { _, active in
-            if active { refreshSettingsAttentionDot() }
+            if active {
+                refreshSettingsAttentionDot()
+            } else if memberSearchCoordinator.isActive {
+                memberSearchCoordinator.dismiss()
+            }
+        }
+        .onChange(of: memberSearchCoordinator.isActive) { _, active in
+            if active {
+                showBusinessPopover = false
+            } else {
+                memberSearchFieldFocused = false
+            }
+        }
+        .onChange(of: memberSearchCoordinator.focusRequest) { _, _ in
+            if memberSearchCoordinator.isActive {
+                memberSearchFieldFocused = true
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var topBarIdleContent: some View {
+        if let onOpenSideMenu {
+            sideMenuButton(action: onOpenSideMenu)
+        }
+
+        Text(title)
+            .font(.system(size: 20, weight: .bold, design: .default))
+            .foregroundStyle(.white)
+            .lineLimit(1)
+            .truncationMode(.tail)
+
+        Spacer(minLength: 0)
+
+        if showsMemberSearch {
+            memberSearchButton()
+        }
+
+        if let onOpenSettings {
+            settingsButton(action: onOpenSettings)
+        }
+
+        if showsBusinessSwitcher {
+            businessSwitcherButton
         }
     }
 
@@ -736,6 +814,109 @@ struct DashboardHomeMinimalTopBar: View {
                 ? "Ouvrir le menu, flyer de jeu à créer"
                 : "Ouvrir le menu"
         )
+    }
+
+    private func openMemberSearch() {
+        if let onOpenMemberSearch {
+            onOpenMemberSearch()
+        } else {
+            memberSearchCoordinator.activate()
+        }
+    }
+
+    @ViewBuilder
+    private var memberSearchCancelButton: some View {
+        if #available(iOS 26.0, *) {
+            Button(action: { memberSearchCoordinator.dismiss() }) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 14, weight: .bold))
+                    .frame(width: 40, height: 40)
+            }
+            .buttonStyle(.glass(.regular))
+            .buttonBorderShape(.circle)
+            .accessibilityLabel("Fermer la recherche")
+        } else {
+            Button(action: { memberSearchCoordinator.dismiss() }) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.92))
+                    .frame(width: 40, height: 40)
+                    .background(.ultraThinMaterial, in: Circle())
+                    .overlay(Circle().strokeBorder(Color.white.opacity(0.28), lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Fermer la recherche")
+        }
+    }
+
+    @ViewBuilder
+    private var memberSearchTopBarField: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.72))
+
+            TextField("Nom, e-mail ou identifiant…", text: $memberSearchCoordinator.searchText)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .focused($memberSearchFieldFocused)
+                .submitLabel(.search)
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(.white)
+
+            if !memberSearchCoordinator.searchText.isEmpty {
+                Button {
+                    withAnimation(MerchantMotion.buttonPress) {
+                        memberSearchCoordinator.searchText = ""
+                    }
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 17))
+                        .foregroundStyle(.white.opacity(0.55))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Effacer la recherche")
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity)
+        .glassEffect(.regularInteractive, cornerRadius: 20)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Rechercher un client")
+    }
+
+    @ViewBuilder
+    private func memberSearchButton() -> some View {
+        if #available(iOS 26.0, *) {
+            Button(action: openMemberSearch) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 16, weight: .semibold))
+                    .frame(width: 40, height: 40)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.glass(.regular))
+            .buttonBorderShape(.circle)
+            .accessibilityLabel("Rechercher un client")
+        } else {
+            Button(action: openMemberSearch) {
+                ZStack {
+                    Circle()
+                        .fill(.ultraThinMaterial)
+                        .frame(width: 40, height: 40)
+                    Circle()
+                        .strokeBorder(Color.white.opacity(0.28), lineWidth: 1)
+                        .frame(width: 40, height: 40)
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.92))
+                }
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Rechercher un client")
+        }
     }
 
     @ViewBuilder
@@ -853,27 +1034,7 @@ struct DashboardHomeMinimalTopBar: View {
             .transition(.asymmetric(insertion: .opacity.combined(with: .scale(scale: 0.98)), removal: .opacity))
             .animation(.spring(response: 0.34, dampingFraction: 0.84), value: effectiveActiveBusinessSlug)
 
-            if isPlatformAdminAllCommercesMode, let onOpenAdministration {
-                Button {
-                    showBusinessPopover = false
-                    onOpenAdministration()
-                } label: {
-                    HStack(spacing: 12) {
-                        Image(systemName: "shield.lefthalf.filled")
-                            .font(.system(size: 22, weight: .regular))
-                            .foregroundStyle(Color.black.opacity(0.7))
-                        Text("Administration plateforme")
-                            .font(.system(size: 18, weight: .medium))
-                            .foregroundStyle(Color.black.opacity(0.86))
-                        Spacer(minLength: 0)
-                    }
-                    .padding(.horizontal, 18)
-                    .padding(.vertical, 12)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                Divider().padding(.horizontal, 16)
-            } else {
+            if !isPlatformAdminAllCommercesMode {
                 Button {
                     showBusinessPopover = false
                     if canCreateBusiness {
@@ -931,7 +1092,7 @@ struct DashboardHomeMinimalTopBar: View {
                                     localSelectedBusinessSlug = business.slug
                                     isSwitchingBusiness = true
                                 }
-                                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                                MerchantUXFeedback.shared.play(.scan)
                                 onSelectBusiness?(business.slug)
                                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.26) {
                                     isSwitchingBusiness = false
@@ -939,27 +1100,35 @@ struct DashboardHomeMinimalTopBar: View {
                                 }
                             } label: {
                                 HStack(spacing: 10) {
-                                    Circle()
-                                        .fill(business.slug == effectiveActiveBusinessSlug ? Color.green.opacity(0.9) : Color.black.opacity(0.15))
-                                        .frame(width: 9, height: 9)
-                                        .overlay {
-                                            if business.slug == effectiveActiveBusinessSlug {
-                                                Circle()
-                                                    .stroke(Color.green.opacity(0.26), lineWidth: 6)
-                                                    .frame(width: 9, height: 9)
-                                                    .matchedGeometryEffect(id: "activeBusinessDot", in: businessSwitcherAnimation)
+                                    if isPlatformAdminAllCommercesMode {
+                                        adminSwitcherCommerceLogo(business: business, size: 32)
+                                    } else {
+                                        Circle()
+                                            .fill(business.slug == effectiveActiveBusinessSlug ? Color.green.opacity(0.9) : Color.black.opacity(0.15))
+                                            .frame(width: 9, height: 9)
+                                            .overlay {
+                                                if business.slug == effectiveActiveBusinessSlug {
+                                                    Circle()
+                                                        .stroke(Color.green.opacity(0.26), lineWidth: 6)
+                                                        .frame(width: 9, height: 9)
+                                                        .matchedGeometryEffect(id: "activeBusinessDot", in: businessSwitcherAnimation)
+                                                }
                                             }
-                                        }
-                                    VStack(alignment: .leading, spacing: 1) {
+                                    }
+                                    VStack(alignment: .leading, spacing: 2) {
                                         Text(business.name.isEmpty ? business.slug : business.name)
                                             .font(.system(size: 16, weight: .medium))
                                             .foregroundStyle(Color.black.opacity(0.85))
                                             .lineLimit(1)
                                         if isPlatformAdminAllCommercesMode {
-                                            Text(business.slug)
-                                                .font(.system(size: 12, weight: .regular))
-                                                .foregroundStyle(Color.black.opacity(0.45))
+                                            Text(adminSwitcherEmailLine(for: business))
+                                                .font(.system(size: 12, weight: .medium))
+                                                .foregroundStyle(Color.black.opacity(0.5))
                                                 .lineLimit(1)
+                                            Text(adminSwitcherMemberLabel(for: business))
+                                                .font(.system(size: 11, weight: .semibold))
+                                                .foregroundStyle(Color.black.opacity(0.38))
+                                                .monospacedDigit()
                                         }
                                     }
                                     Spacer(minLength: 0)
@@ -987,6 +1156,46 @@ struct DashboardHomeMinimalTopBar: View {
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
         .padding(8)
         .onDisappear { switcherSearchText = "" }
+    }
+
+    private static let adminActiveLogoRing = Color(red: 0.42, green: 0.88, blue: 0.58)
+
+    private func adminSwitcherEmailLine(for business: BusinessDTO) -> String {
+        let em = business.ownerEmail?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return em.isEmpty ? "E-mail non renseigné" : em
+    }
+
+    private func adminSwitcherMemberLabel(for business: BusinessDTO) -> String {
+        let n = max(0, business.memberCount ?? 0)
+        return n == 1 ? "1 membre" : "\(n) membres"
+    }
+
+    @ViewBuilder
+    private func adminSwitcherCommerceLogo(business: BusinessDTO, size: CGFloat) -> some View {
+        let corner = max(8, size * 0.25)
+        let logo = business.displayLogoUrl?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        Group {
+            if !logo.isEmpty {
+                BusinessLogoView(logoURL: logo, size: size, cornerRadius: corner)
+            } else {
+                RoundedRectangle(cornerRadius: corner, style: .continuous)
+                    .fill(Color.black.opacity(0.08))
+                    .frame(width: size, height: size)
+                    .overlay {
+                        Image(systemName: "building.2.fill")
+                            .font(.system(size: size * 0.42))
+                            .foregroundStyle(Color.black.opacity(0.35))
+                    }
+            }
+        }
+        .overlay {
+            if business.ownerHasActiveSubscription {
+                RoundedRectangle(cornerRadius: corner + 2, style: .continuous)
+                    .strokeBorder(Self.adminActiveLogoRing.opacity(0.92), lineWidth: 2.5)
+                    .frame(width: size + 5, height: size + 5)
+            }
+        }
+        .accessibilityLabel(business.ownerHasActiveSubscription ? "Abonnement actif" : "Logo commerce")
     }
 
     @ViewBuilder

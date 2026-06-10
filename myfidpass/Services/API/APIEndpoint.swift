@@ -72,6 +72,7 @@ enum APIEndpoint {
     )
     case authMe
     case authMePatch(name: String)
+    case authNotificationReadiness
     case authConfig
     case authDeleteAccount
     case authRefresh(refreshToken: String)
@@ -92,10 +93,10 @@ enum APIEndpoint {
     /// Restauration / réalignement abonnement App Store.
     case paymentAppleReconcileSubscription
     case paymentAppleIntroOfferEligibility(payload: PaymentAppleIntroOfferEligibilityRequest)
-    /// Active un abonnement fictif (test) — même route que le bouton « Dev » du SaaS.
-    case dashboardDevSimulatePayment(slug: String)
 
     // MARK: - Sync (dashboard / slug)
+    /// Fiche publique commerce (jeu QR / flyer) — expose `google_review_write_url` si avis Google actifs.
+    case businessPublicInfo(slug: String)
     case businessSettings(slug: String)
     case businessStats(slug: String, period: String?)
     case businessStatsTraffic(slug: String, period: String?)
@@ -136,8 +137,7 @@ enum APIEndpoint {
     case dashboardNotificationSend(slug: String, body: NotificationSendPayload)
     case dashboardNotificationSegments(slug: String)
     case dashboardNotificationStats(slug: String)
-    case dashboardTestPasskit(slug: String)
-    case dashboardRemoveTestDevice(slug: String)
+    case dashboardNotificationJobStatus(slug: String, jobId: String)
 
     // MARK: - Scan
     case scanLookup(slug: String, barcode: String)
@@ -147,8 +147,6 @@ enum APIEndpoint {
     case deviceRegister(token: String)
 
     case walletPass(slug: String, memberId: String, design: WalletPassDesign?)
-
-    case notifyClients(slug: String, message: String)
 
     case patchDashboardSettings(slug: String, patch: FullDashboardSettingsPatch)
     /// Préférences flyer QR (sync avec le SaaS).
@@ -210,6 +208,18 @@ enum APIEndpoint {
     case adminUsers(q: String?, limit: Int?, offset: Int?)
     case adminBusinesses(q: String?, limit: Int?, offset: Int?)
     case adminEvents(limit: Int?, filter: String?)
+    case adminDeleteBusiness(businessId: String, body: AdminDeleteBusinessBody)
+    case adminDeleteUser(userId: String, body: AdminDeleteUserBody)
+    case adminCreateMerchantAccount(body: AdminCreateMerchantAccountBody)
+
+    // MARK: - Réseau fidélité (multi-adresses, carte client unique)
+    case loyaltyGroupsList
+    case loyaltyGroupsCreate(body: LoyaltyGroupCreateBody)
+    case loyaltyGroupDetail(id: String)
+    case loyaltyGroupPatch(id: String, body: LoyaltyGroupPatchBody)
+    case loyaltyGroupDelete(id: String)
+    case loyaltyGroupLinkBusiness(groupId: String, body: LoyaltyGroupLinkBusinessBody)
+    case loyaltyGroupUnlinkBusiness(groupId: String, businessId: String)
 
     // MARK: - Équipe (accès employés, owner/manager)
     case businessTeamList(slug: String)
@@ -238,6 +248,7 @@ enum APIEndpoint {
         case .authEmailSendCode: return "/api/auth/email/send-code"
         case .authEmailVerify: return "/api/auth/email/verify"
         case .authMe, .authMePatch: return "/api/auth/me"
+        case .authNotificationReadiness: return "/api/auth/notification-readiness"
         case .authConfig: return "/api/auth/config"
         case .authDeleteAccount: return "/api/auth/account"
         case .authRefresh: return "/api/auth/refresh"
@@ -251,8 +262,7 @@ enum APIEndpoint {
         case .paymentAppleSyncTransaction: return "/api/payment/apple/sync-transaction"
         case .paymentAppleReconcileSubscription: return "/api/payment/apple/reconcile-subscription"
         case .paymentAppleIntroOfferEligibility: return "/api/payment/apple/introductory-offer-eligibility"
-        case .dashboardDevSimulatePayment(let slug):
-            return "/api/businesses/\(pathSegment(slug))/dashboard/dev-simulate-payment"
+        case .businessPublicInfo(let slug): return "/api/businesses/\(pathSegment(slug))"
         case .businessSettings(let slug): return "/api/businesses/\(pathSegment(slug))/dashboard/settings"
         case .businessStats(let slug, _): return "/api/businesses/\(pathSegment(slug))/dashboard/stats"
         case .businessStatsTraffic(let slug, _): return "/api/businesses/\(pathSegment(slug))/dashboard/stats/traffic"
@@ -276,14 +286,13 @@ enum APIEndpoint {
         case .dashboardNotificationSend(let slug, _): return "/api/businesses/\(pathSegment(slug))/notifications/send"
         case .dashboardNotificationSegments(let slug): return "/api/businesses/\(pathSegment(slug))/notifications/campaign-segments"
         case .dashboardNotificationStats(let slug): return "/api/businesses/\(pathSegment(slug))/notifications/stats"
-        case .dashboardTestPasskit(let slug): return "/api/businesses/\(pathSegment(slug))/notifications/test-passkit"
-        case .dashboardRemoveTestDevice(let slug): return "/api/businesses/\(pathSegment(slug))/notifications/remove-test-device"
+        case .dashboardNotificationJobStatus(let slug, let jobId):
+            return "/api/businesses/\(pathSegment(slug))/notifications/jobs/\(pathSegment(jobId))"
         case .scanLookup(let slug, _): return "/api/businesses/\(pathSegment(slug))/integration/lookup"
         case .scan(let slug, _, _, _, _, _): return "/api/businesses/\(pathSegment(slug))/integration/scan"
         case .integrationRewardRedeem(let slug, _): return "/api/businesses/\(pathSegment(slug))/integration/reward-redeem"
         case .deviceRegister: return "/api/device/register"
         case .walletPass(let slug, let memberId, _): return "/api/businesses/\(pathSegment(slug))/members/\(pathSegment(memberId))/pass"
-        case .notifyClients(let slug, _): return "/api/businesses/\(pathSegment(slug))/notify"
         case .patchDashboardSettings(let slug, _): return "/api/businesses/\(pathSegment(slug))/dashboard/settings"
         case .dashboardFlyerGet(let slug): return "/api/businesses/\(pathSegment(slug))/dashboard/flyer"
         case .dashboardFlyerPut(let slug, _): return "/api/businesses/\(pathSegment(slug))/dashboard/flyer"
@@ -322,6 +331,17 @@ enum APIEndpoint {
         case .adminUsers: return "/api/admin/users"
         case .adminBusinesses: return "/api/admin/businesses"
         case .adminEvents: return "/api/admin/events"
+        case .adminDeleteBusiness(let businessId, _): return "/api/admin/businesses/\(pathSegment(businessId))"
+        case .adminDeleteUser(let userId, _): return "/api/admin/users/\(pathSegment(userId))"
+        case .adminCreateMerchantAccount: return "/api/admin/merchant-accounts"
+        case .loyaltyGroupsList, .loyaltyGroupsCreate:
+            return "/api/loyalty-groups"
+        case .loyaltyGroupDetail(let id), .loyaltyGroupPatch(let id, _), .loyaltyGroupDelete(let id):
+            return "/api/loyalty-groups/\(pathSegment(id))"
+        case .loyaltyGroupLinkBusiness(let groupId, _):
+            return "/api/loyalty-groups/\(pathSegment(groupId))/businesses"
+        case .loyaltyGroupUnlinkBusiness(let groupId, let businessId):
+            return "/api/loyalty-groups/\(pathSegment(groupId))/businesses/\(pathSegment(businessId))"
         case .businessTeamList(let slug):
             return "/api/businesses/\(pathSegment(slug))/dashboard/team"
         case .businessTeamInvite(let slug, _):
@@ -374,20 +394,21 @@ enum APIEndpoint {
         case .authLogin, .authCheckEmail, .authCheckGooglePlace, .authCheckIdentifier, .authRegister, .authForgotPassword, .authResetPassword, .authGoogle, .authApple,
              .authPhoneSendCode, .authPhoneVerify, .authEmailSendCode, .authEmailVerify,
              .authRefresh, .authLogout,
-             .scan, .integrationRewardRedeem, .deviceRegister, .notifyClients, .creditMember,
+             .scan, .integrationRewardRedeem, .deviceRegister, .creditMember,
              .dashboardReceiptChallenge,
-             .removeMemberPoints, .redeemReward, .createBusiness, .createBusinessFromPlace, .paymentCheckout, .paymentReconcileSubscription, .paymentPortalSession, .dashboardNotificationSend, .dashboardRemoveTestDevice,
+             .removeMemberPoints, .redeemReward, .createBusiness, .createBusinessFromPlace, .paymentCheckout, .paymentReconcileSubscription, .paymentPortalSession, .dashboardNotificationSend,
              .paymentBusinessCheckoutSession, .paymentAppleSyncTransaction, .paymentAppleReconcileSubscription,
              .paymentAppleIntroOfferEligibility,
-             .dashboardDevSimulatePayment,
              .membersImport, .createMember, .memberTicketsConvert, .claimMemberReward, .deleteAllDashboardMembers,
              .dashboardFlyerAIGenerate, .dashboardFlyerRemoveLogoBackground, .dashboardCampaignAutomationParse,
              .dashboardSocialMetricsRefresh, .dashboardSocialMetricsManual, .dashboardMatchPredictionsSetResult,
-             .businessTeamInvite, .businessTeamStaffAccount, .businessTeamMemberResendAccess:
+             .businessTeamInvite, .businessTeamStaffAccount, .businessTeamMemberResendAccess,
+             .loyaltyGroupsCreate, .loyaltyGroupLinkBusiness,
+             .adminCreateMerchantAccount:
             return "POST"
-        case .patchDashboardSettings, .updateLocationSettings, .dashboardPatchGame, .dashboardSocialMissionsPatch, .dashboardMatchPredictionsConfig, .businessTeamMemberPatch, .authMePatch:
+        case .patchDashboardSettings, .updateLocationSettings, .dashboardPatchGame, .dashboardSocialMissionsPatch, .dashboardMatchPredictionsConfig, .businessTeamMemberPatch, .authMePatch, .loyaltyGroupPatch:
             return "PATCH"
-        case .authDeleteAccount, .deleteDashboardMember, .businessTeamRevoke:
+        case .authDeleteAccount, .deleteDashboardMember, .businessTeamRevoke, .adminDeleteBusiness, .adminDeleteUser, .loyaltyGroupDelete, .loyaltyGroupUnlinkBusiness:
             return "DELETE"
         case .dashboardGameRewardsPut, .dashboardFlyerPut:
             return "PUT"
@@ -502,7 +523,8 @@ enum APIEndpoint {
             if let l = limit { items.append(URLQueryItem(name: "limit", value: "\(l)")) }
             if let f = filter, !f.isEmpty { items.append(URLQueryItem(name: "filter", value: f)) }
             components.queryItems = items.isEmpty ? nil : items
-        case .businessTeamList, .businessTeamInvite, .businessTeamStaffAccount, .businessTeamMemberDetail, .businessTeamMemberPatch, .businessTeamMemberResendAccess, .businessTeamRevoke:
+        case .businessTeamList, .businessTeamInvite, .businessTeamStaffAccount, .businessTeamMemberDetail, .businessTeamMemberPatch, .businessTeamMemberResendAccess, .businessTeamRevoke,
+             .loyaltyGroupsList, .loyaltyGroupsCreate, .loyaltyGroupDetail, .loyaltyGroupPatch, .loyaltyGroupDelete, .loyaltyGroupLinkBusiness, .loyaltyGroupUnlinkBusiness:
             break
         default:
             break
@@ -606,8 +628,6 @@ enum APIEndpoint {
             bodyData = try encoder.encode(ReceiptChallengeRequestBody(amountEur: amountEur))
         case .deviceRegister(let token):
             bodyData = try encoder.encode(DeviceRegisterPayload(deviceToken: token))
-        case .notifyClients(_, let message):
-            bodyData = try encoder.encode(NotifyClientsPayload(message: message))
         case .creditMember(_, _, let points, let amountEur, let visit, let receiptValidationToken):
             bodyData = try encoder.encode(CreditMemberBody(points: points, amountEur: amountEur, visit: visit, receiptValidationToken: receiptValidationToken))
         case .removeMemberPoints(_, _, let points):
@@ -669,8 +689,20 @@ enum APIEndpoint {
             bodyData = try encoder.encode(body)
         case .businessTeamMemberPatch(_, _, let body):
             bodyData = try encoder.encode(body)
-        case .businessTeamMemberResendAccess, .dashboardDevSimulatePayment:
+        case .businessTeamMemberResendAccess:
             bodyData = try encoder.encode(EmptyJSONBody())
+        case .adminDeleteBusiness(_, let body):
+            bodyData = try encoder.encode(body)
+        case .adminDeleteUser(_, let body):
+            bodyData = try encoder.encode(body)
+        case .adminCreateMerchantAccount(let body):
+            bodyData = try encoder.encode(body)
+        case .loyaltyGroupsCreate(let body):
+            bodyData = try encoder.encode(body)
+        case .loyaltyGroupPatch(_, let body):
+            bodyData = try encoder.encode(body)
+        case .loyaltyGroupLinkBusiness(_, let body):
+            bodyData = try encoder.encode(body)
         default:
             break
         }
@@ -813,10 +845,6 @@ private struct DeviceRegisterPayload: Encodable {
     let deviceToken: String
 }
 
-private struct NotifyClientsPayload: Encodable {
-    let message: String
-}
-
 private struct CreditMemberBody: Encodable {
     let points: Int?
     let amountEur: Double?
@@ -884,6 +912,22 @@ private struct RedeemPayload: Encodable {
 struct PointsRewardTierPayload: Encodable {
     let points: Int
     let label: String
+    let minPurchaseEur: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case points
+        case label
+        case minPurchaseEur = "min_purchase_eur"
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(points, forKey: .points)
+        try c.encode(label, forKey: .label)
+        if let minPurchaseEur, minPurchaseEur > 0 {
+            try c.encode(minPurchaseEur, forKey: .minPurchaseEur)
+        }
+    }
 }
 
 /// Body PATCH emplacement — clés snake_case comme le backend (`dashboard.js`).

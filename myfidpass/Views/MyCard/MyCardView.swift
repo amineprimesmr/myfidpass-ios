@@ -164,6 +164,8 @@ private struct MyCardPersistedSnapshot: Equatable {
 }
 
 struct MyCardView: View {
+    /// Commerce affiché — figé à l’ouverture pour éviter de mélanger logo / couleurs entre comptes.
+    private let businessSlug: String
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.openURL) private var openURL
     @Environment(\.dismiss) private var dismiss
@@ -195,6 +197,8 @@ struct MyCardView: View {
     /// Données du pass pour afficher la feuille « Ajouter à l’Apple Wallet ».
     /// Feuille ouverte pour une zone de la carte (tap sur l’aperçu).
     @State private var customizationZone: CardPreviewEditZone?
+    /// Zoom fluide sur le logo (coin haut-gauche de l’aperçu).
+    @State private var cardLogoZoomFocused = false
     @State private var walletPassData: Data?
     @State private var walletLoading = false
     @State private var walletErrorMessage: String?
@@ -205,12 +209,15 @@ struct MyCardView: View {
     @State private var cardImageSuggestedColors: [String] = []
     // Règles de la carte (points vs tampons, récompenses)
     @State private var programType: String = "points"
+    /// Affichage du segmented control (peut diverger de `programType` tant que l’alerte n’est pas confirmée).
+    @State private var programPickerSelection: String = "points"
     @State private var pointsPerEuro: Int = 1
     @State private var pointsPerVisit: Int = 0
     @State private var pointsMinAmountEur: String = ""
     /// Paliers points (10 pts en 1ʳᵉ ligne + paliers suivants), alignés sur le SaaS web.
     @State private var tierPoints: [String] = Array(repeating: "", count: MyCardPointsRewardTiers.slotCount)
     @State private var tierLabels: [String] = Array(repeating: "", count: MyCardPointsRewardTiers.slotCount)
+    @State private var tierMinPurchases: [String] = Array(repeating: "", count: MyCardPointsRewardTiers.slotCount)
     @State private var stampRewardLabel: String = ""
     /// Récompense « Début du jeu » (1ʳᵉ tour de roue à l’ouverture de la carte) — persiste localement via `CardPreviewDisplaySnapshot`.
     @State private var startGameRewardLabel: String = ""
@@ -245,7 +252,17 @@ struct MyCardView: View {
     @State private var cardSettingsSaveInFlight = false
     /// Alerte avant de quitter la page si des changements ne sont pas enregistrés.
     @State private var showUnsavedLeaveAlert = false
-    init(context: NSManagedObjectContext) {
+    /// Confirmation bascule Points ↔ Tampons quand des clients ont déjà une carte.
+    @State private var showProgramSwitchConfirm = false
+    @State private var pendingProgramSwitchFrom: String?
+    @State private var pendingProgramType: String?
+    /// Bascule confirmée dans l’alerte mais pas encore enregistrée sur le serveur.
+    @State private var programTypeSwitchAwaitingSave = false
+    init(context: NSManagedObjectContext, businessSlug: String? = nil) {
+        let resolved = businessSlug?.trimmingCharacters(in: .whitespacesAndNewlines)
+            ?? AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines)
+            ?? ""
+        self.businessSlug = resolved
         _dataService = StateObject(wrappedValue: DataService(context: context))
     }
 
@@ -340,6 +357,7 @@ struct MyCardView: View {
 
     var body: some View {
         myCardNavigationContent
+            .id(businessSlug)
     }
 
     private var myCardScrollContent: some View {
@@ -351,7 +369,6 @@ struct MyCardView: View {
         }
         .padding(.bottom, bottomScrollPadding)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .transaction { $0.disablesAnimations = true }
         .background(AppTheme.Colors.background)
         .background(MyCardNavigationPopGate(blockInteractivePop: hasUnsavedCardChanges))
     }
@@ -380,21 +397,21 @@ struct MyCardView: View {
     private var myCardScrollWithLifecycle: some View {
         myCardScrollContent
             .onAppear {
+                guard !businessSlug.isEmpty else { return }
+                CardLogoStorage.migrateLegacyFlatAssetsIfNeeded(for: businessSlug)
+                resetCardDraftStateForBusinessLoad()
                 loadCurrentTemplate()
                 restoreLocalBackgroundFromSnapshot()
                 mergeStampIconFromDisplaySnapshotIfNeeded()
-                if let slug = AuthStorage.currentBusinessSlug,
-                   let snap = CardPreviewDisplaySnapshotStore.load(slug: slug) {
+                if let snap = CardPreviewDisplaySnapshotStore.load(slug: businessSlug) {
                     applyDisplaySnapshot(snap, restoreLogoFromSnapshot: true)
                 }
                 Task {
                     await loadCardSettingsFromAPI()
                     await MainActor.run {
                         syncPreviewBalancesFromSyncedMembers()
-                        // Si le GET a échoué, dernier snapshot local (sans réécraser le logo : applyDisplaySnapshot ne touche plus à logoURL).
                         if !dashboardSettingsHydrated,
-                           let slug = AuthStorage.currentBusinessSlug,
-                           let snap = CardPreviewDisplaySnapshotStore.load(slug: slug) {
+                           let snap = CardPreviewDisplaySnapshotStore.load(slug: businessSlug) {
                             applyDisplaySnapshot(snap, restoreLogoFromSnapshot: true)
                             syncPreviewBalancesFromSyncedMembers()
                         }
@@ -402,6 +419,12 @@ struct MyCardView: View {
                     }
                     await prefetchCardMediaFromCurrentState()
                 }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .myfidpassActiveBusinessDidChange)) { note in
+                guard let newSlug = note.userInfo?["slug"] as? String,
+                      !newSlug.isEmpty,
+                      newSlug != businessSlug else { return }
+                dismiss()
             }
             .onChange(of: syncService.lastSyncDate) { _, newDate in
                 guard newDate != nil else { return }
@@ -413,6 +436,9 @@ struct MyCardView: View {
             }
             .onChange(of: requiredStamps) { _, new in
                 if previewStampsCount > new { previewStampsCount = new }
+            }
+            .onChange(of: customizationZone) { _, new in
+                if new == nil { cardLogoZoomFocused = false }
             }
     }
 
@@ -461,8 +487,32 @@ struct MyCardView: View {
         }
     }
 
-    private var myCardUnsavedLeaveAlertContent: some View {
+    private var myCardProgramSwitchAlertContent: some View {
         myCardSaveLogoAlertContent
+        .alert("Changer le mode ?", isPresented: $showProgramSwitchConfirm) {
+            Button("Annuler", role: .cancel) {
+                pendingProgramType = nil
+                pendingProgramSwitchFrom = nil
+                programTypeSwitchAwaitingSave = false
+                programPickerSelection = programType
+            }
+            Button("Confirmer", role: .destructive) {
+                if let next = pendingProgramType {
+                    programType = next
+                    programPickerSelection = next
+                    applyProgramTypeSideEffects(for: next)
+                    programTypeSwitchAwaitingSave = true
+                }
+                pendingProgramType = nil
+                pendingProgramSwitchFrom = nil
+            }
+        } message: {
+            Text(programSwitchConfirmMessage)
+        }
+    }
+
+    private var myCardUnsavedLeaveAlertContent: some View {
+        myCardProgramSwitchAlertContent
         .alert("Modifications non enregistrées", isPresented: $showUnsavedLeaveAlert) {
             Button("Enregistrer") {
                 Task {
@@ -536,11 +586,14 @@ struct MyCardView: View {
                 } label: {
                     if cardSettingsSaveInFlight {
                         ProgressView()
+                            .tint(Color(red: 0, green: 122 / 255, blue: 1))
                     } else {
-                        Text("Enregistrer")
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 16, weight: .bold))
                     }
                 }
-                .fontWeight(.semibold)
+                .tint(Color(red: 0, green: 122 / 255, blue: 1))
+                .accessibilityLabel("Enregistrer")
                 .disabled(cardSettingsSaveInFlight || !canPersistCardDraft)
             }
         }
@@ -549,6 +602,10 @@ struct MyCardView: View {
     /// Quitter la page : alerte si brouillon non sauvé (ne pas enregistrer ni fermer sans choix explicite).
     private func requestLeaveMyCard() {
         customizationZone = nil
+        if cardLogoZoomFocused {
+            cardLogoZoomFocused = false
+            return
+        }
         if hasUnsavedCardChanges {
             showUnsavedLeaveAlert = true
         } else {
@@ -571,6 +628,7 @@ struct MyCardView: View {
         cardBackgroundRemoteURL = snap.cardBackgroundRemoteURL
         cardBackgroundWasRemoved = snap.cardBackgroundWasRemoved
         programType = snap.programType
+        syncProgramPickerWithCommitted()
         pointsPerEuro = snap.pointsPerEuro
         pointsPerVisit = snap.pointsPerVisit
         pointsMinAmountEur = snap.pointsMinAmountEur
@@ -596,8 +654,8 @@ struct MyCardView: View {
         logoPhotoItem = nil
         cardBackgroundPhotoItem = nil
         stampIconPhotoItem = nil
-        if let slug = AuthStorage.currentBusinessSlug {
-            persistDisplaySnapshot(slug: slug)
+        if !businessSlug.isEmpty {
+            persistDisplaySnapshot(slug: businessSlug)
         }
     }
 
@@ -609,20 +667,56 @@ struct MyCardView: View {
 
     // MARK: - Aperçu carte (Wallet uniquement)
 
+    /// Binding dédié : les mises à jour programmatiques (`syncProgramPickerWithCommitted`) ne déclenchent pas la confirmation.
+    private var programPickerBinding: Binding<String> {
+        Binding(
+            get: { programPickerSelection },
+            set: { newValue in
+                let oldValue = programPickerSelection
+                guard oldValue != newValue else { return }
+                if shouldConfirmProgramTypeSwitch(from: oldValue, to: newValue) {
+                    pendingProgramSwitchFrom = oldValue
+                    pendingProgramType = newValue
+                    showProgramSwitchConfirm = true
+                } else {
+                    programPickerSelection = newValue
+                    programType = newValue
+                    applyProgramTypeSideEffects(for: newValue)
+                }
+            }
+        )
+    }
+
     /// Choix Points / Tampons : au-dessus de la carte (plus simple que dans les feuilles de modification).
     private var programModePickerSection: some View {
-        Picker("", selection: $programType) {
+        Picker("", selection: programPickerBinding) {
             Text("Points").tag("points")
             Text("Tampons").tag("stamps")
         }
         .pickerStyle(.segmented)
         .accessibilityLabel(Text("Type de programme : Points ou Tampons"))
-        .onChange(of: programType) { _, new in
-            applyProgramTypeSideEffects(for: new)
-        }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, AppTheme.Spacing.lg)
         .padding(.top, AppTheme.Spacing.sm)
+        .transaction { $0.disablesAnimations = true }
+    }
+
+    private func shouldConfirmProgramTypeSwitch(from oldType: String, to newType: String) -> Bool {
+        guard oldType != newType else { return false }
+        return dataService.totalClientCardsCount() > 0
+    }
+
+    private var programSwitchConfirmMessage: String {
+        let fromRaw = pendingProgramSwitchFrom ?? programType
+        let toRaw = pendingProgramType ?? programType
+        let fromLabel = fromRaw == "stamps" ? "Tampons" : "Points"
+        let toLabel = toRaw == "stamps" ? "Tampons" : "Points"
+        let n = dataService.totalClientCardsCount()
+        return "Vous avez \(n) client\(n > 1 ? "s" : ""). Passer de \(fromLabel) à \(toLabel) remet tous les soldes à zéro et efface l’historique. Irréversible — enregistrez ensuite la carte."
+    }
+
+    private func syncProgramPickerWithCommitted() {
+        programPickerSelection = programType
     }
 
     private func applyProgramTypeSideEffects(for new: String) {
@@ -637,8 +731,8 @@ struct MyCardView: View {
             if previewStampsCount > requiredStamps { previewStampsCount = requiredStamps }
             cardBackgroundPhotoItem = nil
         }
-        if let slug = AuthStorage.currentBusinessSlug {
-            persistDisplaySnapshot(slug: slug)
+        if !businessSlug.isEmpty {
+            persistDisplaySnapshot(slug: businessSlug)
         }
     }
 
@@ -647,8 +741,8 @@ struct MyCardView: View {
         let empty = tierPoints.allSatisfy { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
             && tierLabels.allSatisfy { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         guard empty else { return }
-        guard let slug = AuthStorage.currentBusinessSlug,
-              let snap = CardPreviewDisplaySnapshotStore.load(slug: slug) else { return }
+        guard !businessSlug.isEmpty,
+              let snap = CardPreviewDisplaySnapshotStore.load(slug: businessSlug) else { return }
         if let tp = snap.tierPoints, tp.contains(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
             tierPoints = Self.normalizeTierStrings(tp)
             tierLabels = Self.normalizeTierStrings(snap.tierLabels ?? [])
@@ -666,14 +760,14 @@ struct MyCardView: View {
 
     /// Même URL que le lien « Lien et QR code » / page carte publique.
     private var fidelityCardPageURLString: String? {
-        guard let slug = AuthStorage.currentBusinessSlug,
-              let url = LegalURLs.fidelityCardPage(slug: slug) else { return nil }
+        guard !businessSlug.isEmpty,
+              let url = LegalURLs.fidelityCardPage(slug: businessSlug) else { return nil }
         return url.absoluteString
     }
 
     private var previewSection: some View {
         VStack(spacing: AppTheme.Spacing.md) {
-            ZStack {
+            ZStack(alignment: .topLeading) {
                 Group {
                     if programType == "stamps" {
                         CafeDesArtsCardPreview(
@@ -699,7 +793,8 @@ struct MyCardView: View {
                             stampRewardLabel: stampRewardLabel,
                             restantsCaption: labelRestants.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Restants" : labelRestants.trimmingCharacters(in: .whitespacesAndNewlines),
                             compact: false,
-                            onEditZoneTap: { handleCardPreviewZoneTap($0) },
+                            onEditZoneTap: handleCardPreviewZoneTap,
+                            onCompletionPillTap: openCardCustomizationZone,
                             fidelityQRPayloadURL: fidelityCardPageURLString,
                             completionHighlightZones: shouldShowCompletionPills ? cardCompletionPreviewZones : []
                         )
@@ -722,31 +817,51 @@ struct MyCardView: View {
                             memberPreviewText: cardMemberPreviewText,
                             memberColumnTitle: previewMemberColumnTitle,
                             compact: false,
-                            onEditZoneTap: { handleCardPreviewZoneTap($0) },
+                            onEditZoneTap: handleCardPreviewZoneTap,
+                            onCompletionPillTap: openCardCustomizationZone,
                             fidelityQRPayloadURL: fidelityCardPageURLString,
                             completionHighlightZones: shouldShowCompletionPills ? cardCompletionPreviewZones : []
                         )
                     }
                 }
                 .padding(.horizontal, AppTheme.Spacing.lg)
+                .scaleEffect(cardLogoZoomFocused ? 1.75 : 1, anchor: .topLeading)
+                .offset(x: cardLogoZoomFocused ? 16 : 0, y: cardLogoZoomFocused ? 4 : 0)
             }
+            .animation(.spring(response: 0.46, dampingFraction: 0.86), value: cardLogoZoomFocused)
             .id(programType)
-            .frame(maxWidth: .infinity, alignment: .top)
-            .transaction { $0.disablesAnimations = true }
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .frame(minHeight: cardLogoZoomFocused ? 220 : nil, alignment: .topLeading)
         }
         .padding(.top, AppTheme.Spacing.md)
         .padding(.bottom, AppTheme.Spacing.sm)
     }
 
     private func handleCardPreviewZoneTap(_ zone: CardPreviewEditZone) {
+        if zone == .logoBand {
+            openCardCustomizationZone(.logoBand)
+            return
+        }
+        if cardLogoZoomFocused {
+            cardLogoZoomFocused = false
+        }
+        openCardCustomizationZone(zone)
+    }
+
+    private func openCardCustomizationZone(_ zone: CardPreviewEditZone) {
         if zone == .qrCode {
-            guard let slug = AuthStorage.currentBusinessSlug,
-                  let url = LegalURLs.fidelityCardPage(slug: slug) else { return }
+            guard !businessSlug.isEmpty,
+                  let url = LegalURLs.fidelityCardPage(slug: businessSlug) else { return }
             openURL(url)
             return
         }
         if zone == .backgroundImage && programType != "points" {
             return
+        }
+        if zone == .logoBand {
+            cardLogoZoomFocused = true
+        } else {
+            cardLogoZoomFocused = false
         }
         customizationZone = zone
     }
@@ -770,6 +885,7 @@ struct MyCardView: View {
             programType: $programType,
             tierPoints: $tierPoints,
             tierLabels: $tierLabels,
+            tierMinPurchases: $tierMinPurchases,
             requiredStamps: $requiredStamps,
             previewStampsCount: $previewStampsCount,
             previewPointsCount: $previewPointsCount,
@@ -797,14 +913,13 @@ struct MyCardView: View {
             loadLogoFromPhotoAsset: { asset in await loadLogoFromPhotoAsset(asset) },
             loadCardBackgroundFromPhotoAsset: { asset in await loadCardBackgroundFromPhotoAsset(asset) },
             removeCardBackground: {
-                CardLogoStorage.removeLocalCardBackgroundFile()
+                guard !businessSlug.isEmpty else { return }
+                CardLogoStorage.removeLocalCardBackgroundFile(for: businessSlug)
                 cardBackgroundImagePath = nil
                 cardBackgroundPhotoItem = nil
                 cardBackgroundRemoteURL = nil
                 cardBackgroundWasRemoved = true
-                if let slug = AuthStorage.currentBusinessSlug {
-                    persistDisplaySnapshot(slug: slug)
-                }
+                persistDisplaySnapshot(slug: businessSlug)
             },
             removeLogo: {
                 logoURL = ""
@@ -815,8 +930,8 @@ struct MyCardView: View {
                 stampIconWasRemoved = true
                 stampIconPendingBase64 = nil
                 stampIconPhotoItem = nil
-                if let slug = AuthStorage.currentBusinessSlug {
-                    persistDisplaySnapshot(slug: slug)
+                if !businessSlug.isEmpty {
+                    persistDisplaySnapshot(slug: businessSlug)
                 }
                 persistLocalCardVisualsAfterImageChange(stampEmojiOverride: selectedCatalogKey)
             }
@@ -884,10 +999,10 @@ struct MyCardView: View {
                 guard saved else { return }
             }
 
-            var slug = AuthStorage.currentBusinessSlug
+            var slug: String? = businessSlug.isEmpty ? nil : businessSlug
             if slug == nil, AuthStorage.isLoggedIn {
                 await syncService.syncIfNeeded()
-                slug = AuthStorage.currentBusinessSlug
+                slug = businessSlug.isEmpty ? AuthStorage.currentBusinessSlug : businessSlug
             }
             guard let slug else {
                 await MainActor.run {
@@ -987,7 +1102,8 @@ struct MyCardView: View {
     }
 
     private func applyLogoImage(_ image: UIImage) async {
-        let path = CardLogoStorage.saveImage(image)
+        guard !businessSlug.isEmpty else { return }
+        let path = CardLogoStorage.saveImage(image, slug: businessSlug)
         await MainActor.run {
             logoURL = path ?? ""
             stripDisplayMode = "logo"
@@ -1016,7 +1132,7 @@ struct MyCardView: View {
         let trimmed = urlOrPath.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return nil }
         if let u = APIResourceURL.resolved(from: trimmed), APIResourceURL.isOurAPIHost(u), u.path.hasSuffix("/logo") {
-            let bust = MerchantLogoAssetCache.stripeLogoDisplayURL(u)
+            let bust = MerchantLogoAssetCache.stripeLogoDisplayURL(u, slug: businessSlug)
             return try? await AuthenticatedMediaLoader.loadAuthenticatedImage(from: bust)
         }
         if let u = APIResourceURL.resolved(from: trimmed), let scheme = u.scheme, scheme == "http" || scheme == "https" {
@@ -1097,7 +1213,8 @@ struct MyCardView: View {
     }
 
     private func applyCardBackgroundImage(_ image: UIImage) async {
-        let path = CardLogoStorage.saveCardBackground(image)
+        guard !businessSlug.isEmpty else { return }
+        let path = CardLogoStorage.saveCardBackground(image, slug: businessSlug)
         await MainActor.run {
             cardBackgroundImagePath = path
             if path != nil {
@@ -1132,8 +1249,8 @@ struct MyCardView: View {
         await MainActor.run {
             stampIconPendingBase64 = payload
             stampIconWasRemoved = false
-            if let slug = AuthStorage.currentBusinessSlug {
-                persistDisplaySnapshot(slug: slug)
+            if !businessSlug.isEmpty {
+                persistDisplaySnapshot(slug: businessSlug)
             }
         }
     }
@@ -1147,7 +1264,32 @@ struct MyCardView: View {
         return APIResourceURL.resolved(from: s)
     }
 
+    /// Vide le brouillon en mémoire avant de charger le commerce courant (évite un flash logo/couleurs d’un autre compte).
+    private func resetCardDraftStateForBusinessLoad() {
+        displayName = ""
+        logoURL = ""
+        primaryHex = AppTheme.WalletCardAppearanceDefaults.backgroundHex
+        accentHex = AppTheme.WalletCardAppearanceDefaults.bodyTextHex
+        labelHex = AppTheme.WalletCardAppearanceDefaults.labelTitlesHex
+        stripDisplayMode = "logo"
+        stripText = ""
+        stampEmoji = ""
+        cardBackgroundImagePath = nil
+        cardBackgroundRemoteURL = nil
+        cardBackgroundWasRemoved = false
+        stampIconPendingBase64 = nil
+        stampIconWasRemoved = false
+        serverHasStampIconAsset = false
+        serverStampIconURLString = nil
+        dashboardSettingsHydrated = false
+        lastPersistedSnapshot = nil
+        logoPhotoItem = nil
+        cardBackgroundPhotoItem = nil
+        stampIconPhotoItem = nil
+    }
+
     private func loadCurrentTemplate() {
+        guard !businessSlug.isEmpty else { return }
         let t = dataService.createOrGetCurrentCardTemplate()
         displayName = t.displayName ?? "Ma Carte Fidélité"
         requiredStamps = Int(t.requiredStamps)
@@ -1186,6 +1328,7 @@ struct MyCardView: View {
     private func applyDisplaySnapshot(_ s: CardPreviewDisplaySnapshot, restoreLogoFromSnapshot: Bool = false) {
         programType = s.programType
         if programType != "points" && programType != "stamps" { programType = "points" }
+        syncProgramPickerWithCommitted()
         displayName = s.displayName.isEmpty ? displayName : s.displayName
         primaryHex = s.primaryHex.isEmpty ? primaryHex : s.primaryHex
         accentHex = s.accentHex.isEmpty ? accentHex : s.accentHex
@@ -1194,7 +1337,14 @@ struct MyCardView: View {
         if stripDisplayMode != "text" { stripDisplayMode = "logo" }
         stripText = s.stripText
         if restoreLogoFromSnapshot {
-            logoURL = s.logoURL
+            let snapLogo = s.logoURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            if snapLogo.isEmpty {
+                logoURL = ""
+            } else if CardLogoStorage.isLocalPendingLogoReference(snapLogo) {
+                logoURL = CardLogoStorage.belongsToBusiness(snapLogo, slug: businessSlug) ? snapLogo : ""
+            } else {
+                logoURL = snapLogo
+            }
         }
         stampEmoji = s.stampEmoji
         requiredStamps = max(1, s.requiredStamps)
@@ -1213,12 +1363,9 @@ struct MyCardView: View {
         let localBG = !(cardBackgroundImagePath ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         if !localBG {
             // Restaurer le fichier local si le snapshot indique qu'il existe sur disque.
-            if s.hasLocalCardBackground == true {
-                let rel = CardLogoStorage.relativeCardBackgroundPath
-                if let full = CardLogoStorage.fullPath(forRelative: rel),
-                   FileManager.default.fileExists(atPath: full) {
-                    cardBackgroundImagePath = rel
-                }
+            if s.hasLocalCardBackground == true,
+               let rel = CardLogoStorage.localCardBackgroundPathIfExists(for: businessSlug) {
+                cardBackgroundImagePath = rel
             }
             if s.hasRemoteCardBackground, let u = s.cardBackgroundRemoteURL?.trimmingCharacters(in: .whitespacesAndNewlines), !u.isEmpty {
                 cardBackgroundRemoteURL = u
@@ -1245,19 +1392,18 @@ struct MyCardView: View {
     /// que `loadCardSettingsFromAPI()` ne complète — empêche `buildDisplaySnapshot()` d'écraser
     /// `hasLocalCardBackground` avec `false` alors que le fichier est présent.
     private func restoreLocalBackgroundFromSnapshot() {
-        guard let slug = AuthStorage.currentBusinessSlug,
-              let snap = CardPreviewDisplaySnapshotStore.load(slug: slug),
+        guard !businessSlug.isEmpty,
+              let snap = CardPreviewDisplaySnapshotStore.load(slug: businessSlug),
               snap.hasLocalCardBackground == true,
               cardBackgroundImagePath == nil else { return }
-        let rel = CardLogoStorage.relativeCardBackgroundPath
-        guard let full = CardLogoStorage.fullPath(forRelative: rel),
-              FileManager.default.fileExists(atPath: full) else { return }
-        cardBackgroundImagePath = rel
+        if let rel = CardLogoStorage.localCardBackgroundPathIfExists(for: businessSlug) {
+            cardBackgroundImagePath = rel
+        }
     }
 
     private func mergeStampIconFromDisplaySnapshotIfNeeded() {
-        guard let slug = AuthStorage.currentBusinessSlug,
-              let snap = CardPreviewDisplaySnapshotStore.load(slug: slug) else { return }
+        guard !businessSlug.isEmpty,
+              let snap = CardPreviewDisplaySnapshotStore.load(slug: businessSlug) else { return }
         if let p = snap.stampIconPendingBase64?.trimmingCharacters(in: .whitespacesAndNewlines), !p.isEmpty {
             stampIconPendingBase64 = p
             stampIconWasRemoved = false
@@ -1320,8 +1466,8 @@ struct MyCardView: View {
             logoURL: logoURL.isEmpty ? nil : logoURL,
             stampEmoji: stampResolved.isEmpty ? nil : String(stampResolved.prefix(32))
         )
-        if let slug = AuthStorage.currentBusinessSlug {
-            persistDisplaySnapshot(slug: slug)
+        if !businessSlug.isEmpty {
+            persistDisplaySnapshot(slug: businessSlug)
         }
     }
 
@@ -1340,11 +1486,12 @@ struct MyCardView: View {
     /// Charge les réglages complets depuis l’API (design + règles) pour que l’aperçu et le pass « Tester dans l’Apple Wallet » reflètent les changements faits sur le SaaS ou ailleurs.
     /// - Parameter respectingUnsavedEdits: si `true`, n’écrase pas un brouillon local non enregistré.
     private func loadCardSettingsFromAPI(respectingUnsavedEdits: Bool = true) async {
-        guard let slug = AuthStorage.currentBusinessSlug else { return }
+        let slug = businessSlug
+        guard !slug.isEmpty else { return }
         if respectingUnsavedEdits, hasUnsavedCardChanges { return }
         do {
             let settings = try await APIClient.shared.request(APIEndpoint.businessSettings(slug: slug)) as BusinessSettingsResponse
-            MerchantLogoAssetCache.applyMerchantLogoTimestamps(from: settings)
+            MerchantLogoAssetCache.applyMerchantLogoTimestamps(from: settings, slug: slug)
             await MainActor.run {
                 if respectingUnsavedEdits, hasUnsavedCardChanges { return }
                 if let name = settings.organizationName, !name.isEmpty {
@@ -1366,6 +1513,7 @@ struct MyCardView: View {
                 stripText = settings.stripText ?? ""
                 programType = (settings.programType ?? "points").lowercased()
                 if programType != "points" && programType != "stamps" { programType = "points" }
+                syncProgramPickerWithCommitted()
                 if programType == "stamps", let rs = settings.requiredStamps, rs > 0 {
                     requiredStamps = rs
                 }
@@ -1380,6 +1528,7 @@ struct MyCardView: View {
                     startGameRewardLabel = split.startGameRewardLabel
                     tierPoints = split.tierPoints
                     tierLabels = split.tierLabels
+                    tierMinPurchases = split.tierMinPurchases
                     if programType == "points" {
                         MyCardProgramDefaults.sanitizeEditableTierSlots(tierPoints: &tierPoints, tierLabels: &tierLabels)
                         MyCardProgramDefaults.syncStartGameLabelFromFirstTier(
@@ -1435,28 +1584,21 @@ struct MyCardView: View {
                 // Ne pas effacer un tampon / icône en cours d’édition non enregistré (le GET ne représente pas ce brouillon).
                 let apiLogo = settings.logoUrl?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 let currentLogo = logoURL.trimmingCharacters(in: .whitespacesAndNewlines)
-                let localLogoFileExists: Bool = {
-                    guard let path = CardLogoStorage.fullPath(forRelative: CardLogoStorage.relativeLogoPath) else { return false }
-                    return FileManager.default.fileExists(atPath: path)
-                }()
-                if CardLogoStorage.isLocalPendingLogoReference(currentLogo) {
-                    // Conserver le fichier local jusqu’à envoi réussi — sauf si le fichier a été supprimé.
-                    if !localLogoFileExists {
+                let localLogoRel = CardLogoStorage.localLogoPathIfExists(for: slug)
+                if CardLogoStorage.isLocalPendingLogoReference(currentLogo, slug: slug) {
+                    if localLogoRel == nil {
                         logoURL = apiLogo
                     }
                 } else if !apiLogo.isEmpty {
-                    // currentLogo est une URL API (ou vide). Préférer le fichier local s’il existe et
-                    // est plus récent que le logo serveur (évite de basculer sur AuthenticatedLogoView
-                    // lors d’une seconde navigation alors que le fichier local est toujours valide).
-                    let localUploadAt = UserDefaults.standard.object(forKey: SyncService.lastLogoUploadAtKey) as? Date
-                    if localUploadAt != nil && localLogoFileExists {
+                    let localUploadAt = MerchantMediaUploadOwnership.lastLogoUploadDate(for: slug)
+                    if localUploadAt != nil, let localRel = localLogoRel {
                         var serverIsNewer = false
                         if let serverAtStr = settings.logoUpdatedAt?.trimmingCharacters(in: .whitespacesAndNewlines),
                            !serverAtStr.isEmpty,
                            let serverAt = ISO8601DateFormatter().date(from: serverAtStr) {
                             serverIsNewer = serverAt > localUploadAt!
                         }
-                        logoURL = serverIsNewer ? apiLogo : CardLogoStorage.relativeLogoPath
+                        logoURL = serverIsNewer ? apiLogo : localRel
                     } else {
                         logoURL = apiLogo
                     }
@@ -1476,7 +1618,7 @@ struct MyCardView: View {
                 } else if !cardBackgroundWasRemoved {
                     let localRel = cardBackgroundImagePath?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                     let hasLocal = !localRel.isEmpty
-                        || FileManager.default.fileExists(atPath: CardLogoStorage.fullPath(forRelative: CardLogoStorage.relativeCardBackgroundPath) ?? "")
+                        || CardLogoStorage.localCardBackgroundPathIfExists(for: slug) != nil
                     if !hasLocal {
                         cardBackgroundRemoteURL = nil
                     }
@@ -1618,10 +1760,11 @@ struct MyCardView: View {
             }
             return false
         }
-        guard let slug = AuthStorage.currentBusinessSlug else {
+        guard !businessSlug.isEmpty else {
             await MainActor.run { capturePersistedBaseline() }
             return true
         }
+        let slug = businessSlug
 
         var patch = FullDashboardSettingsPatch()
         patch.welcomeBonusEnabled = 1
@@ -1640,7 +1783,8 @@ struct MyCardView: View {
             patch.pointsRewardTiers = MyCardProgramDefaults.buildPointsRewardTiersForAPI(
                 startGameRewardLabel: startGameRewardLabel,
                 tierPoints: tierPoints,
-                tierLabels: tierLabels
+                tierLabels: tierLabels,
+                tierMinPurchases: tierMinPurchases
             )
             patch.loyaltyMode = "points_cash"
         } else {
@@ -1678,6 +1822,9 @@ struct MyCardView: View {
     /// - Parameter skipPostSaveReload: si `true`, pas de `GET dashboard/settings` après succès (ex. flux Apple Wallet : évite un aller-retour réseau inutile).
     @discardableResult
     private func saveTemplate(skipPostSaveReload: Bool = false) async -> Bool {
+        let previousCommittedProgramType = lastPersistedSnapshot?.programType
+        let willSwitchProgramType = programTypeSwitchAwaitingSave
+            || (previousCommittedProgramType.map { $0 != programType } ?? false)
         if !cardMissingRequirements.isEmpty {
             let titles = cardMissingRequirements.map(\.title).joined(separator: " · ")
             await MainActor.run {
@@ -1701,10 +1848,11 @@ struct MyCardView: View {
         )
         UserDefaults.standard.set(Date(), forKey: "myfidpass.templateLastSavedAt")
 
-        guard let slug = AuthStorage.currentBusinessSlug else {
+        guard !businessSlug.isEmpty else {
             await MainActor.run { capturePersistedBaseline() }
             return true
         }
+        let slug = businessSlug
         let (cardBackgroundBase64, logoBase64, logoUrl) = await prepareDashboardMediaPayloadsForSave(
             cardBackgroundWasRemoved: cardBackgroundWasRemoved,
             cardBackgroundImagePath: cardBackgroundImagePath,
@@ -1721,7 +1869,8 @@ struct MyCardView: View {
             rewardTiers = MyCardProgramDefaults.buildPointsRewardTiersForAPI(
                 startGameRewardLabel: startGameRewardLabel,
                 tierPoints: tierPoints,
-                tierLabels: tierLabels
+                tierLabels: tierLabels,
+                tierMinPurchases: tierMinPurchases
             )
         }
         let ptsMinEur: Double? = Double(pointsMinAmountEur.trimmingCharacters(in: .whitespaces)).flatMap { $0 >= 0 ? $0 : nil }
@@ -1809,6 +1958,10 @@ struct MyCardView: View {
                 _ = try await APIClient.shared.request(APIEndpoint.patchDashboardSettings(slug: slug, patch: patch)) as EmptyResponse
                 /// Avant le GET de relecture : snapshot UserDefaults à jour pour l’accueil (évite « Finalisez » si l’utilisateur quitte pendant `loadCardSettingsFromAPI`).
                 await MainActor.run {
+                    if willSwitchProgramType {
+                        programTypeSwitchAwaitingSave = false
+                        NotificationCenter.default.post(name: .myfidpassProgramModeDidSwitch, object: nil)
+                    }
                     saveLogoError = nil
                     if cardBackgroundBase64 == "" { cardBackgroundWasRemoved = false }
                     if let v = stampIconServerAfterPatch {
@@ -1822,8 +1975,8 @@ struct MyCardView: View {
                 }
                 if skipPostSaveReload {
                     await MainActor.run {
-                        if let s = AuthStorage.currentBusinessSlug {
-                            persistDisplaySnapshot(slug: s)
+                        if !businessSlug.isEmpty {
+                            persistDisplaySnapshot(slug: businessSlug)
                         }
                         syncPreviewBalancesFromSyncedMembers()
                         capturePersistedBaseline()
@@ -1832,8 +1985,14 @@ struct MyCardView: View {
                     await loadCardSettingsFromAPI(respectingUnsavedEdits: false)
                     // `loadCardSettingsFromAPI` met déjà à jour l’aperçu + `syncPreviewBalancesFromSyncedMembers`.
                 }
-                // La sync complète (membres + transactions) peut prendre plusieurs secondes : arrière-plan.
-                Task(priority: .utility) { await syncService.syncAfterServerMutation() }
+                if willSwitchProgramType {
+                    await syncService.syncAfterServerMutation()
+                    await MainActor.run {
+                        NotificationCenter.default.post(name: .myfidpassProgramModeDidSwitch, object: nil)
+                    }
+                } else {
+                    Task(priority: .utility) { await syncService.syncAfterServerMutation() }
+                }
                 if let sentBase64 = logoBase64, !sentBase64.isEmpty {
                     let base = APIConfig.baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
                     let apiLogoURL = "\(base)/api/businesses/\(slug)/logo"
@@ -1849,7 +2008,7 @@ struct MyCardView: View {
                     // "Enregistrer" et remplacerait AsyncLocalFileImage par AuthenticatedLogoView
                     // (qui montre un ProgressView pendant le téléchargement → logo "disparu").
                     // Core Data est déjà mis à jour avec apiLogoURL pour les prochaines sessions.
-                    UserDefaults.standard.set(Date(), forKey: SyncService.lastLogoUploadAtKey)
+                    MerchantMediaUploadOwnership.recordLogoUpload(for: slug)
                 }
             return true
         } catch {
@@ -1864,13 +2023,13 @@ struct MyCardView: View {
 
     /// Mis en attente jusqu’à l’onglet **Accueil** — voir `DashboardView` (`PostCardFlyerPromoEligibility`).
     private func schedulePostCardFlyerPromoIfEligible() {
-        guard let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines), !slug.isEmpty else { return }
-        guard PostCardFlyerPromoEligibility.stillNeedsFlyerPromo(for: slug) else { return }
-        PostCardFlyerPromoEligibility.queuePresentationOnMerchantHome(for: slug)
+        guard !businessSlug.isEmpty else { return }
+        guard PostCardFlyerPromoEligibility.stillNeedsFlyerPromo(for: businessSlug) else { return }
+        PostCardFlyerPromoEligibility.queuePresentationOnMerchantHome(for: businessSlug)
     }
 
     private func triggerSavedFeedback() {
-        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        MerchantUXFeedback.shared.play(.save)
     }
 }
 

@@ -15,8 +15,11 @@ struct ContentView: View {
     @EnvironmentObject private var syncService: SyncService
     @EnvironmentObject private var authService: AuthService
     @StateObject private var tabRouter = MainTabRouter()
+    @StateObject private var memberSearchCoordinator = MerchantMemberSearchCoordinator()
     @State private var showMerchantSubscriptionSheet = false
     @State private var merchantSubscriptionRequiredSlots: Int?
+    @State private var merchantSubscriptionAddingCommerce = false
+    @State private var merchantSubscriptionPendingCommerceName: String?
     /// Pastille « Synchronisé » après une sync réussie (masquée si une nouvelle sync démarre).
     @State private var showSyncSuccessChip = false
     @State private var syncSuccessHideTask: Task<Void, Never>?
@@ -46,6 +49,8 @@ struct ContentView: View {
                     } else {
                         merchantSubscriptionRequiredSlots = nil
                     }
+                    merchantSubscriptionAddingCommerce = notification.userInfo?[MyfidpassNotificationUserInfoKey.addingAnotherCommerce] as? Bool ?? false
+                    merchantSubscriptionPendingCommerceName = notification.userInfo?[MyfidpassNotificationUserInfoKey.pendingCommerceName] as? String
                     showMerchantSubscriptionSheet = true
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .myfidpassOpenMerchantTrialStripePaymentLink)) { _ in
@@ -59,7 +64,7 @@ struct ContentView: View {
                         await runPostPaywallRefreshPipeline()
                         await MainActor.run {
                             guard epoch == subscriptionPaidThankYouEpoch else { return }
-                            guard authService.hasEncashedMerchantSubscription else {
+                            guard authService.hasEncashedMerchantSubscription || authService.canCreateBusiness else {
                                 showMerchantSubscriptionSheet = true
                                 return
                             }
@@ -84,7 +89,9 @@ struct ContentView: View {
                 .sheet(isPresented: $showMerchantSubscriptionSheet) {
                     MerchantSubscriptionGateView(
                         isMandatory: false,
-                        requiredCommerceSlots: merchantSubscriptionRequiredSlots
+                        requiredCommerceSlots: merchantSubscriptionRequiredSlots,
+                        addingAnotherCommerce: merchantSubscriptionAddingCommerce,
+                        pendingCommerceName: merchantSubscriptionPendingCommerceName
                     )
                     .environmentObject(authService)
                     .presentationDetents([.large])
@@ -93,7 +100,11 @@ struct ContentView: View {
                     .presentationBackground(.white)
                 }
                 .onChange(of: showMerchantSubscriptionSheet) { _, isOpen in
-                    if !isOpen { merchantSubscriptionRequiredSlots = nil }
+                    if !isOpen {
+                        merchantSubscriptionRequiredSlots = nil
+                        merchantSubscriptionAddingCommerce = false
+                        merchantSubscriptionPendingCommerceName = nil
+                    }
                 }
                 .task(id: adminPilotSyncTaskKey) {
                     guard authService.currentScreen == .authenticated else { return }
@@ -101,14 +112,13 @@ struct ContentView: View {
                     await authService.refreshPlatformAdminBusinesses(force: false)
                     await authService.reconcileMerchantSubscriptionFromServer(force: false)
                     syncService.invalidateSyncThrottle()
-                    await syncService.syncIfNeeded(force: true)
+                    await syncService.syncPilotEntry(force: true)
                 }
-                .onReceive(NotificationCenter.default.publisher(for: .myfidpassAdminPilotDidStart)) { _ in
-                    Task {
-                        guard authService.isPlatformAdmin, authService.adminShowsMerchantWorkspace else { return }
-                        syncService.invalidateSyncThrottle()
-                        await syncService.syncIfNeeded(force: true)
-                    }
+                .task(id: merchantPostLoginSyncTaskKey) {
+                    guard authService.currentScreen == .authenticated else { return }
+                    if authService.isPlatformAdmin, !authService.adminShowsMerchantWorkspace { return }
+                    syncService.invalidateSyncThrottle()
+                    await syncService.syncIfNeeded(force: true)
                 }
 
             if showPaymentThankYouOverlay {
@@ -131,15 +141,19 @@ struct ContentView: View {
         return "pilot-\(slug)"
     }
 
+    /// Sync + hydratation flyer dès l’ouverture de session commerçant (reconnexion après logout).
+    private var merchantPostLoginSyncTaskKey: String {
+        guard authService.currentScreen == .authenticated else { return "off" }
+        if authService.isPlatformAdmin, !authService.adminShowsMerchantWorkspace { return "admin-hub" }
+        let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return "merchant-sync-\(slug)"
+    }
+
     /// Onglets + pastille d’essai + sync.
     @ViewBuilder
     private var mainMerchantTabStack: some View {
         MainTabView()
-            .safeAreaInset(edge: .top, spacing: 0) {
-                if authService.isPlatformAdmin && authService.adminShowsMerchantWorkspace {
-                    adminMerchantPilotBanner
-                }
-            }
+            .environmentObject(memberSearchCoordinator)
             .environment(\.isSoftwareKeyboardVisible, isSoftwareKeyboardVisible)
             .environment(\.merchantSubscribePillSuppressed, showMerchantSubscriptionSheet)
             .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { note in
@@ -467,34 +481,6 @@ struct ContentView: View {
         .animation(.spring(response: 0.38, dampingFraction: 0.82), value: syncService.isSyncing)
     }
 
-    /// Bandeau retour **Administration** quand l’admin pilote un commerce (interface commerçant).
-    private var adminMerchantPilotBanner: some View {
-        HStack(spacing: 12) {
-            Button {
-                authService.returnToPlatformAdministrationHub()
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "chevron.backward.circle.fill")
-                        .font(.title3)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Administration")
-                            .font(.subheadline.weight(.semibold))
-                        if let slug = AuthStorage.currentBusinessSlug, !slug.isEmpty {
-                            Text(slug)
-                                .font(.caption.monospaced())
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-            }
-            .buttonStyle(.borderedProminent)
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 12)
-        .padding(.top, 6)
-        .padding(.bottom, 4)
-    }
-
     /// Lien `myfidpass://scan` (widget, Safari, etc.) : diffère la notification pour que l’onglet Accueil et
     /// `DashboardView` soient montés (sinon l’app s’ouvre sans lancer le scanner).
     /// Universal Links `https://myfidpass.fr/oauth/…` (retour OAuth) → relay `myfidpass://oauth-…` pour l’UI métriques.
@@ -570,4 +556,5 @@ struct ContentView: View {
         .environment(\.managedObjectContext, PersistenceController.preview.container.viewContext)
         .environmentObject(SyncService(container: PersistenceController.preview.container))
         .environmentObject(AuthService())
+        .environmentObject(MerchantMemberSearchCoordinator())
 }

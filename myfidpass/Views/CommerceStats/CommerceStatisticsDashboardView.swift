@@ -5,6 +5,7 @@
 //  Statistiques commerçant — refonte visuelle + feuille détail avec transition zoom (iOS 18+).
 //
 
+import CoreData
 import SwiftUI
 import UIKit
 
@@ -17,7 +18,10 @@ struct CommerceStatisticsDashboardView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @EnvironmentObject private var authService: AuthService
+    @EnvironmentObject private var syncService: SyncService
+    @EnvironmentObject private var dataService: DataService
     @EnvironmentObject private var tabRouter: MainTabRouter
+    @EnvironmentObject private var memberSearchCoordinator: MerchantMemberSearchCoordinator
     @Environment(\.merchantTabIsActive) private var merchantTabIsActive
     @ObservedObject var vm: MerchantStatsIndicatorsViewModel
     /// Ordre : index 0 = mois le plus récent, … 5 = M-5.
@@ -41,6 +45,21 @@ struct CommerceStatisticsDashboardView: View {
     /// Campagnes de notification — liste dérivée coûteuse (merge 3 sources), mise en cache.
     @State private var cachedNotificationCampaigns: [NotificationCampaignInsightDTO] = []
     @State private var statsScrollToTopTick = 0
+    @State private var googleReviewsOpenAlert: GoogleReviewsOpenAlert?
+    @State private var memberDetailSheetItem: MemberDetailSheetItem?
+    @AppStorage(CommerceGoogleReviewsMonthHistory.storageKey) private var googleReviewsMonthlyHistoryJSON: String = "{}"
+
+    private enum GoogleReviewsOpenAlert: Identifiable {
+        case missingPlace
+        case systemOpenFailed
+
+        var id: String {
+            switch self {
+            case .missingPlace: return "missing"
+            case .systemOpenFailed: return "openFailed"
+            }
+        }
+    }
 
     /// Espace sous le titre du carrousel KPI, entre carrousel et points (inchangé, lisible).
     private let kpiClusterVerticalSpacing: CGFloat = 8
@@ -78,8 +97,26 @@ struct CommerceStatisticsDashboardView: View {
         CommerceStatsProgramKind.isStamps(vm.loyaltyProgramType)
     }
 
-    private var hasConfiguredSocialNetworks: Bool {
-        !vm.configuredSocialHandles.isEmpty
+    private static let socialApiToButtonId: [String: String] = [
+        "social-instagram": "instagram",
+        "social-tiktok": "tiktok",
+        "social-facebook": "facebook",
+        "social-twitter": "x",
+    ]
+
+    private var connectedSocialNetworkButtonIds: Set<String> {
+        Set(
+            vm.configuredSocialHandles.compactMap { apiId, handle -> String? in
+                guard let btnId = Self.socialApiToButtonId[apiId] else { return nil }
+                let u = handle.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !u.isEmpty else { return nil }
+                return btnId
+            }
+        )
+    }
+
+    private var allSocialNetworksConfigured: Bool {
+        connectedSocialNetworkButtonIds.count >= CommerceStatsConnectNetworksButton.allNetworks.count
     }
 
     @State private var detailCacheRefreshTask: Task<Void, Never>?
@@ -177,7 +214,7 @@ struct CommerceStatisticsDashboardView: View {
             } else {
                 cachedDetailPresentation = vm.presentationForMonthCarousel(monthKey: key)
             }
-            cachedNotificationCampaigns = Array(vm.notificationCampaignsForPresentation.prefix(24))
+            cachedNotificationCampaigns = vm.notificationCampaigns(forMonthKey: key)
         } else if let mockPayload = demoPayloads[key] {
             let realPres = vm.presentationForMonthCarousel(monthKey: key)
             let mockPres = CommerceStatisticsDataBuilder.build(
@@ -228,7 +265,46 @@ struct CommerceStatisticsDashboardView: View {
     }
 
     private func presentCommerceStatsPaywall() {
-        NotificationCenter.default.post(name: .myfidpassOpenMerchantSubscriptionSheet, object: nil)
+        NotificationCenter.default.postOpenMerchantSubscriptionFromSession(
+            usedBusinesses: authService.usedBusinesses,
+            allowedBusinesses: authService.allowedBusinesses,
+            hasActiveSubscription: authService.hasEncashedMerchantSubscription
+        )
+    }
+
+    private func openCommerceGoogleReviewsOnMaps() {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        guard let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines), !slug.isEmpty else {
+            googleReviewsOpenAlert = .missingPlace
+            return
+        }
+        let mapsContext = commerceStatsGoogleMapsContext(for: slug)
+        let instant = CommerceStatsGoogleMapsOpener.openMapsReviews(for: slug, context: mapsContext)
+        if instant == .opened { return }
+        Task { @MainActor in
+            let result = await CommerceStatsGoogleMapsOpener.openMapsReviewsResolvingIfNeeded(for: slug, context: mapsContext)
+            switch result {
+            case .opened:
+                break
+            case .missingPlace:
+                googleReviewsOpenAlert = .missingPlace
+            case .systemOpenFailed:
+                googleReviewsOpenAlert = .systemOpenFailed
+            }
+        }
+    }
+
+    private func commerceStatsGoogleMapsContext(for slug: String) -> CommerceStatsGoogleMapsContext {
+        CommerceStatsGoogleMapsContext.fromAuth(
+            businesses: authService.businesses,
+            slug: slug,
+            cachedSettings: ScanFlowSettingsCache.cached(for: slug)
+        )
+    }
+
+    private func prefetchCommerceGoogleMapsReviewsURL() {
+        guard let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines), !slug.isEmpty else { return }
+        CommerceStatsGoogleMapsOpener.prefetchMapsReviewsURL(for: slug, context: commerceStatsGoogleMapsContext(for: slug))
     }
 
     private var selectedMonthKey: String? {
@@ -281,6 +357,169 @@ struct CommerceStatisticsDashboardView: View {
     }
 
     var body: some View {
+        statsDashboardLifecycleLayer
+    }
+
+    private var statsDashboardLifecycleLayer: some View {
+        applyStatsDashboardAlerts(
+            applyStatsDashboardNotificationObservers(
+                applyStatsDashboardLifecycleObservers(statsDashboardPresentationLayer)
+            )
+        )
+    }
+
+    @ViewBuilder
+    private func applyStatsDashboardLifecycleObservers<V: View>(_ content: V) -> some View {
+        content
+            .onDisappear {
+                detailCacheRefreshTask?.cancel()
+                detailCacheRefreshTask = nil
+                panierReperePopupPresented = false
+                showDeferredDetailSections = false
+                tabRouter.isCommerceStatsAtRoot = true
+            }
+            .onAppear {
+                vm.syncLoyaltyProgramTypeFromLocalSources()
+                refreshMonthCarouselCachesOnly()
+                refreshDetailCachesOnly()
+                syncCommerceStatsSubscribePillVisibility()
+                revealDeferredDetailSectionsIfNeeded()
+                resetStatsScrollToTop(animated: false)
+                prefetchCommerceGoogleMapsReviewsURL()
+                Task { await refreshSocialMissionsConnectSubtitle() }
+            }
+            .onChange(of: merchantTabIsActive) { _, active in
+                guard active, isEmbeddedCommerceStats else { return }
+                vm.syncLoyaltyProgramTypeFromLocalSources()
+                refreshCachedPresentations()
+                revealDeferredDetailSectionsIfNeeded()
+                resetStatsScrollToTop(animated: false)
+            }
+            .onChange(of: AuthStorage.currentBusinessSlug) { _, newSlug in
+                let s = newSlug?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                guard !s.isEmpty else { return }
+                vm.resetForBusinessSwitch(slug: s)
+                refreshCachedPresentations()
+                Task { await loadMonthForCurrentSelection(forceRefresh: true) }
+            }
+            .onChange(of: vm.lastSuccessfullyLoadedPeriod) { _, newPeriod in
+                let p = newPeriod?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                if !p.isEmpty, statsMonthKeys.contains(p) {
+                    updateMonthCarouselCache(forMonthKey: p)
+                    refreshDetailCachesOnly()
+                } else {
+                    refreshCachedPresentations()
+                }
+            }
+            .onChange(of: vm.baselinePanierRepereEUR) { _, _ in
+                refreshCachedPresentations()
+            }
+            .onChange(of: accountingPackPresented) { _, presented in
+                if presented {
+                    panierReperePopupPresented = false
+                }
+                syncCommerceStatsSubscribePillVisibility()
+            }
+            .onChange(of: panierReperePopupPresented) { _, _ in
+                syncCommerceStatsSubscribePillVisibility()
+            }
+            .onChange(of: socialMissionsSheetPresented) { _, _ in
+                syncCommerceStatsSubscribePillVisibility()
+            }
+            .task(id: selectedMonthIndex) {
+                await loadMonthForCurrentSelection()
+            }
+    }
+
+    @ViewBuilder
+    private func applyStatsDashboardNotificationObservers<V: View>(_ content: V) -> some View {
+        content
+            .onReceive(NotificationCenter.default.publisher(for: .myfidpassSocialMissionsDidSave)) { _ in
+                Task { await refreshSocialMissionsConnectSubtitle() }
+            }
+            .onChange(of: authService.merchantSubscription?.status) { _, _ in
+                refreshCachedPresentations()
+            }
+            .onChange(of: authService.isPlatformAdmin) { _, _ in
+                refreshCachedPresentations()
+            }
+            .onChange(of: vm.loyaltyProgramType) { _, _ in
+                refreshCachedPresentations()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .myfidpassCardPreviewDisplayDidChange)) { _ in
+                vm.syncLoyaltyProgramTypeFromLocalSources()
+                refreshCachedPresentations()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .myfidpassCommerceStatsTabDidBecomeSelected)) { _ in
+                vm.syncLoyaltyProgramTypeFromLocalSources()
+                refreshCachedPresentations()
+                revealDeferredDetailSectionsIfNeeded()
+                resetStatsScrollToTop(animated: false)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .myfidpassMerchantNotificationCampaignSent)) { _ in
+                Task {
+                    await vm.refreshNotificationStats(reloadMonthStats: false)
+                    refreshDetailCachesOnly()
+                }
+            }
+            .onChange(of: vm.configuredSocialHandles) { _, _ in
+                refreshCachedPresentations()
+            }
+    }
+
+    @ViewBuilder
+    private func applyStatsDashboardAlerts<V: View>(_ content: V) -> some View {
+        content
+            .alert(item: $googleReviewsOpenAlert) { alert in
+                switch alert {
+                case .missingPlace:
+                    Alert(
+                        title: Text("Fiche Google introuvable"),
+                        message: Text("Associez votre commerce à une fiche Google dans Mon établissement, puis réessayez."),
+                        dismissButton: .cancel(Text("OK"))
+                    )
+                case .systemOpenFailed:
+                    Alert(
+                        title: Text("Ouverture impossible"),
+                        message: Text("Google Maps n’a pas pu s’ouvrir. Réessayez ou vérifiez que l’app Maps est installée."),
+                        dismissButton: .cancel(Text("OK"))
+                    )
+                }
+            }
+    }
+
+    private var statsDashboardPresentationLayer: some View {
+        statsDashboardZStack
+            .overlay {
+                if panierReperePopupPresented {
+                    panierReperePopupOverlay
+                }
+            }
+            .sheet(item: $memberDetailSheetItem) { item in
+                if let card = viewContext.object(with: item.objectID) as? ClientCard {
+                    MemberDetailView(card: card, context: viewContext)
+                        .environmentObject(syncService)
+                        .environmentObject(dataService)
+                        .memberDetailSheetChrome()
+                }
+            }
+            .sheet(isPresented: $accountingPackPresented) {
+                NavigationStack {
+                    MerchantAccountingPackView()
+                }
+                .presentationCornerRadius(28)
+            }
+            .sheet(isPresented: $socialMissionsSheetPresented) {
+                if let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines), !slug.isEmpty {
+                    SocialMissionsSheet(slug: slug) {
+                        Task { await refreshSocialMissionsConnectSubtitle() }
+                    }
+                    .presentationCornerRadius(28)
+                }
+            }
+    }
+
+    private var statsDashboardZStack: some View {
         ZStack(alignment: .topLeading) {
             Group {
                 if glassOverlayMode {
@@ -302,40 +541,7 @@ struct CommerceStatisticsDashboardView: View {
                     .ignoresSafeArea(edges: [.horizontal, .bottom])
             }
 
-            ScrollViewReader { scrollProxy in
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 0) {
-                        if glassOverlayMode {
-                            ZStack(alignment: .top) {
-                                Color.clear
-                                    .contentShape(Rectangle())
-                                    .frame(maxWidth: .infinity)
-                                    .frame(minHeight: statsGlassTapBackdropMinHeight)
-                                    .onTapGesture { onClose() }
-                                    .accessibilityHidden(true)
-                                statisticsScrollVStack
-                                    .zIndex(1)
-                            }
-                        } else {
-                            statisticsScrollVStack
-                        }
-                    }
-                    .id("commerce-stats-scroll-root")
-                }
-                .defaultScrollAnchor(.top)
-                .scrollContentBackground(.hidden)
-                .scrollIndicators(.hidden)
-                .scrollBounceBehavior(.basedOnSize)
-                .refreshable {
-                    await loadMonthForCurrentSelection(forceRefresh: true)
-                }
-                .onChange(of: statsScrollToTopTick) { _, _ in
-                    Task { @MainActor in
-                        await Task.yield()
-                        scrollStatsToTop(with: scrollProxy, animated: false)
-                    }
-                }
-            }
+            statsDashboardScrollLayer
 
             if showBlockingStatsLoading {
                 ProgressView()
@@ -349,103 +555,45 @@ struct CommerceStatisticsDashboardView: View {
                 statsOverlayCloseButton
                     .zIndex(20)
             }
-
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Color.clear)
-        .onDisappear {
-            detailCacheRefreshTask?.cancel()
-            detailCacheRefreshTask = nil
-            panierReperePopupPresented = false
-            showDeferredDetailSections = false
-            tabRouter.isCommerceStatsAtRoot = true
-        }
-        .onAppear {
-            vm.syncLoyaltyProgramTypeFromLocalSources()
-            refreshMonthCarouselCachesOnly()
-            refreshDetailCachesOnly()
-            syncCommerceStatsSubscribePillVisibility()
-            revealDeferredDetailSectionsIfNeeded()
-            resetStatsScrollToTop(animated: false)
-            Task { await refreshSocialMissionsConnectSubtitle() }
-        }
-        .onChange(of: merchantTabIsActive) { _, active in
-            guard active, isEmbeddedCommerceStats else { return }
-            vm.syncLoyaltyProgramTypeFromLocalSources()
-            refreshCachedPresentations()
-            revealDeferredDetailSectionsIfNeeded()
-            resetStatsScrollToTop(animated: false)
-        }
-        .onChange(of: vm.lastSuccessfullyLoadedPeriod) { _, newPeriod in
-            let p = newPeriod?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if !p.isEmpty, statsMonthKeys.contains(p) {
-                updateMonthCarouselCache(forMonthKey: p)
-                refreshDetailCachesOnly()
-            } else {
-                refreshCachedPresentations()
-            }
-        }
-        .onChange(of: vm.baselinePanierRepereEUR) { _, _ in
-            refreshCachedPresentations()
-        }
-        .onChange(of: accountingPackPresented) { _, presented in
-            if presented {
-                panierReperePopupPresented = false
-            }
-            syncCommerceStatsSubscribePillVisibility()
-        }
-        .onChange(of: panierReperePopupPresented) { _, _ in
-            syncCommerceStatsSubscribePillVisibility()
-        }
-        .onChange(of: socialMissionsSheetPresented) { _, _ in
-            syncCommerceStatsSubscribePillVisibility()
-        }
-        .task(id: selectedMonthIndex) {
-            await loadMonthForCurrentSelection()
-        }
-        .overlay {
-            if panierReperePopupPresented {
-                panierReperePopupOverlay
-            }
-        }
-        .sheet(isPresented: $accountingPackPresented) {
-            NavigationStack {
-                MerchantAccountingPackView()
-            }
-            .presentationCornerRadius(28)
-        }
-        .sheet(isPresented: $socialMissionsSheetPresented) {
-            if let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines), !slug.isEmpty {
-                SocialMissionsSheet(slug: slug) {
-                    Task { await refreshSocialMissionsConnectSubtitle() }
+    }
+
+    private var statsDashboardScrollLayer: some View {
+        ScrollViewReader { scrollProxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    if glassOverlayMode {
+                        ZStack(alignment: .top) {
+                            Color.clear
+                                .contentShape(Rectangle())
+                                .frame(maxWidth: .infinity)
+                                .frame(minHeight: statsGlassTapBackdropMinHeight)
+                                .onTapGesture { onClose() }
+                                .accessibilityHidden(true)
+                            statisticsScrollVStack
+                                .zIndex(1)
+                        }
+                    } else {
+                        statisticsScrollVStack
+                    }
                 }
-                .presentationCornerRadius(28)
+                .id("commerce-stats-scroll-root")
             }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .myfidpassSocialMissionsDidSave)) { _ in
-            Task { await refreshSocialMissionsConnectSubtitle() }
-        }
-        .onChange(of: authService.merchantSubscription?.status) { _, _ in
-            refreshCachedPresentations()
-        }
-        .onChange(of: authService.isPlatformAdmin) { _, _ in
-            refreshCachedPresentations()
-        }
-        .onChange(of: vm.loyaltyProgramType) { _, _ in
-            refreshCachedPresentations()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .myfidpassCardPreviewDisplayDidChange)) { _ in
-            vm.syncLoyaltyProgramTypeFromLocalSources()
-            refreshCachedPresentations()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .myfidpassCommerceStatsTabDidBecomeSelected)) { _ in
-            vm.syncLoyaltyProgramTypeFromLocalSources()
-            refreshCachedPresentations()
-            revealDeferredDetailSectionsIfNeeded()
-            resetStatsScrollToTop(animated: false)
-        }
-        .onChange(of: vm.configuredSocialHandles) { _, _ in
-            refreshCachedPresentations()
+            .defaultScrollAnchor(.top)
+            .scrollContentBackground(.hidden)
+            .scrollIndicators(.hidden)
+            .scrollBounceBehavior(.basedOnSize)
+            .refreshable {
+                await loadMonthForCurrentSelection(forceRefresh: true)
+            }
+            .onChange(of: statsScrollToTopTick) { _, _ in
+                Task { @MainActor in
+                    await Task.yield()
+                    scrollStatsToTop(with: scrollProxy, animated: false)
+                }
+            }
         }
     }
 
@@ -517,32 +665,40 @@ struct CommerceStatisticsDashboardView: View {
     @ViewBuilder
     private var statisticsScrollVStack: some View {
         VStack(alignment: .leading, spacing: 32) {
-            statisticsTopChrome
-                .padding(.top, statsScrollContentTopPadding)
-
-            kpiCarouselSection
-
-            Group {
-                if showDeferredDetailSections {
-                    detailSectionsBelowCarousel
-                } else {
-                    deferredSectionsSkeleton
+            if isEmbeddedCommerceStats && memberSearchCoordinator.isActive {
+                MerchantMemberSearchInlineSection { oid in
+                    memberDetailSheetItem = MemberDetailSheetItem(objectID: oid)
                 }
-            }
-            .padding(.top, kpiToDetailSectionsTopInset)
-            .padding(.horizontal, detailSectionsHorizontalInset)
+                    .padding(.top, statsScrollContentTopPadding)
+            } else {
+                statisticsTopChrome
+                    .padding(.top, statsScrollContentTopPadding)
 
-            if let err = vm.errorMessage, !err.isEmpty {
-                Text(err)
-                    .font(CommerceStatisticsTheme.statsText(size: 15, weight: .regular))
-                    .foregroundStyle(CommerceStatisticsTheme.negative.opacity(glassOverlayMode ? 1 : 0.9))
-                    .padding(.vertical, 8)
-            }
+                kpiCarouselSection
 
-            Color.clear.frame(height: 44)
+                Group {
+                    if showDeferredDetailSections {
+                        detailSectionsBelowCarousel
+                    } else {
+                        deferredSectionsSkeleton
+                    }
+                }
+                .padding(.top, kpiToDetailSectionsTopInset)
+                .padding(.horizontal, detailSectionsHorizontalInset)
+
+                if let err = vm.errorMessage, !err.isEmpty {
+                    Text(err)
+                        .font(CommerceStatisticsTheme.statsText(size: 15, weight: .regular))
+                        .foregroundStyle(CommerceStatisticsTheme.negative.opacity(glassOverlayMode ? 1 : 0.9))
+                        .padding(.vertical, 8)
+                }
+
+                Color.clear.frame(height: 44)
+            }
         }
         .padding(.horizontal, contentGutter)
         .padding(.bottom, 12)
+        .animation(MerchantMotion.searchBarMorph, value: memberSearchCoordinator.isActive)
     }
 
     private var isEmbeddedCommerceStats: Bool {
@@ -793,9 +949,11 @@ struct CommerceStatisticsDashboardView: View {
                 subtitle: newMembersInscriptionSubtitle(stats: monthStats),
                 membersWeeklySparkline: pres.membersWeeklySparkline,
                 segments: pres.donutSegments,
-                onTap: nil
+                onTap: { memberSearchCoordinator.activate() },
+                showsMonthDayAxis: true,
+                monthDayAxisLabels: pres.membersMonthAxisDays
             )
-            .frame(height: membersKpiCardFixedHeight, alignment: .top)
+            .frame(height: membersKpiCardFixedHeight, alignment: .bottom)
             .scaleEffect(kpiCardsMicroScale, anchor: .top)
             .accessibilityLabel(newMembersCardAccessibilityLabel(stats: monthStats, presentation: pres))
 
@@ -812,7 +970,7 @@ struct CommerceStatisticsDashboardView: View {
     ) -> some View {
         Group {
             if isStampsProgram {
-                stampsAttributedFrequenceSquareRow(presentation: presentation, cellSide: panierFreqCellSide)
+                stampsPurchaseFrequencySquareRow(presentation: presentation, cellSide: panierFreqCellSide)
             } else {
                 panierFrequenceSquareRow(presentation: presentation, cellSide: panierFreqCellSide) {
                     panierReperePopupPresented = true
@@ -823,8 +981,8 @@ struct CommerceStatisticsDashboardView: View {
             locked: !commerceStatsInsightsUnlocked,
             glassOverlayMode: glassOverlayMode,
             accessibilityUnlockLabel: isStampsProgram
-                ? "Déverrouiller avec Pro pour les tampons attribués et la fréquence"
-                : "Déverrouiller avec Pro pour le panier moyen et la fréquence",
+                ? "Déverrouiller avec Pro pour la fréquence d'achat et les avis Google"
+                : "Déverrouiller avec Pro pour le panier moyen et les avis Google",
             onUnlock: { presentCommerceStatsPaywall() }
         )
     }
@@ -837,7 +995,8 @@ struct CommerceStatisticsDashboardView: View {
                 accessibilityUnlockLabel: "Déverrouiller avec Pro pour le détail des statistiques"
             ) {
                 CommerceStatsCategoryListCard(
-                    rows: detailCategoryRows(from: cachedDetailPresentation.categoryRows)
+                    rows: detailCategoryRows(from: cachedDetailPresentation.categoryRows),
+                    onViewGoogleReviews: { openCommerceGoogleReviewsOnMaps() }
                 ) { rowId in
                     guard rowId == "rewards" else { return }
                     accountingPackPresented = true
@@ -848,21 +1007,28 @@ struct CommerceStatisticsDashboardView: View {
                         campaigns: cachedNotificationCampaigns,
                         notificationIconURL: commerceStatsInsightsUnlocked ? vm.statsNotificationIconURL : nil
                     )
+                } else if commerceStatsInsightsUnlocked {
+                    Text("Aucune notification envoyée sur ce mois.")
+                        .font(CommerceStatisticsTheme.statsText(size: 14, weight: .medium))
+                        .foregroundStyle(CommerceStatisticsTheme.onCardSecondary(forGlassOverlay: glassOverlayMode).opacity(0.9))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.top, 4)
                 }
             }
 
             statsDetailSection(
-                title: "Engagement",
-                accessibilityUnlockLabel: "Déverrouiller avec Pro pour les statistiques d’engagement",
-                engagementManageAction: hasConfiguredSocialNetworks ? {
+                title: "Engagement réseaux sociaux",
+                accessibilityUnlockLabel: "Déverrouiller avec Pro pour les statistiques d’engagement réseaux sociaux",
+                engagementManageAction: allSocialNetworksConfigured ? {
                     socialMissionsSheetPresented = true
                 } : nil
             ) {
                 CommerceStatsCategoryListCard(rows: cachedDetailPresentation.engagementRows)
 
-                if !hasConfiguredSocialNetworks {
+                if !allSocialNetworksConfigured {
                     CommerceStatsConnectNetworksButton(
                         subtitle: socialMissionsConnectSubtitle,
+                        connectedNetworkIds: connectedSocialNetworkButtonIds,
                         glassOverlayMode: glassOverlayMode,
                         isStampsProgram: isStampsProgram,
                         action: {
@@ -906,73 +1072,59 @@ struct CommerceStatisticsDashboardView: View {
 
     private func detailCategoryRows(from rows: [CommerceCategoryRowData]) -> [CommerceCategoryRowData] {
         guard isStampsProgram else { return rows }
-        return rows.filter { $0.id != "pts" }
+        return rows.filter { $0.id != "pts" && $0.id != "freq" }
     }
 
-    private func stampsAttributedFrequenceSquareRow(
+    private func stampsPurchaseFrequencySquareRow(
         presentation: CommerceStatisticsPresentation,
         cellSide: CGFloat
     ) -> some View {
-        let monthKey = selectedMonthKey ?? statsMonthKeys.last ?? ""
-        let monthStats = vm.businessStats(forMonthKey: monthKey)
-        let ptsRow = presentation.categoryRows.first { $0.id == "pts" }
-        let attributedValue: String = {
-            if let raw = ptsRow?.rightPrimary.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty {
-                if raw.hasPrefix("+") { return String(raw.dropFirst()) }
-                return raw
+        HStack(alignment: .top, spacing: kpiPanierFreqInterItemSpacing) {
+            panierFreqSquareSlot(cellSide: cellSide) {
+                purchaseFrequencyCompactKpiCard(presentation: presentation)
             }
-            if let n = monthStats?.pointsThisMonth { return StatsFR.formatInt(n) }
-            return "—"
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            panierFreqSquareSlot(cellSide: cellSide) {
+                googleReviewsKpiCard(presentation: presentation)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func purchaseFrequencyCompactKpiCard(presentation: CommerceStatisticsPresentation) -> some View {
+        let freqRow = presentation.categoryRows.first { $0.id == "freq" }
+        let spark = freqRow?.visitFrequencyDetail?.sparkline ?? []
+        let trend = freqRow?.visitFrequencyDetail?.trendPct ?? presentation.trendFrequenceDelta
+        let trendPos = freqRow?.visitFrequencyDetail?.trendIsPositive ?? ((trend ?? 0) >= 0)
+        let freqValue: String = {
+            guard let f = presentation.frequenceParActif, f >= 1 else { return "—" }
+            return StatsFR.formatDoubleSmart(max(1, f))
         }()
-        let spark = ptsRow?.pointsAttributedDetail?.sparkline ?? []
-        let trend = ptsRow?.pointsAttributedDetail?.trendPct
-        let trendPos = ptsRow?.pointsAttributedDetail?.trendIsPositive ?? true
 
-        return HStack(alignment: .top, spacing: kpiPanierFreqInterItemSpacing) {
-            panierFreqSquareSlot(cellSide: cellSide) {
-                CommerceStatsCompactMetricCard(
-                    title: CommerceStatsProgramKind.attributedTitle(programType: vm.loyaltyProgramType),
-                    value: attributedValue,
-                    valueFontSize: 30,
-                    trendText: trend.map { t in
-                        let sign = t >= 0 ? "+" : "−"
-                        return "\(sign)\(StatsFR.formatDoubleSmart(abs(t)))%"
-                    },
-                    trendPositive: trendPos,
-                    footnote: "Sur la période",
-                    onCardTap: nil
-                ) {
-                    if !spark.isEmpty {
-                        CommerceStatsMiniSparklineChart(
-                            weeks: spark.enumerated().map { i, v in
-                                .init(id: "s\(i)", label: "\(i + 1)", value: v)
-                            },
-                            lineColor: CommerceStatisticsTheme.accentBlue
-                        )
-                    } else {
-                        EmptyView()
-                    }
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            panierFreqSquareSlot(cellSide: cellSide) {
-                CommerceStatsCompactMetricCard(
-                    title: "Fréquence d’achat",
-                    value: frequenceMainText(presentation: presentation),
-                    valueSubline: frequenceUnitFootnote(presentation: presentation),
-                    valueSublineFontSize: 16,
-                    trendText: freqTrendText(presentation: presentation),
-                    trendPositive: presentation.trendFrequenceDelta.map { $0 >= 0 },
-                    footnote: nil
-                ) {
-                    CommerceStatsMiniSparklineChart(
-                        weeks: presentation.barWeeksOperations,
-                        lineColor: CommerceStatisticsTheme.accentBlue
-                    )
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
+        return CommerceStatsCompactMetricCard(
+            title: "Fréquence d'achat",
+            value: freqValue,
+            valueFontSize: 30,
+            valueBadge: presentation.frequenceParActif != nil ? "/mois" : nil,
+            valueBadgeColor: CommerceStatisticsTheme.accentBlue,
+            trendText: trend.map { d in
+                let sign = d >= 0 ? "+" : "−"
+                let pct = StatsFR.formatPct(abs(d)).replacingOccurrences(of: " %", with: "%")
+                return "\(sign)\(pct)"
+            },
+            trendPositive: trendPos,
+            footnote: nil,
+            onCardTap: nil,
+            edgeToEdgeBottomChart: true,
+            bottomChartHeight: 52
+        ) {
+            CommerceStatsMiniSparklineChart(
+                weeks: spark.enumerated().map { i, v in
+                    .init(id: "freq\(i)", label: "\(i + 1)", value: v)
+                },
+                lineColor: CommerceStatisticsTheme.accentBlue
+            )
         }
     }
 
@@ -983,53 +1135,110 @@ struct CommerceStatisticsDashboardView: View {
     ) -> some View {
         HStack(alignment: .top, spacing: kpiPanierFreqInterItemSpacing) {
             panierFreqSquareSlot(cellSide: cellSide) {
-                ZStack(alignment: .bottomTrailing) {
-                    CommerceStatsCompactMetricCard(
-                        title: "Panier moyen",
-                        value: panierText(presentation: presentation),
-                        valueFontSize: 30,
-                        trendText: panierTrendText(presentation: presentation),
-                        trendPositive: panierTrendPositive(presentation: presentation),
-                        footnote: panierRepereFootnote(presentation: presentation),
-                        onCardTap: onPanierTap
-                    ) {
-                        EmptyView()
-                    }
-
-                    if shouldShowPanierTouchHint(presentation: presentation) {
-                        CardPreviewConfiguratorPill()
-                            .padding(10)
-                            .allowsHitTesting(false)
-                            .accessibilityHidden(true)
-                    }
+                CommerceStatsCompactMetricCard(
+                    title: "Panier moyen",
+                    value: panierText(presentation: presentation),
+                    valueFontSize: 32,
+                    trendText: panierTrendText(presentation: presentation),
+                    trendPositive: panierTrendPositive(presentation: presentation),
+                    footnote: nil,
+                    onCardTap: onPanierTap,
+                    edgeToEdgeBottomChart: true,
+                    bottomChartHeight: 52
+                ) {
+                    CommerceStatsPanierEvolutionChart(
+                        values: presentation.panierWeeklySparkline,
+                        dayLabels: presentation.panierMonthAxisDays
+                    )
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
             panierFreqSquareSlot(cellSide: cellSide) {
-                CommerceStatsCompactMetricCard(
-                    title: "Fréquence d’achat",
-                    value: frequenceMainText(presentation: presentation),
-                    valueSubline: frequenceUnitFootnote(presentation: presentation),
-                    valueSublineFontSize: 16,
-                    trendText: freqTrendText(presentation: presentation),
-                    trendPositive: presentation.trendFrequenceDelta.map { $0 >= 0 },
-                    footnote: nil
-                ) {
-                    CommerceStatsMiniSparklineChart(
-                        weeks: presentation.barWeeksOperations,
-                        lineColor: CommerceStatisticsTheme.accentBlue
-                    )
-                }
+                googleReviewsKpiCard(presentation: presentation)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
+    private func googleReviewsKpiCard(presentation: CommerceStatisticsPresentation) -> some View {
+        let monthKey = selectedMonthKey ?? statsMonthKeys.last
+        let trend = googleReviewsTrendText(
+            presentation: presentation,
+            monthKey: monthKey
+        )
+        return CommerceStatsCompactMetricCard(
+            title: "Avis Google",
+            value: googleReviewsKpiValue(presentation: presentation),
+            valueFontSize: 30,
+            trendText: trend,
+            trendPositive: trend != nil ? true : nil,
+            forcePositiveTrendColor: true,
+            footnote: nil,
+            leadingIconAsset: "googleicon",
+            leadingIconSize: 28,
+            onCardTap: { openCommerceGoogleReviewsOnMaps() },
+            edgeToEdgeBottomChart: true,
+            bottomChartHeight: 34
+        ) {
+            CommerceStatsGoogleReviewsKpiFooter()
+        }
+        .onAppear {
+            CommerceGoogleReviewsMonthHistory.persistIfNeeded(
+                monthKey: monthKey,
+                newReviews: presentation.googleReviewsNewInPeriod,
+                historyJSON: &googleReviewsMonthlyHistoryJSON
+            )
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(googleReviewsKpiAccessibilityLabel(presentation: presentation, monthKey: monthKey))
+        .accessibilityAddTraits(.isButton)
+    }
+
+    private func googleReviewsTrendText(
+        presentation: CommerceStatisticsPresentation,
+        monthKey: String?
+    ) -> String? {
+        CommerceGoogleReviewsMonthHistory.trendText(
+            monthKey: monthKey,
+            newReviews: presentation.googleReviewsNewInPeriod,
+            historyJSON: googleReviewsMonthlyHistoryJSON
+        )
+    }
+
+    private func googleReviewsTrendPositive(
+        presentation: CommerceStatisticsPresentation,
+        monthKey: String?
+    ) -> Bool? {
+        CommerceGoogleReviewsMonthHistory.trendIsPositive(
+            monthKey: monthKey,
+            newReviews: presentation.googleReviewsNewInPeriod,
+            historyJSON: googleReviewsMonthlyHistoryJSON
+        )
+    }
+
+    private func googleReviewsKpiAccessibilityLabel(
+        presentation: CommerceStatisticsPresentation,
+        monthKey: String?
+    ) -> String {
+        var parts = ["Avis Google", googleReviewsKpiValue(presentation: presentation)]
+        if let trend = googleReviewsTrendText(presentation: presentation, monthKey: monthKey) {
+            parts.append(trend)
+        }
+        parts.append("voir les avis")
+        return parts.joined(separator: ", ")
+    }
+
+    private func googleReviewsKpiValue(presentation: CommerceStatisticsPresentation) -> String {
+        let n = presentation.googleReviewsNewInPeriod
+        guard n > 0 else { return "—" }
+        return "+\(StatsFR.formatInt(n))"
+    }
+
     /// Deux cartes carrées **même côté** (hauteur fixe, le texte ne redimensionne plus le bloc).
     private func panierFreqSquareSlot<Content: View>(cellSide: CGFloat, @ViewBuilder content: @escaping () -> Content) -> some View {
         content()
-            .frame(width: cellSide, height: cellSide, alignment: .topLeading)
+            .frame(width: cellSide, height: cellSide)
     }
 
     private func newMembersTotalCartesValue(stats: BusinessStatsResponse?, presentation: CommerceStatisticsPresentation) -> String {
@@ -1065,18 +1274,13 @@ struct CommerceStatisticsDashboardView: View {
     }
 
     private func panierText(presentation: CommerceStatisticsPresentation) -> String {
-        if let p = presentation.panierMoyenEuro {
-            return StatsFR.formatEuro(p) + "€"
-        }
-        if let r = presentation.panierRepereEuro {
-            return StatsFR.formatEuro(r) + "€"
-        }
-        return "—"
+        guard let p = presentation.panierMoyenEuro, p > 0 else { return "—" }
+        return "\(StatsFR.formatEuro(p)) €"
     }
 
     private func frequenceMainText(presentation: CommerceStatisticsPresentation) -> String {
-        guard let f = presentation.frequenceParActif else { return "—" }
-        return StatsFR.formatDoubleSmart(f) + " visites"
+        guard let f = presentation.frequenceParActif, f >= 1 else { return "—" }
+        return StatsFR.formatDoubleSmart(max(1, f)) + " visites"
     }
 
     private func frequenceUnitFootnote(presentation: CommerceStatisticsPresentation) -> String? {
@@ -1085,16 +1289,21 @@ struct CommerceStatisticsDashboardView: View {
     }
 
     private func panierTrendPositive(presentation: CommerceStatisticsPresentation) -> Bool? {
-        if presentation.panierMesureVsReperePct != nil {
-            return presentation.panierMesureVsReperePct.map { $0 >= 0 }
+        if let m = presentation.panierMoyenEuro, let r = presentation.panierRepereEuro, r > 0 {
+            return (m - r) >= 0
         }
         return presentation.trendPanierDeltaEuro.map { $0 >= 0 }
     }
 
     private func panierTrendText(presentation: CommerceStatisticsPresentation) -> String? {
-        if let pct = presentation.panierMesureVsReperePct {
-            let sign = pct >= 0 ? "+" : "−"
-            return "\(sign)\(StatsFR.formatDoubleSmart(abs(pct)))%"
+        if let m = presentation.panierMoyenEuro, let r = presentation.panierRepereEuro, r > 0 {
+            let delta = m - r
+            let sign = delta >= 0 ? "+" : "−"
+            return "\(sign)\(StatsFR.formatEuro(abs(delta)))€"
+        }
+        if let delta = presentation.trendPanierDeltaEuro {
+            let sign = delta >= 0 ? "+" : "−"
+            return "\(sign)\(StatsFR.formatEuro(abs(delta)))€"
         }
         return nil
     }

@@ -106,7 +106,7 @@ struct BusinessLogoView: View {
         return .merchantStripeLogo
     }
 
-    private func notificationIconSlug(from url: URL) -> String? {
+    private func businessSlug(from url: URL) -> String? {
         let parts = url.path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
         guard let businessesIndex = parts.firstIndex(of: "businesses"),
               businessesIndex + 1 < parts.count else { return nil }
@@ -116,30 +116,28 @@ struct BusinessLogoView: View {
 
     /// Cache HTTP / mémoire : `v` selon le **type** de média (commerce vs campagne).
     private func authenticatedLogoURLWithCacheBust(_ url: URL) -> URL {
-        var c = URLComponents(url: url, resolvingAgainstBaseURL: false)
         let ctx = resolvedAssetContext(for: url)
         switch ctx {
         case .campaignNotificationIcon:
-            if let slug = notificationIconSlug(from: url),
+            var c = URLComponents(url: url, resolvingAgainstBaseURL: false)
+            if let slug = businessSlug(from: url),
                let d = CampaignNotificationImageCache.bestBustDate(for: slug) {
                 c?.queryItems = [URLQueryItem(name: "v", value: Self.cacheBustQueryValue(from: d))]
             }
+            return c?.url ?? url
         case .merchantLogoIcon:
-            let serverAt = UserDefaults.standard.object(forKey: MerchantLogoAssetCache.logoIconServerDateKey) as? Date
-            let localAt = UserDefaults.standard.object(forKey: SyncService.lastLogoIconUploadAtKey) as? Date
-            if let d = [serverAt, localAt].compactMap({ $0 }).max() {
-                c?.queryItems = [URLQueryItem(name: "v", value: Self.cacheBustQueryValue(from: d))]
+            if let slug = businessSlug(from: url) {
+                return MerchantLogoAssetCache.logoIconDisplayURL(url, slug: slug)
             }
+            return MerchantLogoAssetCache.logoIconDisplayURL(url)
         case .merchantStripeLogo:
-            let serverAt = UserDefaults.standard.object(forKey: MerchantLogoAssetCache.logoServerDateKey) as? Date
-            let localAt = UserDefaults.standard.object(forKey: SyncService.lastLogoUploadAtKey) as? Date
-            if let d = [serverAt, localAt].compactMap({ $0 }).max() {
-                c?.queryItems = [URLQueryItem(name: "v", value: Self.cacheBustQueryValue(from: d))]
+            if let slug = businessSlug(from: url) {
+                return MerchantLogoAssetCache.stripeLogoDisplayURL(url, slug: slug)
             }
+            return MerchantLogoAssetCache.stripeLogoDisplayURL(url)
         case .automatic:
-            break
+            return url
         }
-        return c?.url ?? url
     }
 
     /// `Int(secondes)` pour `?v=` faisait coller deux URLs dans la même seconde → `URLCache` / `AsyncImage` pouvaient réutiliser l’ancienne image.

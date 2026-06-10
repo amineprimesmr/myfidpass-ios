@@ -24,6 +24,11 @@ object CommerceRoutes {
     fun teamMember(memberId: String) = "commerce_team_member/$memberId"
     const val MATCH_PREDICTIONS = "commerce_match_predictions"
     const val STATS_TRANSACTIONS = "commerce_stats_transactions"
+    const val MEMBERS = "commerce_members"
+    const val MEMBER_DETAIL = "commerce_member/{memberId}"
+
+    fun memberDetail(memberId: String) = "commerce_member/$memberId"
     const val SCAN_SECURITY = "commerce_scan_security"
+    const val LOYALTY_NETWORK = "commerce_loyalty_network"
     const val GOOGLE_BUSINESS = "commerce_google_business"
 }

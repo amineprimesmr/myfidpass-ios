@@ -68,5 +68,6 @@ object CommerceFlyerStore {
 
     fun clearAll(context: Context) {
         memory.clear()
+        CommerceFlyerStateCache.clearAll(context)
     }
 }

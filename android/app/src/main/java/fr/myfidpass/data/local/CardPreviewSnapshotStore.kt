@@ -52,4 +52,8 @@ object CardPreviewSnapshotStore {
     }
 
     private fun key(slug: String) = "myfidpass.cardDisplaySnapshot.v1.${slug.trim().lowercase()}"
+
+    fun clearAll(context: Context) {
+        prefs(context).edit().clear().apply()
+    }
 }

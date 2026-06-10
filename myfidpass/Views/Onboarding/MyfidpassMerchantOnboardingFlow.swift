@@ -182,12 +182,18 @@ enum MerchantOnboardingEmailValidation {
 // MARK: - Racine
 
 struct MyfidpassMerchantOnboardingRootView: View {
+    /// Console admin : création commerçant (même UI que le premier lancement, sans dépendre du timing `onAppear`).
+    var adminProvisioningMode: Bool = false
     var onComplete: () -> Void
     var onSignIn: (() -> Void)? = nil
     /// Passer à l’écran connexion sans renseigner l’établissement (legacy).
     var onAlreadyHaveAccount: (() -> Void)? = nil
     /// E-mail déjà enregistré côté serveur — bascule connexion.
     var onExistingAccountEmail: ((String) -> Void)? = nil
+    /// Fin du parcours admin (compte commerçant créé, session admin inchangée).
+    var onAdminProvisioningFinished: ((String?) -> Void)? = nil
+    /// Annulation du parcours admin (retour console).
+    var onAdminProvisioningCancelled: (() -> Void)? = nil
 
     @EnvironmentObject private var authService: AuthService
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -197,7 +203,6 @@ struct MyfidpassMerchantOnboardingRootView: View {
     @State private var isEstablishmentPredictionsVisible = false
     @State private var previousStep: Int?
     @State private var isStepTransitionInFlight = false
-    @State private var measuredTopSafeInset: CGFloat = 0
 
     private var step: MerchantOBStep {
         MerchantOBStep(rawValue: viewModel.currentStep) ?? .welcome
@@ -212,8 +217,16 @@ struct MyfidpassMerchantOnboardingRootView: View {
         }
     }
 
+    private var isAdminProvisioningFlow: Bool {
+        adminProvisioningMode || authService.isAdminProvisioningMerchant
+    }
+
     private var shouldShowBackButton: Bool {
         viewModel.currentStep > 0
+    }
+
+    private var shouldReserveTopChrome: Bool {
+        shouldShowFullProcessHeader || (step == .welcome && isAdminProvisioningFlow)
     }
 
     private var shouldShowGlobalContinue: Bool {
@@ -271,7 +284,11 @@ struct MyfidpassMerchantOnboardingRootView: View {
                 viewModel.emailError = nil
             }
         }
-        .onChange(of: viewModel.otpCode) { _, _ in
+        .onChange(of: viewModel.otpCode) { oldValue, newValue in
+            guard viewModel.otpError != nil else { return }
+            let oldDigits = oldValue.filter(\.isNumber)
+            let newDigits = newValue.filter(\.isNumber)
+            guard newDigits != oldDigits, !newDigits.isEmpty else { return }
             viewModel.otpError = nil
         }
         .onChange(of: viewModel.cardLogoPhotoItem) { _, item in
@@ -281,7 +298,6 @@ struct MyfidpassMerchantOnboardingRootView: View {
             Task { await importCardBackground(from: item) }
         }
         .onAppear {
-            refreshMeasuredTopSafeInset()
             if viewModel.signupEmail.isEmpty,
                let saved = FirstLaunchOnboarding.readLastKnownAuthEmail() {
                 viewModel.signupEmail = saved
@@ -289,65 +305,98 @@ struct MyfidpassMerchantOnboardingRootView: View {
         }
     }
 
-    private func refreshMeasuredTopSafeInset() {
-        measuredTopSafeInset = (UIApplication.shared.connectedScenes.first as? UIWindowScene)?
-            .windows
-            .first(where: { $0.isKeyWindow })?
-            .safeAreaInsets.top ?? 0
-    }
-
     /// Welcome + étapes suivantes : même `ZStack` + `OnboardingTransitionContainer` (slide Process, pas de fade entre branches).
     private var onboardingRootLayout: some View {
-        ZStack {
-            AppTheme.Colors.background
-                .ignoresSafeArea()
+        GeometryReader { geo in
+            // Sous `.ignoresSafeArea()`, `geo.safeAreaInsets.top` est souvent 0 → illustration welcome trop haute.
+            let topInset = merchantScanHeaderTopInset(from: geo)
+            ZStack {
+                AppTheme.Colors.background
+                    .ignoresSafeArea()
 
-            if step == .welcome {
-                welcomeBackgroundLayer
-                    .transition(.identity)
-                    .animation(nil, value: viewModel.currentStep)
-            }
-
-            processAnimatedGlow
-                .opacity(step == .welcome || step == .subscriptionPaywall ? 0 : 0.22)
-                .allowsHitTesting(false)
-
-            OnboardingTransitionContainer(
-                currentStep: viewModel.currentStep,
-                previousStep: previousStep,
-                isTransitioning: false
-            ) {
-                stepContent(for: step)
-            }
-            .padding(.top, shouldShowFullProcessHeader ? 60 : 0)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .allowsHitTesting(step != .welcome)
-
-            if shouldShowGlobalContinue {
-                VStack(spacing: 0) {
-                    Spacer(minLength: 0)
-                    onboardingBottomChrome
+                if step == .welcome {
+                    welcomeBackgroundLayer(topInset: topInset)
+                        .transition(.identity)
+                        .animation(nil, value: viewModel.currentStep)
                 }
-                .zIndex(10)
+
+                processAnimatedGlow
+                    .opacity(step == .welcome || step == .subscriptionPaywall ? 0 : 0.22)
+                    .allowsHitTesting(false)
+
+                OnboardingTransitionContainer(
+                    currentStep: viewModel.currentStep,
+                    previousStep: previousStep,
+                    isTransitioning: false
+                ) {
+                    stepContent(for: step)
+                }
+                .padding(.top, shouldReserveTopChrome ? topChromeReservedHeight(topInset: topInset) : 0)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .allowsHitTesting(step != .welcome)
+            }
+            .frame(width: geo.size.width, height: geo.size.height)
+            .overlay(alignment: .bottom) {
+                if shouldShowGlobalContinue {
+                    onboardingBottomChrome
+                        .allowsHitTesting(true)
+                }
+            }
+            .overlay(alignment: .top) {
+                if step == .welcome && isAdminProvisioningFlow {
+                    adminWelcomeTopBar(topInset: topInset)
+                } else if shouldShowFullProcessHeader {
+                    processOnboardingHeaderBar(topInset: topInset)
+                }
             }
         }
-        .overlay(alignment: .top) {
-            if shouldShowFullProcessHeader {
-                processOnboardingHeaderBar
+        .ignoresSafeArea()
+        .onChange(of: viewModel.currentStep) { _, newStep in
+            if newStep == MerchantOBStep.welcome.rawValue {
+                keyboardHeight = 0
             }
         }
+    }
+
+    private func topChromeReservedHeight(topInset: CGFloat) -> CGFloat {
+        max(topInset, 44) + 52
+    }
+
+    private func adminWelcomeTopBar(topInset: CGFloat) -> some View {
+        HStack {
+            adminHeaderCancelButton
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, max(topInset, 44) + 8)
+    }
+
+    private var adminHeaderCancelButton: some View {
+        Button {
+            hapticManager.impact(.light)
+            authService.cancelAdminMerchantProvisioning()
+            onAdminProvisioningCancelled?()
+        } label: {
+            Text("Annuler")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(Color.primary.opacity(0.88))
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+        }
+        .glassStyle()
+        .buttonBorderShape(.capsule)
     }
 
     /// Illustration plein écran (dégradé bas intégré) — les boutons passent par-dessus, sans bandeau.
-    private var welcomeBackgroundLayer: some View {
+    private func welcomeBackgroundLayer(topInset: CGFloat) -> some View {
         AuthWelcomeImageView()
-            .padding(.top, max(measuredTopSafeInset, 16))
+            .padding(.top, max(topInset, 16))
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .ignoresSafeArea(edges: .bottom)
             .allowsHitTesting(false)
     }
 
-    private var processOnboardingHeaderBar: some View {
+    private func processOnboardingHeaderBar(topInset: CGFloat) -> some View {
         HStack(spacing: 12) {
             if shouldShowBackButton {
                 Button(action: {
@@ -374,10 +423,14 @@ struct MyfidpassMerchantOnboardingRootView: View {
             .frame(maxWidth: .infinity)
             .frame(height: 8)
 
-            LanguageSelectorView()
+            if isAdminProvisioningFlow {
+                adminHeaderCancelButton
+            } else {
+                LanguageSelectorView()
+            }
         }
         .padding(.horizontal, 20)
-        .padding(.top, max(measuredTopSafeInset, 44) + 8)
+        .padding(.top, max(topInset, 44) + 8)
     }
 
     private var onboardingBottomChrome: some View {
@@ -396,8 +449,10 @@ struct MyfidpassMerchantOnboardingRootView: View {
             welcomePrimaryCTAButton
                 .frame(maxWidth: .infinity)
 
-            signInFromWelcomeButton
-                .disabled(isStepTransitionInFlight)
+            if !isAdminProvisioningFlow {
+                signInFromWelcomeButton
+                    .disabled(isStepTransitionInFlight)
+            }
         }
         .padding(.horizontal, MyfidpassOnboardingConstants.primaryCTAHorizontalPaddingCompact)
         .padding(.top, 12)
@@ -487,6 +542,8 @@ struct MyfidpassMerchantOnboardingRootView: View {
         hapticManager.impact(.medium)
         switch step {
         case .welcome:
+            keyboardHeight = 0
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
             advanceFromWelcomeStep()
         case .establishmentSearch:
             viewModel.persistSelectionsToUserDefaults()
@@ -508,7 +565,7 @@ struct MyfidpassMerchantOnboardingRootView: View {
 
     /// Welcome → établissement : pas de verrou 580 ms (évite un CTA bloqué si la vue est recréée).
     private func advanceFromWelcomeStep() {
-        guard viewModel.currentStep == MerchantOBStep.welcome.rawValue else { return }
+        guard step == .welcome else { return }
         previousStep = viewModel.currentStep
         let next = MerchantOBStep.establishmentSearch.rawValue
         viewModel.appendVisited(next)
@@ -593,7 +650,16 @@ struct MyfidpassMerchantOnboardingRootView: View {
             try await Task.sleep(for: .milliseconds(780))
 
             viewModel.otpShowSuccess = false
-            viewModel.otpAdvanceInFlight = false
+
+            if isAdminProvisioningFlow {
+                let merchantEmail = response.user.email?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                await authService.completeAdminMerchantProvisioning(merchantEmail: merchantEmail)
+                viewModel.otpAdvanceInFlight = false
+                onAdminProvisioningFinished?(merchantEmail)
+                return
+            }
+
             authService.finalizeEmailOtpSignIn(response: response, isSignup: true)
             if MerchantOnboardingFeatureFlags.skipsCardSetupSteps {
                 completeSignupAndEnterApp()
@@ -602,6 +668,7 @@ struct MyfidpassMerchantOnboardingRootView: View {
                 viewModel.seedCardDraftFromEstablishment()
                 advanceToNextStep()
             }
+            viewModel.otpAdvanceInFlight = false
         } catch AuthError.invalidCredentials {
             viewModel.isVerifyingOtp = false
             viewModel.otpAdvanceInFlight = false
@@ -616,6 +683,11 @@ struct MyfidpassMerchantOnboardingRootView: View {
             viewModel.isVerifyingOtp = false
             viewModel.otpAdvanceInFlight = false
             viewModel.otpError = msg
+            if msg.localizedCaseInsensitiveContains("aucun code")
+                || msg.localizedCaseInsensitiveContains("expiré")
+                || msg.localizedCaseInsensitiveContains("trop de tentatives") {
+                viewModel.otpCode = ""
+            }
         } catch {
             viewModel.isVerifyingOtp = false
             viewModel.otpAdvanceInFlight = false
@@ -697,7 +769,7 @@ struct MyfidpassMerchantOnboardingRootView: View {
         guard let item else { return }
         guard let data = try? await item.loadTransferable(type: Data.self),
               let image = UIImage(data: data),
-              let path = CardLogoStorage.saveImage(image) else { return }
+              let path = CardLogoStorage.saveImage(image, slug: onboardingCardStorageSlug()) else { return }
         await MainActor.run {
             viewModel.cardDraft.logoLocalPath = path
             viewModel.cardLogoPhotoItem = nil
@@ -708,11 +780,16 @@ struct MyfidpassMerchantOnboardingRootView: View {
         guard let item else { return }
         guard let data = try? await item.loadTransferable(type: Data.self),
               let image = UIImage(data: data),
-              let path = CardLogoStorage.saveCardBackground(image) else { return }
+              let path = CardLogoStorage.saveCardBackground(image, slug: onboardingCardStorageSlug()) else { return }
         await MainActor.run {
             viewModel.cardDraft.cardBackgroundLocalPath = path
             viewModel.cardBackgroundPhotoItem = nil
         }
+    }
+
+    private func onboardingCardStorageSlug() -> String {
+        let raw = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return raw.isEmpty ? "_onboarding" : raw
     }
 
     /// Étape suivante en incrémentant, en sautant le bloc carte si désactivé temporairement.

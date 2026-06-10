@@ -17,6 +17,7 @@ struct MainTabView: View {
     @EnvironmentObject private var authService: AuthService
     @EnvironmentObject private var syncService: SyncService
     @EnvironmentObject private var dataService: DataService
+    @EnvironmentObject private var memberSearchCoordinator: MerchantMemberSearchCoordinator
 
     @State private var showAddCommerceSheet = false
     @State private var tabBarBottomClearance: CGFloat = TabBarBottomClearance.stableFallback
@@ -40,12 +41,21 @@ struct MainTabView: View {
                 if authService.isBusinessSwitching {
                     Color.black.opacity(0.25)
                         .ignoresSafeArea()
+                        .allowsHitTesting(false)
                         .transition(.opacity)
                 }
             }
             .animation(.easeOut(duration: 0.22), value: authService.isBusinessSwitching)
             .onReceive(NotificationCenter.default.publisher(for: .myfidpassOpenAddCommerceSheet)) { _ in
                 showAddCommerceSheet = true
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .myfidpassOpenMemberSearch)) { _ in
+                memberSearchCoordinator.activate()
+            }
+            .onChange(of: tabRouter.selectedTab) { _, _ in
+                if memberSearchCoordinator.isActive {
+                    memberSearchCoordinator.dismiss()
+                }
             }
             .sheet(isPresented: $showAddCommerceSheet) {
                 AddCommerceSheet()
@@ -62,20 +72,13 @@ struct MainTabView: View {
                 staffTabView
             }
         }
-        .allowsHitTesting(!authService.isBusinessSwitching)
         .tabViewStyle(.automatic)
         .tint(AppTheme.Colors.primary)
         .onChange(of: tabRouter.selectedTab) { oldValue, newValue in
             guard oldValue != newValue else { return }
-            MerchantTabSwitchHaptic.impact()
+            MerchantUXFeedback.shared.play(.tabSwitch)
             if authService.usesFullMerchantTabLayout, newValue == 2 {
                 NotificationCenter.default.post(name: .myfidpassCommerceStatsTabDidBecomeSelected, object: nil)
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .myfidpassOpenCampaignsTab)) { _ in
-            guard authService.usesFullMerchantTabLayout else { return }
-            withAnimation(MerchantMotion.tabSwitch) {
-                tabRouter.selectedTab = 1
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .myfidpassSelectMerchantHomeTab)) { _ in
@@ -85,7 +88,7 @@ struct MainTabView: View {
             }
         }
         .onAppear {
-            MerchantTabSwitchHaptic.prepare()
+            MerchantUXFeedback.shared.prepare()
             if !authService.usesFullMerchantTabLayout, tabRouter.selectedTab > 1 {
                 tabRouter.selectedTab = 0
             }
@@ -102,7 +105,11 @@ struct MainTabView: View {
     private var merchantSubscribePillOverlay: some View {
         if shouldShowSubscribePill {
             MerchantSubscribePillView {
-                NotificationCenter.default.post(name: .myfidpassOpenMerchantSubscriptionSheet, object: nil)
+                NotificationCenter.default.postOpenMerchantSubscriptionFromSession(
+                    usedBusinesses: authService.usedBusinesses,
+                    allowedBusinesses: authService.allowedBusinesses,
+                    hasActiveSubscription: authService.hasEncashedMerchantSubscription
+                )
             }
             .padding(.horizontal, 14)
             .padding(.bottom, tabBarBottomClearance)
@@ -227,19 +234,7 @@ struct MainTabView: View {
         .environmentObject(MainTabRouter())
         .environmentObject(AuthService())
         .environmentObject(SyncService(container: PersistenceController.preview.container))
+        .environmentObject(MerchantMemberSearchCoordinator())
         .environment(\.managedObjectContext, PersistenceController.preview.container.viewContext)
 }
 
-// MARK: - Haptique onglet (générateur unique)
-
-private enum MerchantTabSwitchHaptic {
-    private static let generator = UIImpactFeedbackGenerator(style: .soft)
-
-    static func prepare() {
-        generator.prepare()
-    }
-
-    static func impact() {
-        generator.impactOccurred(intensity: 0.5)
-    }
-}

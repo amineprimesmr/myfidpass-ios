@@ -65,6 +65,8 @@ struct DashboardActivityEntry: Identifiable, Equatable {
     let isVisit: Bool
     /// Libellé récompense (`reward_redeem` → `|l:` dans la note).
     let rewardLabel: String?
+    /// Montant achat € (`metadata.amount_eur` → `|e:` dans la note).
+    let scanAmountEur: Double?
 
     var eventTitle: String {
         switch kind {
@@ -94,10 +96,16 @@ struct DashboardActivityEntry: Identifiable, Equatable {
     }
 }
 
-/// Membre technique créé pour « Tester dans l’Apple Wallet » (`MyCardView.ensurePreviewMemberIdForWallet`) — pas une vraie transaction / client.
+/// Comptes techniques hors activité commerçant : aperçu Wallet + invités QR (@guest.invalid).
 enum WalletPreviewMember {
+    static func isGuestPlaceholderEmail(_ clientEmail: String?) -> Bool {
+        guard let raw = clientEmail?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !raw.isEmpty else { return false }
+        return raw.hasSuffix("@guest.invalid")
+    }
+
     static func shouldExcludeFromMerchantActivity(clientEmail: String?) -> Bool {
         guard let raw = clientEmail?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !raw.isEmpty else { return false }
+        if isGuestPlaceholderEmail(raw) { return true }
         return raw.hasPrefix("wallet-apercu.") && raw.hasSuffix("@example.com")
     }
 }
@@ -352,7 +360,9 @@ final class DataService: ObservableObject {
         }
         // Ordre stable : l’ordre de `Dictionary.values` n’est pas garanti — sans tri, `.first` change
         // entre exécutions et ne correspond pas au membre utilisé pour le pass Wallet.
-        return Array(best.values).sorted { a, b in
+        return Array(best.values)
+            .filter { !WalletPreviewMember.shouldExcludeFromMerchantActivity(clientEmail: $0.clientEmail) }
+            .sorted { a, b in
             let qa = a.qrCodeValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let qb = b.qrCodeValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             if qa != qb { return qa < qb }
@@ -396,11 +406,81 @@ final class DataService: ObservableObject {
         save()
     }
 
+    /// Ligne immédiate dans « Dernières transactions » avant la sync serveur (note `pending:`).
+    func recordScanActivityLocally(
+        for card: ClientCard,
+        transactionType: String = "points_add",
+        points: Int?,
+        isVisit: Bool = false,
+        amountEur: Double? = nil
+    ) {
+        var segments = ["pending:\(UUID().uuidString)", "t:\(transactionType)"]
+        if let p = points { segments.append("p:\(p)") }
+        if isVisit { segments.append("v:1") }
+        if let eur = amountEur, eur > 0 {
+            segments.append("e:\(String(format: "%.4f", eur))")
+        }
+        let s = Stamp(context: viewContext)
+        s.id = UUID()
+        s.clientCard = card
+        s.createdAt = Date()
+        s.note = segments.joined(separator: "|")
+        card.updatedAt = Date()
+        save()
+        invalidateActivityPreviewCache()
+    }
+
+    /// Solde membre + ligne d’activité locale après POST /scan réussi.
+    func applyScanFromServerResponse(
+        barcode: String,
+        response: ScanResponse,
+        isVisit: Bool = false,
+        amountEur: Double? = nil
+    ) {
+        guard let template = currentCardTemplate() else { return }
+        let bc = barcode.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !bc.isEmpty else { return }
+        let card = clientCard(byQRCodeValue: bc)
+            ?? findOrCreateClientCard(
+                qrCodeValue: bc,
+                template: template,
+                clientDisplayName: response.member?.name
+            )
+        if let bal = response.newBalance {
+            card.stampsCount = Int32(bal)
+        } else if let p = response.member?.points {
+            card.stampsCount = Int32(p)
+        } else if let added = response.pointsAdded {
+            card.stampsCount += Int32(added)
+        }
+        if let name = response.member?.name?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
+            card.clientDisplayName = name
+        }
+        recordScanActivityLocally(
+            for: card,
+            transactionType: "points_add",
+            points: response.pointsAdded,
+            isVisit: isVisit,
+            amountEur: amountEur
+        )
+    }
+
     // MARK: - Stats pour le dashboard
 
     func totalClientCardsCount() -> Int {
         guard let template = currentCardTemplate() else { return 0 }
-        return uniqueClientCards(for: template).count
+        return uniqueClientCards(for: template).filter {
+            !WalletPreviewMember.shouldExcludeFromMerchantActivity(clientEmail: $0.clientEmail)
+        }.count
+    }
+
+    /// Conservé pour compatibilité appels existants : on ne purge plus l’historique local automatiquement.
+    func reconcileStaleActivityAfterProgramSwitchIfNeeded() {}
+
+    /// Conservé pour les appels après bascule programme : on ne supprime plus le fil d’activité local.
+    func clearMerchantActivityHistory(for template: CardTemplate) {
+        _ = template
+        invalidateActivityPreviewCache()
     }
 
     func stampsCountToday() -> Int {
@@ -490,7 +570,8 @@ final class DataService: ObservableObject {
                 scanPointsGranted: Self.scanPointsFromStampNote(s.note),
                 transactionType: txnType,
                 isVisit: isVisit,
-                rewardLabel: MerchantTransactionEventLabels.parseRewardLabel(fromStampNote: s.note)
+                rewardLabel: MerchantTransactionEventLabels.parseRewardLabel(fromStampNote: s.note),
+                scanAmountEur: MerchantTransactionEventLabels.parseAmountEur(fromStampNote: s.note)
             ))
         }
 
@@ -517,7 +598,8 @@ final class DataService: ObservableObject {
                     scanPointsGranted: nil,
                     transactionType: nil,
                     isVisit: false,
-                    rewardLabel: nil
+                    rewardLabel: nil,
+                    scanAmountEur: nil
                 ))
             }
         }
@@ -608,7 +690,9 @@ final class DataService: ObservableObject {
     /// Somme des points / tampons enregistrés sur toutes les cartes du programme actuel.
     func totalStampsAcrossMembers() -> Int {
         guard let template = currentCardTemplate() else { return 0 }
-        return uniqueClientCards(for: template).reduce(0) { $0 + Int($1.stampsCount) }
+        return uniqueClientCards(for: template)
+            .filter { !WalletPreviewMember.shouldExcludeFromMerchantActivity(clientEmail: $0.clientEmail) }
+            .reduce(0) { $0 + Int($1.stampsCount) }
     }
 
     /// Après suppression serveur : retire la fiche membre locale (tampons en cascade).

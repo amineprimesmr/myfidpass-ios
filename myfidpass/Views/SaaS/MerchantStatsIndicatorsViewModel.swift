@@ -95,17 +95,24 @@ final class MerchantStatsIndicatorsViewModel: ObservableObject {
 
     /// Campagnes issues de `GET .../notifications/stats` (souvent renseigné quand `.../dashboard/stats` n’expose pas encore `notification_campaigns`).
     @Published private(set) var notificationCampaignsFromStatsEndpoint: [NotificationCampaignInsightDTO] = []
+    /// Slug pour lequel l’état mémoire ci-dessous est valide — évite le mélange au changement de commerce.
+    private var scopedBusinessSlug: String?
 
-    /// Liste fusionnée (stats + endpoint notif + historique local d’envoi), sans entrées vides.
-    var notificationCampaignsForPresentation: [NotificationCampaignInsightDTO] {
-        if isDemoSixMonthPreviewActive, let s = stats {
-            return Self.filterMeaningfulNotificationCampaigns(s.notificationCampaigns ?? [])
+    /// Historique campagnes pour le mois affiché (aligné Android `notificationCampaignsForMonth`).
+    func notificationCampaigns(forMonthKey monthKey: String) -> [NotificationCampaignInsightDTO] {
+        let key = monthKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { return [] }
+        if isDemoSixMonthPreviewActive, let p = demoPayloadsByMonth[key] {
+            return Self.filterMeaningfulNotificationCampaigns(p.stats.notificationCampaigns ?? [])
                 .sorted { (a, b) in (a.createdAt ?? "") > (b.createdAt ?? "") }
         }
-        guard let slug = AuthStorage.currentBusinessSlug, !slug.isEmpty else { return [] }
+        guard let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines), !slug.isEmpty else { return [] }
+        if scopedBusinessSlug != slug { resetForBusinessSwitch(slug: slug) }
+
+        let monthStats = businessStats(forMonthKey: key)
         var byId: [String: NotificationCampaignInsightDTO] = [:]
-        for c in stats?.notificationCampaigns ?? [] { byId[c.batchId] = c }
-        for c in notificationCampaignsFromStatsEndpoint {
+        for c in monthStats?.notificationCampaigns ?? [] { byId[c.batchId] = c }
+        for c in notificationCampaignsFromStatsEndpoint where Self.campaignMatchesMonthKey(c, monthKey: key) {
             if let existing = byId[c.batchId] {
                 byId[c.batchId] = existing.mergedWith(c)
             } else {
@@ -115,7 +122,7 @@ final class MerchantStatsIndicatorsViewModel: ObservableObject {
         var list = Array(byId.values)
         let local = NotificationSendLocalHistoryStore.asCampaignInsights(
             NotificationSendLocalHistoryStore.entries(for: slug)
-        )
+        ).filter { Self.campaignMatchesMonthKey($0, monthKey: key) }
         for l in local {
             if byId[l.batchId] != nil { continue }
             if Self.localSendLooksLikeDuplicateOfAPI(l, in: list) { continue }
@@ -133,7 +140,9 @@ final class MerchantStatsIndicatorsViewModel: ObservableObject {
         guard !lm.isEmpty else { return false }
         for a in api {
             let am = a.message?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if am == lm, sameCalendarDay(a.createdAt, b: local.createdAt) { return true }
+            let apiCount = max(a.recipientsDistinct ?? 0, a.sentTotal ?? 0)
+            // Ne pas masquer l’historique local si l’API renvoie encore 0 pour la même campagne.
+            if am == lm, sameCalendarDay(a.createdAt, b: local.createdAt), apiCount > 0 { return true }
         }
         return false
     }
@@ -153,14 +162,48 @@ final class MerchantStatsIndicatorsViewModel: ObservableObject {
         _ raw: [NotificationCampaignInsightDTO]
     ) -> [NotificationCampaignInsightDTO] {
         raw.filter { c in
+            if NotificationSendLocalHistoryStore.isPendingDeliveryStatus(c.deliveryStatus) { return false }
             let r = c.recipientsDistinct ?? 0
             let s = c.sentTotal ?? 0
             let t = c.notificationTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let m = c.message?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let trig = c.triggerName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             if r > 0 || s > 0 { return true }
             if !t.isEmpty || !m.isEmpty { return true }
+            if !trig.isEmpty, c.createdAt?.isEmpty == false { return true }
             return false
         }
+    }
+
+    /// Vide l’état stats en mémoire quand l’utilisateur change de commerce (ou se reconnecte).
+    func resetForBusinessSwitch(slug: String) {
+        let clean = slug.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return }
+        if scopedBusinessSlug == clean { return }
+        let switchingFromAnother = scopedBusinessSlug != nil
+        scopedBusinessSlug = clean
+        guard switchingFromAnother else { return }
+        stats = nil
+        evolution = []
+        monthSnapshots = [:]
+        notificationCampaignsFromStatsEndpoint = []
+        lastSuccessfullyLoadedPeriod = nil
+        lastSuccessfulFetchAtByPeriod = [:]
+        inFlightPeriods = []
+        baselinePanierRepereEUR = nil
+        errorMessage = nil
+        isDemoSixMonthPreviewActive = false
+        demoPayloadsByMonth = [:]
+    }
+
+    private static func campaignMatchesMonthKey(_ c: NotificationCampaignInsightDTO, monthKey: String) -> Bool {
+        guard let created = c.createdAt?.trimmingCharacters(in: .whitespacesAndNewlines), !created.isEmpty else { return false }
+        if created.hasPrefix(monthKey) { return true }
+        guard let d = parseISOToDate(created) else { return false }
+        let cal = Calendar.current
+        let parts = monthKey.split(separator: "-")
+        guard parts.count == 2, let y = Int(parts[0]), let m = Int(parts[1]) else { return false }
+        return cal.component(.year, from: d) == y && cal.component(.month, from: d) == m
     }
 
     private func refreshStatsNotificationIcon(slug: String) async {
@@ -214,6 +257,21 @@ final class MerchantStatsIndicatorsViewModel: ObservableObject {
         }
     }
 
+    /// Rafraîchit l’historique campagnes après envoi ou fin de livraison (poll job).
+    func refreshNotificationStats(reloadMonthStats: Bool = true) async {
+        guard let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !slug.isEmpty else { return }
+        guard let payload = await fetchNotificationStatsPayload(slug: slug) else { return }
+        let deliveredOnly = payload.campaigns.filter {
+            !NotificationSendLocalHistoryStore.isPendingDeliveryStatus($0.deliveryStatus)
+        }
+        notificationCampaignsFromStatsEndpoint = deliveredOnly
+        NotificationStatsEndpointCache.save(slug: slug, campaigns: deliveredOnly)
+        if reloadMonthStats, let period = lastSuccessfullyLoadedPeriod ?? stats?.periodKey ?? stats?.period {
+            await load(period: period, forceRefresh: true)
+        }
+    }
+
     /// Hydrate la mémoire depuis le cache disque pour tous les mois du carrousel, puis le mois affiché.
     func prepareMonthNavigation(slug: String, allMonthKeys: [String], focusPeriod: String) {
         guard !slug.isEmpty else { return }
@@ -234,6 +292,7 @@ final class MerchantStatsIndicatorsViewModel: ObservableObject {
         demoPayloadsByMonth = [:]
 
         guard let slug = AuthStorage.currentBusinessSlug, !slug.isEmpty else {
+            scopedBusinessSlug = nil
             stats = nil
             evolution = []
             monthSnapshots = [:]
@@ -316,7 +375,9 @@ final class MerchantStatsIndicatorsViewModel: ObservableObject {
             baselinePanierRepereEUR = a.baselineAvgBasketEur
             evolution = b.evolution
             if let notifPayload = n {
-                let notifCamps = notifPayload.campaigns
+                let notifCamps = notifPayload.campaigns.filter {
+                    !NotificationSendLocalHistoryStore.isPendingDeliveryStatus($0.deliveryStatus)
+                }
                 notificationCampaignsFromStatsEndpoint = notifCamps
                 NotificationStatsEndpointCache.save(slug: slug, campaigns: notifCamps)
             }

@@ -41,15 +41,45 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import fr.myfidpass.data.dto.BusinessMembersResponse
 import fr.myfidpass.data.dto.MemberDto
 import fr.myfidpass.data.repo.DashboardRepository
 import fr.myfidpass.services.sync.SyncService
+import fr.myfidpass.util.MerchantTechnicalMember
 import fr.myfidpass.util.shareFiles
 import fr.myfidpass.util.writeTempExport
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+
+private const val MEMBERS_PAGE_SIZE = 200
+
+private suspend fun DashboardRepository.fetchAllMembers(
+    slug: String,
+    search: String? = null,
+): BusinessMembersResponse {
+    var offset = 0
+    val collected = mutableListOf<MemberDto>()
+    var total: Int? = null
+    while (offset < 20_000) {
+        val page = businessMembers(
+            slug = slug,
+            limit = MEMBERS_PAGE_SIZE,
+            offset = offset,
+            search = search?.trim()?.takeIf { it.isNotEmpty() },
+        )
+        total = page.total ?: total
+        if (page.members.isEmpty()) break
+        collected.addAll(page.members)
+        if (page.members.size < MEMBERS_PAGE_SIZE) break
+        offset += MEMBERS_PAGE_SIZE
+    }
+    return BusinessMembersResponse(
+        members = collected,
+        total = total ?: collected.size,
+    )
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -74,15 +104,22 @@ fun MembersListScreen(
     var newEmail by remember { mutableStateOf("") }
     var newName by remember { mutableStateOf("") }
 
-    fun load(search: String) {
-        if (slug == null) return
+    fun applyResponse(response: BusinessMembersResponse) {
+        val real = response.members.filter {
+            !MerchantTechnicalMember.shouldExcludeFromMerchantActivity(it.email)
+        }
+        members = real
+        total = real.size
+    }
+
+    fun loadAll(search: String = query) {
+        val currentSlug = slug ?: return
         scope.launch {
             loading = true
             error = null
             runCatching {
-                val r = repository.businessMembers(slug, search = search.trim().takeIf { it.isNotEmpty() })
-                members = r.members
-                total = r.total
+                syncService.syncIfNeeded(currentSlug, force = true)
+                applyResponse(repository.fetchAllMembers(currentSlug, search = search))
             }.onFailure { error = it.message }
             loading = false
         }
@@ -97,7 +134,7 @@ fun MembersListScreen(
                     ?: error("Fichier illisible")
                 repository.membersImport(s, csv)
                 snackbarHostState.showSnackbar("Import terminé")
-                load(query)
+                loadAll()
             }.onFailure {
                 snackbarHostState.showSnackbar(it.message ?: "Import impossible")
             }
@@ -105,34 +142,30 @@ fun MembersListScreen(
     }
 
     LaunchedEffect(slug) {
-        slug?.let { syncService.syncIfNeeded(it) }
+        slug?.let { syncService.syncIfNeeded(it, force = true) }
+        if (slug != null) loadAll("")
     }
 
     LaunchedEffect(slug, query) {
-        val s = slug ?: return@LaunchedEffect
+        val currentSlug = slug ?: return@LaunchedEffect
         val q = query.trim()
-        if (q.isEmpty()) {
-            syncService.memberDao.observeBySlug(s).collect { cached ->
-                members = cached.map { e ->
-                    MemberDto(id = e.id, name = e.name, email = e.email, points = e.points)
-                }
-                if (total == null || cached.isNotEmpty()) total = members.size
-                loading = false
-            }
-        }
-    }
-
-    LaunchedEffect(slug) {
-        if (slug != null && query.trim().isEmpty() && members.isEmpty()) {
-            // Fallback API si cache vide au premier lancement
-            load("")
+        searchJob?.cancel()
+        if (q.isEmpty()) return@LaunchedEffect
+        searchJob = scope.launch {
+            delay(280)
+            loading = true
+            error = null
+            runCatching {
+                applyResponse(repository.fetchAllMembers(currentSlug, search = q))
+            }.onFailure { error = it.message }
+            loading = false
         }
     }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Membres${total?.let { " ($it)" } ?: ""}") },
+                title = { Text("Tous les clients${total?.let { " ($it)" } ?: ""}") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Retour")
@@ -157,25 +190,13 @@ fun MembersListScreen(
                 value = query,
                 onValueChange = { q ->
                     query = q
-                    searchJob?.cancel()
-                    if (q.trim().isEmpty()) return@OutlinedTextField
-                    val currentSlug = slug ?: return@OutlinedTextField
-                    searchJob = scope.launch {
-                        delay(320)
-                        val local = syncService.memberDao.search(currentSlug, q.trim())
-                        if (local.isNotEmpty()) {
-                            members = local.map { e ->
-                                MemberDto(id = e.id, name = e.name, email = e.email, points = e.points)
-                            }
-                            total = members.size
-                            loading = false
-                        } else {
-                            load(q)
-                        }
+                    if (q.trim().isEmpty()) {
+                        searchJob?.cancel()
+                        loadAll("")
                     }
                 },
                 modifier = Modifier.fillMaxWidth(),
-                label = { Text("Recherche") },
+                label = { Text("Nom, e-mail ou identifiant…") },
                 singleLine = true,
             )
             Spacer(Modifier.height(8.dp))
@@ -202,10 +223,16 @@ fun MembersListScreen(
                 modifier = Modifier.fillMaxWidth(),
             ) { Text("Importer CSV") }
             Spacer(Modifier.height(12.dp))
-            if (loading) {
+            if (loading && members.isEmpty()) {
                 CircularProgressIndicator()
             }
             error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            if (!loading && members.isEmpty() && error == null) {
+                Text(
+                    if (query.isBlank()) "Aucun client synchronisé." else "Aucun client trouvé.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             LazyColumn {
                 items(members, key = { it.id }) { m ->
                     Card(
@@ -217,7 +244,7 @@ fun MembersListScreen(
                     ) {
                         Column(Modifier.padding(14.dp)) {
                             Text(
-                                m.name?.ifBlank { m.email ?: "Membre" } ?: "Membre",
+                                m.name?.ifBlank { m.email ?: "Client" } ?: "Client",
                                 style = MaterialTheme.typography.titleMedium,
                             )
                             m.email?.takeIf { it.isNotBlank() }?.let {
@@ -268,7 +295,7 @@ fun MembersListScreen(
                                 newEmail = ""
                                 newName = ""
                                 showCreate = false
-                                load(query)
+                                loadAll(query)
                             }.onFailure {
                                 snackbarHostState.showSnackbar(it.message ?: "Erreur")
                             }

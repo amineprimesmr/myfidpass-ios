@@ -61,7 +61,7 @@ struct SettingsScanSecurityView: View {
                         )
                         if maxPassesPerDay == MerchantInternalBenchAccess.benchMaxPassesPerDay
                             && maxPointsPerTransaction == MerchantInternalBenchAccess.benchMaxPointsPerOperation {
-                            Text("Combinaison 102 / 102 : accès app sans abonnement (mode bench). Les points ne sont plus plafonnés après enregistrement serveur ; seuls \(MerchantInternalBenchAccess.benchMaxPassesPerDay) passages / jour / client s’appliquent.")
+                            Text("Combinaison 102 / 102 : forfait test complet (5 commerces max, toutes fonctions PRO). Les points ne sont plus plafonnés ; seuls \(MerchantInternalBenchAccess.benchMaxPassesPerDay) passages / jour / client s’appliquent. Enregistrez pour activer.")
                                 .font(.caption)
                                 .foregroundStyle(Color(UIColor.secondaryLabel))
                         } else if maxPointsPerTransaction > 0 {

@@ -27,9 +27,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -44,13 +44,11 @@ import fr.myfidpass.data.local.SessionStore
 import fr.myfidpass.data.repo.AuthRepository
 import fr.myfidpass.data.repo.DashboardRepository
 import fr.myfidpass.util.LegalURLs
+import fr.myfidpass.util.MerchantMultiPricing
 import fr.myfidpass.util.openInCustomTab
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 
-private const val PAYWALL_TITLE = "Prenez le contrôle de votre fidélité avec MyFidpass"
-private const val MONTHLY_PRICE = "49,99 € / mois"
-private const val ANNUAL_PRICE = "399,99 € / an"
+private const val PAYWALL_TITLE = "Combien de commerces avez-vous ?"
 
 /** Paywall PRO Bevel + Stripe — aligné iOS `CustomMerchantProPaywallView`. */
 @Composable
@@ -65,14 +63,35 @@ fun MerchantPaywallScreen(
     onClose: () -> Unit = {},
     closeRevealDelayMs: Long = if (allowsClose) 5000L else 0L,
     isMandatorySignupPaywall: Boolean = false,
+    addingAnotherCommerce: Boolean = false,
+    pendingCommerceName: String? = null,
 ) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var isMonthlySelected by remember { mutableStateOf(true) }
     var loading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var closeRevealed by remember { mutableStateOf(closeRevealDelayMs == 0L) }
     var legalMenuOpen by remember { mutableStateOf(false) }
+
+    val paidSlotsBaseline = sessionStore.allowedBusinesses.coerceIn(1, 5)
+    val initialTargetSlots = remember(addingAnotherCommerce, sessionStore.usedBusinesses, paidSlotsBaseline) {
+        MerchantMultiPricing.slotsToPurchase(
+            usedBusinesses = sessionStore.usedBusinesses,
+            allowedBusinesses = paidSlotsBaseline,
+            addingAnotherCommerce = addingAnotherCommerce,
+        )
+    }
+    var selectedTargetSlots by remember { mutableIntStateOf(initialTargetSlots) }
+
+    LaunchedEffect(initialTargetSlots, addingAnotherCommerce) {
+        selectedTargetSlots = initialTargetSlots
+    }
+
+    val effectiveSlots = selectedTargetSlots.coerceIn(1, 5)
+
+    val pricingQuote = remember(paidSlotsBaseline, effectiveSlots) {
+        MerchantMultiPricing.quote(paidSlotsBaseline, effectiveSlots)
+    }
+    val showsCommerceQuotaSection = true
 
     LaunchedEffect(closeRevealDelayMs) {
         if (closeRevealDelayMs > 0) {
@@ -150,6 +169,22 @@ fun MerchantPaywallScreen(
                         .padding(top = 10.dp, bottom = 22.dp),
                 )
 
+                if (showsCommerceQuotaSection) {
+                    PaywallCommerceQuotaSection(
+                        businesses = sessionStore.businesses,
+                        usedBusinesses = sessionStore.usedBusinesses,
+                        allowedBusinesses = paidSlotsBaseline,
+                        hasActiveSubscription = sessionStore.hasPaidMerchantSubscription(),
+                        addingAnotherCommerce = addingAnotherCommerce,
+                        pendingCommerceName = pendingCommerceName,
+                        selectedTargetSlots = effectiveSlots,
+                        onSelectedTargetSlotsChange = { selectedTargetSlots = it },
+                        modifier = Modifier
+                            .padding(horizontal = 22.dp)
+                            .padding(bottom = 10.dp),
+                    )
+                }
+
                 PaywallBevelFeaturesBlock(
                     primary = PaywallBevelFeatureCatalog.primary,
                     alsoIncluded = PaywallBevelFeatureCatalog.alsoIncluded,
@@ -165,26 +200,14 @@ fun MerchantPaywallScreen(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    PaywallBevelPlanCard(
-                        title = "Mensuel",
-                        priceLine = MONTHLY_PRICE,
-                        isSelected = isMonthlySelected,
-                        onClick = { isMonthlySelected = true },
-                        modifier = Modifier.weight(1f),
-                    )
-                    PaywallBevelPlanCard(
-                        title = "Annuel",
-                        priceLine = ANNUAL_PRICE,
-                        isSelected = !isMonthlySelected,
-                        savingsBadge = "Économisez 33 %",
-                        onClick = { isMonthlySelected = false },
-                        modifier = Modifier.weight(1f),
-                    )
-                }
+                Text(
+                    "Le premier mois à 1€, puis ${pricingQuote.toMonthlyLabel} / mois",
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF1A1C22),
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth(),
+                )
 
                 errorMessage?.let {
                     Text(
@@ -201,27 +224,22 @@ fun MerchantPaywallScreen(
                     isLoading = loading,
                     isEnabled = !loading,
                     onClick = {
-                        scope.launch {
-                            loading = true
-                            errorMessage = null
-                            runCatching {
-                                val slug = sessionStore.currentBusinessSlug
-                                val url = if (!slug.isNullOrBlank()) {
-                                    dashboardRepository.paymentBusinessCheckout(
-                                        slug,
-                                        if (isMonthlySelected) "month" else "year",
-                                    ).url
-                                } else {
-                                    dashboardRepository.paymentCheckout(null).url
-                                }
-                                val checkout = url?.trim().orEmpty()
-                                if (checkout.isEmpty()) error("URL de paiement indisponible")
-                                openInCustomTab(context, checkout)
-                            }.onFailure {
-                                errorMessage = it.message ?: "Erreur checkout"
-                            }
-                            loading = false
+                        loading = true
+                        errorMessage = null
+                        runCatching {
+                            val checkout = LegalURLs.merchantEmbeddedSaasPaymentPage(
+                                prefilledEmail = userEmail,
+                                planAnnual = false,
+                                commerceSlots = effectiveSlots,
+                                accessToken = sessionStore.accessToken,
+                                refreshToken = sessionStore.refreshToken,
+                            )
+                            if (checkout.isBlank()) error("URL de paiement indisponible")
+                            openInCustomTab(context, checkout)
+                        }.onFailure {
+                            errorMessage = it.message ?: "Erreur checkout"
                         }
+                        loading = false
                     },
                 )
 

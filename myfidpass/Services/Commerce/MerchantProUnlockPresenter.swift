@@ -25,11 +25,6 @@ final class MerchantProUnlockPresenter: ObservableObject {
         showsTeaser = false
     }
 
-    func continueToPaywall() {
-        dismissTeaser()
-        NotificationCenter.default.post(name: .myfidpassOpenMerchantSubscriptionSheet, object: nil)
-    }
-
     static func isSubscriptionGateMessage(_ message: String) -> Bool {
         let m = message.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !m.isEmpty else { return false }

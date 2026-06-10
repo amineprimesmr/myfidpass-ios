@@ -21,6 +21,7 @@ fun AddCommerceScreen(
     snackbar: SnackbarHostState,
     onBack: () -> Unit,
     onCreated: () -> Unit,
+    onQuotaBlocked: (establishmentName: String) -> Unit = {},
 ) {
     val factory = viewModelFactory(container)
     val vm: MerchantOnboardingViewModel = viewModel(factory = factory)
@@ -41,13 +42,26 @@ fun AddCommerceScreen(
                 scope.launch { snackbar.showSnackbar("Choisissez un établissement Google.") }
                 return@MerchantEstablishmentScreen
             }
+            val establishmentName = desc.substringBefore(",").trim().ifEmpty { desc }
+            if (!container.sessionStore.canCreateBusiness) {
+                onQuotaBlocked(establishmentName)
+                return@MerchantEstablishmentScreen
+            }
             scope.launch {
                 runCatching {
                     businessCreationRepository.createFromPlace(pid, desc)
                     snackbar.showSnackbar("Commerce ajouté")
                     onCreated()
                 }.onFailure {
-                    snackbar.showSnackbar(it.message ?: "Erreur")
+                    val msg = it.message.orEmpty()
+                    if (msg.contains("quota", ignoreCase = true) ||
+                        msg.contains("abonnement", ignoreCase = true) ||
+                        msg.contains("403")
+                    ) {
+                        onQuotaBlocked(establishmentName)
+                    } else {
+                        snackbar.showSnackbar(msg.ifEmpty { "Erreur" })
+                    }
                 }
             }
         },

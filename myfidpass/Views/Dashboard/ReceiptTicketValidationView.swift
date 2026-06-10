@@ -244,7 +244,7 @@ struct ReceiptTicketValidationView: View {
                         withAnimation(.spring(response: 0.35, dampingFraction: 0.86)) {
                             showReferenceQR.toggle()
                         }
-                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        MerchantUXFeedback.shared.play(.tap)
                     } label: {
                         HStack(spacing: 8) {
                             Image(systemName: showReferenceQR ? "chevron.up" : "qrcode")
@@ -278,12 +278,12 @@ struct ReceiptTicketValidationView: View {
             guard let raw = newVal?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return }
             let expected = session.qrPayload.trimmingCharacters(in: .whitespacesAndNewlines)
             if raw == expected {
-                UINotificationFeedbackGenerator().notificationOccurred(.success)
+                MerchantUXFeedback.shared.play(.success)
                 onComplete(raw)
             } else {
-                UINotificationFeedbackGenerator().notificationOccurred(.error)
+                MerchantUXFeedback.shared.play(.error)
                 camera.scannedCode = nil
-                UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
+                MerchantUXFeedback.shared.play(.scan)
             }
         }
         .statusBarHidden(false)
@@ -292,7 +292,7 @@ struct ReceiptTicketValidationView: View {
     private var header: some View {
         HStack(alignment: .top) {
             Button {
-                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                MerchantUXFeedback.shared.play(.tap)
                 onComplete(nil)
             } label: {
                 Image(systemName: "xmark")

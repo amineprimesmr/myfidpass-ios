@@ -17,7 +17,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Article
-import androidx.compose.material.icons.filled.PlayCircle
+import androidx.compose.material.icons.filled.NorthEast
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SportsSoccer
 import androidx.compose.material3.HorizontalDivider
@@ -114,9 +114,8 @@ fun XStyleSettingsSidebar(
                 onClick = onOpenFootballGame,
             )
             SidebarMenuButton(
-                icon = { Icon(Icons.Default.PlayCircle, contentDescription = null, tint = Color.White) },
                 title = "Jeu en direct",
-                showTrailingArrow = true,
+                showInlineExternalArrow = true,
                 onClick = onOpenLiveGame,
             )
             SidebarMenuButton(
@@ -130,11 +129,11 @@ fun XStyleSettingsSidebar(
 
 @Composable
 private fun SidebarMenuButton(
-    icon: @Composable () -> Unit,
     title: String,
     onClick: () -> Unit,
+    icon: (@Composable () -> Unit)? = null,
     showAttentionDot: Boolean = false,
-    showTrailingArrow: Boolean = false,
+    showInlineExternalArrow: Boolean = false,
 ) {
     Row(
         Modifier
@@ -144,26 +143,37 @@ private fun SidebarMenuButton(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        Box(Modifier.size(24.dp), contentAlignment = Alignment.Center) {
-            icon()
+        if (icon != null) {
+            Box(Modifier.size(24.dp), contentAlignment = Alignment.Center) {
+                icon()
+            }
         }
-        Text(
-            title,
-            color = Color.White,
-            fontWeight = FontWeight.Medium,
-            fontSize = 17.sp,
-            modifier = Modifier.weight(1f),
-        )
-        if (showAttentionDot) {
-            Box(
-                Modifier
-                    .size(8.dp)
-                    .clip(RoundedCornerShape(999.dp))
-                    .background(Color(0xFFEF4444)),
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(if (showInlineExternalArrow) 5.dp else 8.dp),
+        ) {
+            Text(
+                title,
+                color = Color.White,
+                fontWeight = FontWeight.Medium,
+                fontSize = 17.sp,
             )
-        }
-        if (showTrailingArrow) {
-            Text("›", color = Color.White.copy(0.45f), fontSize = 20.sp)
+            if (showInlineExternalArrow) {
+                Icon(
+                    Icons.Default.NorthEast,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+            if (showAttentionDot) {
+                Box(
+                    Modifier
+                        .size(8.dp)
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(Color(0xFFEF4444)),
+                )
+            }
         }
     }
 }

@@ -15,6 +15,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Groups
+import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.QrCode
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SportsSoccer
@@ -59,6 +60,7 @@ fun SettingsHubScreen(
     onAppSettings: () -> Unit,
     onScanSecurity: () -> Unit = {},
     onTeam: () -> Unit,
+    onLoyaltyNetwork: () -> Unit = {},
     onMatchPredictions: () -> Unit,
     onAccounting: () -> Unit = {},
     onOpenFlyerHub: () -> Unit,
@@ -104,6 +106,17 @@ fun SettingsHubScreen(
                         icon = Icons.Default.Groups,
                         title = "Équipe",
                         onClick = onTeam,
+                    )
+                    GroupedSettingsRowDivider()
+                    GroupedSettingsNavigationRow(
+                        icon = Icons.Default.Link,
+                        title = "Réseau fidélité",
+                        subtitle = if (sessionStore.businesses.any { it.isInLoyaltyNetwork }) {
+                            "Carte partagée active"
+                        } else {
+                            "Regrouper plusieurs adresses"
+                        },
+                        onClick = onLoyaltyNetwork,
                     )
                 }
                 Spacer(Modifier.height(GroupedSettingsMetrics.interCardSpacing))

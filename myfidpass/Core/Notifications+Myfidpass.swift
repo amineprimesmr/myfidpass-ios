@@ -18,12 +18,10 @@ extension Notification.Name {
     static let myfidpassSubscriptionRequiredByAPI = Notification.Name("myfidpass.subscriptionRequiredByAPI")
     /// Après `POST /api/auth/refresh` : mise à jour optionnelle de `has_active_subscription`.
     static let myfidpassMerchantSubscriptionFromRefresh = Notification.Name("myfidpass.merchantSubscriptionFromRefresh")
-    /// Accusé campagne : basculer sur l’onglet Campagnes.
-    static let myfidpassOpenCampaignsTab = Notification.Name("myfidpass.openCampaignsTab")
-    /// Dernière synchro en erreur (hors annulation) : `userInfo["message"]` = texte localisé.
-    static let myfidpassRemoteSyncDidFail = Notification.Name("myfidpass.remoteSyncDidFail")
     /// Fusion `SyncService` → `viewContext` terminée (membres + transactions importés). Rafraîchit le fil « Dernières transactions » (Core Data) sans passer par `DataService.save()`.
     static let myfidpassMerchantCoreDataDidMergeFromSync = Notification.Name("myfidpass.merchantCoreDataDidMergeFromSync")
+    /// Bascule Points ↔ Tampons enregistrée : l’accueil doit vider « Dernières transactions ».
+    static let myfidpassProgramModeDidSwitch = Notification.Name("myfidpass.programModeDidSwitch")
     /// Connexion OAuth réseau (Meta / YouTube / TikTok) réussie : le serveur a mis à jour les liens missions — recharger le profil établissement.
     static let myfidpassEngagementOAuthDidComplete = Notification.Name("myfidpass.engagementOAuthDidComplete")
     /// PATCH social-missions enregistré — rafraîchir les @ sur les boutons réseaux (Commerce / stats).
@@ -36,8 +34,6 @@ extension Notification.Name {
     static let myfidpassCardLocalAssetFileWritten = Notification.Name("myfidpass.cardLocalAssetFileWritten")
     /// Snapshot d’aperçu carte (UserDefaults) mis à jour — rafraîchir l’aperçu Accueil / listes qui lisent `CardPreviewDisplaySnapshotStore`.
     static let myfidpassCardPreviewDisplayDidChange = Notification.Name("myfidpass.cardPreviewDisplayDidChange")
-    /// Pousser « Ma carte » dans le hub programme (Flyer) lorsque la vue est montée ; le parcours principal passe par Commerce → navigation.
-    static let myfidpassOpenProgramMyCard = Notification.Name("myfidpass.openProgramMyCard")
     /// Ouvre la feuille d’abonnement Stripe (pastille essai au-dessus du tab bar).
     static let myfidpassOpenMerchantSubscriptionSheet = Notification.Name("myfidpass.openMerchantSubscriptionSheet")
     /// Rétrocompat : ancienne pastille « essai → Safari Stripe » — ouvre le paywall (Stripe Checkout).
@@ -50,6 +46,8 @@ extension Notification.Name {
     static let myfidpassOpenHomeMyCardFullScreen = Notification.Name("myfidpass.openHomeMyCardFullScreen")
     /// Checklist lancement (web + iOS) : accusé flyer affiché ou contexte rechargé — rafraîchir pastille essai.
     static let myfidpassMerchantSetupProgressUpdated = Notification.Name("myfidpass.merchantSetupProgressUpdated")
+    /// `SyncService` a terminé l’hydratation flyer (GET …/dashboard/flyer ou fallback settings) pour le commerce courant.
+    static let myfidpassFlyerCacheDidHydrateFromSync = Notification.Name("myfidpass.flyerCacheDidHydrateFromSync")
     /// Bascule l’onglet principal sur **Accueil** (commerçant) — utilisé avant d’ouvrir le hub flyer depuis Réglages.
     static let myfidpassSelectMerchantHomeTab = Notification.Name("myfidpass.selectMerchantHomeTab")
     /// Ouvre l’éditeur / hub « Flyer & programme » (plein écran), écouté par `DashboardView`.
@@ -67,12 +65,16 @@ extension Notification.Name {
     static let myfidpassOpenGoogleBusinessSetupSheet = Notification.Name("myfidpass.openGoogleBusinessSetupSheet")
     /// Adopter le matchedPlaceId renvoyé par l'OAuth comme placeId configuré du commerce (userInfo["placeId"]: String).
     static let myfidpassAdoptMatchedGooglePlaceId = Notification.Name("myfidpass.adoptMatchedGooglePlaceId")
-    /// Relance le tutoriel depuis zéro (debug / tests uniquement).
-    static let myfidpassResetTutorial = Notification.Name("myfidpass.resetTutorial")
     /// Admin plateforme : bascule sur l’UI commerçant pour piloter un commerce.
     static let myfidpassAdminPilotDidStart = Notification.Name("myfidpass.adminPilotDidStart")
     /// Ouvre la feuille « Ajouter un commerce » (recherche Google Places → création).
     static let myfidpassOpenAddCommerceSheet = Notification.Name("myfidpass.openAddCommerceSheet")
+    /// Ouvre la recherche client globale (top bar Accueil / Notifs / Stats).
+    static let myfidpassOpenMemberSearch = Notification.Name("myfidpass.openMemberSearch")
+    /// Commerce actif changé (`userInfo["slug"]`) — réinitialiser les écrans liés à la carte / branding.
+    static let myfidpassActiveBusinessDidChange = Notification.Name("myfidpass.activeBusinessDidChange")
+    /// Campagne notif envoyée ou livraison mise à jour — rafraîchir l’historique Statistiques.
+    static let myfidpassMerchantNotificationCampaignSent = Notification.Name("myfidpass.merchantNotificationCampaignSent")
 }
 
 extension NotificationCenter {
@@ -88,6 +90,14 @@ enum MyfidpassNotificationUserInfoKey {
     static let flyerHubStartCreateAssistant = "flyerHubStartCreateAssistant"
     /// Avec `myfidpassOpenMerchantSubscriptionSheet` : forfait cible (1–5 commerces) pour le paywall IAP.
     static let requiredCommerceSlots = "requiredCommerceSlots"
+    /// `true` si l’utilisateur tente d’ajouter un commerce (quota plein).
+    static let addingAnotherCommerce = "addingAnotherCommerce"
+    /// Nom du prochain commerce (recherche Google en cours dans « Ajouter un commerce »).
+    static let pendingCommerceName = "pendingCommerceName"
+    /// Slug commerce concerné par une campagne notif.
+    static let businessSlug = "businessSlug"
+    /// `batch_id` serveur (historique stats).
+    static let notificationBatchId = "notificationBatchId"
 }
 
 extension NotificationCenter {
@@ -95,17 +105,42 @@ extension NotificationCenter {
     func postOpenMerchantSubscription(
         usedBusinesses: Int,
         allowedBusinesses: Int,
-        addingAnotherCommerce: Bool
+        addingAnotherCommerce: Bool,
+        pendingCommerceName: String? = nil
     ) {
         let n = MerchantAppleSubscriptionProducts.slotsToPurchase(
             usedBusinesses: usedBusinesses,
             allowedBusinesses: allowedBusinesses,
             addingAnotherCommerce: addingAnotherCommerce
         )
+        var userInfo: [String: Any] = [
+            MyfidpassNotificationUserInfoKey.requiredCommerceSlots: n,
+            MyfidpassNotificationUserInfoKey.addingAnotherCommerce: addingAnotherCommerce,
+        ]
+        if let pendingCommerceName {
+            let trimmed = pendingCommerceName.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                userInfo[MyfidpassNotificationUserInfoKey.pendingCommerceName] = trimmed
+            }
+        }
         post(
             name: .myfidpassOpenMerchantSubscriptionSheet,
             object: nil,
-            userInfo: [MyfidpassNotificationUserInfoKey.requiredCommerceSlots: n]
+            userInfo: userInfo
+        )
+    }
+
+    /// Paywall avec palier déduit du quota actuel (stats, teaser Pro, etc.).
+    func postOpenMerchantSubscriptionFromSession(
+        usedBusinesses: Int,
+        allowedBusinesses: Int,
+        hasActiveSubscription: Bool
+    ) {
+        let adding = hasActiveSubscription && usedBusinesses >= max(1, allowedBusinesses)
+        postOpenMerchantSubscription(
+            usedBusinesses: usedBusinesses,
+            allowedBusinesses: allowedBusinesses,
+            addingAnotherCommerce: adding
         )
     }
 }

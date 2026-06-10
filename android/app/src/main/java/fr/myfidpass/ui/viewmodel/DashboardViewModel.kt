@@ -30,12 +30,26 @@ class DashboardViewModel(
         private set
     var recentTransactions: List<TransactionDto> by mutableStateOf(emptyList())
         private set
+    var transactionsVisibleCount by mutableStateOf(TRANSACTIONS_PAGE_SIZE)
+        private set
+    var loadingMoreTransactions by mutableStateOf(false)
+        private set
     var loading by mutableStateOf(false)
         private set
     var refreshing by mutableStateOf(false)
         private set
     var error: String? by mutableStateOf(null)
 
+    val hasMoreTransactions: Boolean
+        get() {
+            if (transactionsVisibleCount < recentTransactions.size) return true
+            val total = transactionsTotal ?: return false
+            return recentTransactions.size < total
+        }
+
+    private var transactionsTotal: Int? = null
+    private var homeTransactionsExpanded = false
+    private var transactionsFetchSize = INITIAL_TRANSACTIONS_FETCH
     private var homeLiveSyncJob: Job? = null
 
     fun load() {
@@ -77,21 +91,58 @@ class DashboardViewModel(
      * Accueil : observe Room + poll léger (aligné iOS push `dashboard_sync` + polling 25 s).
      * Les transactions web / QR apparaissent sans pull-to-refresh manuel.
      */
+    fun loadMoreTransactions() {
+        val slug = dashboardRepository.currentSlug() ?: return
+        if (loadingMoreTransactions || !hasMoreTransactions) return
+        viewModelScope.launch {
+            loadingMoreTransactions = true
+            homeTransactionsExpanded = true
+            val nextVisible = transactionsVisibleCount + TRANSACTIONS_PAGE_SIZE
+            if (nextVisible > recentTransactions.size) {
+                runCatching {
+                    val offset = recentTransactions.size
+                    val response = dashboardRepository.businessTransactions(
+                        slug = slug,
+                        limit = TRANSACTIONS_PAGE_SIZE,
+                        offset = offset,
+                        sort = "desc",
+                    )
+                    transactionsTotal = response.total
+                    recentTransactions = recentTransactions + response.transactions
+                    transactionsFetchSize = recentTransactions.size
+                }.onFailure { error = it.message }
+            }
+            transactionsVisibleCount = nextVisible
+            loadingMoreTransactions = false
+        }
+    }
+
+    private fun resetTransactionsPagination() {
+        transactionsVisibleCount = TRANSACTIONS_PAGE_SIZE
+        loadingMoreTransactions = false
+        homeTransactionsExpanded = false
+        transactionsFetchSize = INITIAL_TRANSACTIONS_FETCH
+        transactionsTotal = null
+    }
+
     fun bindHomeActivityLiveUpdates(slug: String) {
         val trimmed = slug.trim()
         if (trimmed.isEmpty()) return
+        resetTransactionsPagination()
         homeLiveSyncJob?.cancel()
         homeLiveSyncJob = viewModelScope.launch {
             launch {
-                syncService.transactionDao.observeRecent(trimmed, 12).collect { rows ->
-                    recentTransactions = rows.map { entityToDto(it) }
+                syncService.transactionDao.observeRecent(trimmed, INITIAL_TRANSACTIONS_FETCH).collect { rows ->
+                    if (!homeTransactionsExpanded) {
+                        recentTransactions = rows.map { entityToDto(it) }
+                    }
                 }
             }
             launch {
-                runCatching { syncService.syncIfNeeded(trimmed, force = false) }
+                runCatching { syncService.syncIfNeeded(trimmed, force = true) }
                 while (isActive) {
                     delay(HOME_ACTIVITY_POLL_MS)
-                    runCatching { syncService.syncIfNeeded(trimmed, force = false) }
+                    runCatching { syncService.syncIfNeeded(trimmed, force = true) }
                 }
             }
         }
@@ -122,8 +173,20 @@ class DashboardViewModel(
         val freshSettings = dashboardRepository.businessSettings(slug)
         settings = freshSettings
         freshSettings?.let { CardPreviewSnapshotSync.syncFromSettings(appContext, slug, it) }
+        val fetchLimit = maxOf(
+            INITIAL_TRANSACTIONS_FETCH,
+            transactionsFetchSize,
+            transactionsVisibleCount + 1,
+        )
         recentTransactions = runCatching {
-            dashboardRepository.businessTransactions(slug, limit = 12, sort = "desc").transactions
+            val response = dashboardRepository.businessTransactions(
+                slug = slug,
+                limit = fetchLimit,
+                sort = "desc",
+            )
+            transactionsTotal = response.total
+            transactionsFetchSize = response.transactions.size
+            response.transactions
         }.getOrElse {
             loadCachedTransactions(slug).orEmpty()
         }
@@ -139,5 +202,7 @@ class DashboardViewModel(
 
     companion object {
         private const val HOME_ACTIVITY_POLL_MS = 25_000L
+        const val TRANSACTIONS_PAGE_SIZE = 8
+        private const val INITIAL_TRANSACTIONS_FETCH = 16
     }
 }

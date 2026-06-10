@@ -201,7 +201,7 @@ struct MerchantOBCardDraft {
             guard let pts = Int(ptsStr.trimmingCharacters(in: .whitespaces)) else { continue }
             let labT = lab.trimmingCharacters(in: .whitespaces)
             guard !labT.isEmpty else { continue }
-            tiers.append(.init(points: pts, label: String(labT.prefix(120))))
+            tiers.append(.init(points: pts, label: String(labT.prefix(120)), minPurchaseEur: nil))
         }
         return tiers.sorted { $0.points < $1.points }
     }

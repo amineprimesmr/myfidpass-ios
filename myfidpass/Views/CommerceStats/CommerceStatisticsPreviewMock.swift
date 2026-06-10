@@ -23,17 +23,32 @@ enum CommerceStatisticsPreviewMock {
         let title = CommerceStatsMonthNavigator.displayTitle(forMonthKey: monthKey)
         let seed = max(1, 6 - indexFromNewest)
         let opsBase = 14 + indexFromNewest * 5
-        let evolutionPattern = [
+        let milestones = Array(1...8)
+        let newInMonthCumulative = [2, 5, 9, 14, 18, 24, 31, 38].map { $0 + seed * 2 - indexFromNewest }
+        let opsIntervals = [
             opsBase + seed,
-            opsBase + seed * 2 + 4,
-            opsBase + seed + 8,
-            opsBase + seed * 3,
+            opsBase + seed + 2,
+            opsBase + seed + 4,
+            opsBase + seed + 3,
+            opsBase + seed + 6,
+            opsBase + seed * 2,
+            opsBase + seed * 2 + 3,
+            opsBase + seed + 7,
         ]
-        let evolution: [EvolutionWeekDTO] = evolutionPattern.enumerated().map { i, ops in
+        let membersBase = 3_650 + (5 - indexFromNewest) * 48
+        let basketBase = 18.2 + Double(indexFromNewest) * 0.6
+        let basketTotals = [120.0, 248.0, 395.0, 510.0, 688.0, 842.0, 1015.0, 1188.0]
+            .map { $0 + Double(indexFromNewest) * 42 }
+        let evolution: [EvolutionWeekDTO] = milestones.enumerated().map { i, day in
             EvolutionWeekDTO(
                 weekIndex: i,
-                operationsCount: ops,
-                membersCount: 3_650 + (5 - indexFromNewest) * 48 + i * 6
+                dayOfMonth: day,
+                operationsCount: opsIntervals[i],
+                membersCount: membersBase + max(0, newInMonthCumulative[i]),
+                newMembersInMonth: max(0, newInMonthCumulative[i]),
+                avgBasketEurInMonth: basketBase + Double(i) * 0.45,
+                avgBasketEurInInterval: nil,
+                basketTotalEurInMonth: basketTotals[i]
             )
         }
 

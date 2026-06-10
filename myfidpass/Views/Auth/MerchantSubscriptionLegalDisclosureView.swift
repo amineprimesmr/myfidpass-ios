@@ -28,7 +28,7 @@ struct MerchantSubscriptionLegalDisclosureView: View {
         case .some(false):
             return "Abonnement mensuel (renouvellement automatique chaque mois)"
         case .none:
-            return "Abonnement mensuel ou annuel (renouvellement automatique selon le forfait choisi)"
+            return "Abonnement mensuel (renouvellement automatique chaque mois)"
         }
     }
 
@@ -40,7 +40,7 @@ struct MerchantSubscriptionLegalDisclosureView: View {
             case .some(false):
                 return "1 € le premier mois, puis \(storeKitPriceLine) / mois via l’App Store. Sans engagement."
             case .none:
-                return "1 € le premier mois, puis tarif affiché par l’App Store (mensuel ou annuel). Sans engagement."
+                return "1 € le premier mois, puis tarif mensuel affiché par l’App Store selon le nombre de commerces. Sans engagement."
             }
         }
         switch isAnnualPlan {
@@ -49,7 +49,7 @@ struct MerchantSubscriptionLegalDisclosureView: View {
         case .some(false):
             return "1 € le premier mois, puis 49,99 € / mois. Sans engagement."
         case .none:
-            return "Mensuel : 1 € le 1er mois, puis 49,99 € / mois. Annuel : 1 € le 1er mois, puis 399 € / an. Sans engagement."
+            return "1 € le premier mois, puis 49,99 € / mois (1 commerce) ou tarif affiché selon le palier multi-commerces. Sans engagement."
         }
     }
 

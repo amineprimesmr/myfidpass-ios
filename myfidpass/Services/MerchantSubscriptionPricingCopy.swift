@@ -10,12 +10,12 @@ import Foundation
 enum MerchantSubscriptionPricingCopy {
     // MARK: Paywall Bevel
 
-    static let paywallBevelTitle = "Prenez le contrôle de votre fidélité avec MyFidpass"
+    static let paywallBevelTitle = "Combien de commerces avez-vous ?"
 
     static let paywallContinueCta = "Continuer"
 
     /// Au-dessus des cartes Mensuel / Annuel.
-    static let paywallPricingIntroLine = "Premier mois à 1€, puis…"
+    static let paywallPricingIntroLine = "Le premier mois à 1€, puis…"
 
     /// Code offre App Store Connect (custom) — secours si la signature serveur est indisponible : menu ⋯ → Code promo Apple.
     static let appleCustomOfferCode = "MYFID1EURO"

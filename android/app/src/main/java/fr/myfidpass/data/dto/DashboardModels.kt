@@ -30,7 +30,18 @@ data class NotificationCampaignInsightDto(
     val message: String? = null,
     @SerialName("sent_passkit") val sentPasskit: Int? = null,
     @SerialName("sent_web_push") val sentWebPush: Int? = null,
-)
+    @SerialName("delivery_status") val deliveryStatus: String? = null,
+    @SerialName("expected_devices") val expectedDevices: Int? = null,
+) {
+    val isDeliveryPending: Boolean
+        get() {
+            val s = deliveryStatus?.trim()?.lowercase().orEmpty()
+            return s == "queued" || s == "sending" || s == "pending"
+        }
+
+    val confirmedRecipientsCount: Int
+        get() = if (isDeliveryPending) 0 else maxOf(recipientsDistinct ?: 0, sentTotal ?: 0)
+}
 
 @Serializable
 data class BusinessStatsResponse(
@@ -133,6 +144,17 @@ data class ScanMemberDto(
 data class PointsRewardTierDto(
     val points: Int = 0,
     val label: String? = null,
+    @SerialName("min_purchase_eur") val minPurchaseEur: Double? = null,
+)
+
+@Serializable
+data class GoogleReviewEngagementDto(
+    @SerialName("place_id") val placeId: String? = null,
+)
+
+@Serializable
+data class EngagementRewardsDto(
+    @SerialName("google_review") val googleReview: GoogleReviewEngagementDto? = null,
 )
 
 @Serializable
@@ -174,6 +196,8 @@ data class BusinessSettingsResponse(
     @SerialName("welcome_bonus_amount") val welcomeBonusAmount: Int? = null,
     @SerialName("wallet_pass_include_locations") val walletPassIncludeLocations: Int? = null,
     @SerialName("has_card_background") val hasCardBackground: Boolean? = null,
+    @SerialName("has_flyer_prefs") val hasFlyerPrefs: Boolean? = null,
+    @SerialName("flyer_prefs_updated_at") val flyerPrefsUpdatedAt: String? = null,
     @SerialName("card_background_updated_at") val cardBackgroundUpdatedAt: String? = null,
     @SerialName("has_stamp_icon") val hasStampIcon: Boolean? = null,
     @SerialName("campaign_automation") val campaignAutomation: CampaignAutomationConfigDto? = null,
@@ -182,6 +206,7 @@ data class BusinessSettingsResponse(
     @SerialName("location_radius_meters") val locationRadiusMeters: Int? = null,
     @SerialName("location_relevant_text") val locationRelevantText: String? = null,
     @SerialName("location_address") val locationAddress: String? = null,
+    @SerialName("engagement_rewards") val engagementRewards: EngagementRewardsDto? = null,
 )
 
 @Serializable
@@ -273,4 +298,43 @@ data class NotificationSendRequest(
     val message: String,
     val title: String? = null,
     val segment: String? = null,
+    @SerialName("business_slugs") val businessSlugs: List<String>? = null,
+)
+
+@Serializable
+data class NotificationBusinessReadinessDto(
+    val slug: String? = null,
+    @SerialName("business_id") val businessId: String? = null,
+    val name: String? = null,
+    @SerialName("organization_name") val organizationName: String? = null,
+    @SerialName("loyalty_group_id") val loyaltyGroupId: String? = null,
+    @SerialName("has_notification_icon") val hasNotificationIcon: Boolean? = null,
+    @SerialName("passkit_device_count") val passkitDeviceCount: Int? = null,
+    @SerialName("web_push_count") val webPushCount: Int? = null,
+    @SerialName("total_devices") val totalDevices: Int? = null,
+    /** Vrais clients que la campagne touchera (filtre technique appliqué côté backend, = dispatch). */
+    @SerialName("deliverable_devices") val deliverableDevices: Int? = null,
+    /** Carte d'aperçu du commerçant : testable via auto-test, hors campagne réelle. */
+    @SerialName("preview_devices") val previewDevices: Int? = null,
+    /** `true` : seule la carte d'aperçu est enregistrée (0 vrai client). */
+    @SerialName("preview_only") val previewOnly: Boolean? = null,
+    @SerialName("delivery_hint") val deliveryHint: String? = null,
+    @SerialName("members_count") val membersCount: Int? = null,
+    @SerialName("subscription_ok") val subscriptionOk: Boolean? = null,
+    val ready: Boolean? = null,
+    @SerialName("block_code") val blockCode: String? = null,
+    @SerialName("block_message") val blockMessage: String? = null,
+) {
+    val displayName: String
+        get() = (name ?: organizationName ?: slug ?: "Commerce").trim()
+
+    /** Nombre de vrais clients destinataires (priorité au champ backend réconcilié, repli sur le total). */
+    val realClientDeviceCount: Int
+        get() = deliverableDevices ?: totalDevices ?: 0
+}
+
+@Serializable
+data class NotificationReadinessResponse(
+    val ok: Boolean? = null,
+    val businesses: List<NotificationBusinessReadinessDto>? = null,
 )

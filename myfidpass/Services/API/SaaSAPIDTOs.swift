@@ -37,8 +37,82 @@ struct DashboardEvolutionResponse: Codable, Sendable {
 
 struct EvolutionWeekDTO: Codable, Sendable {
     let weekIndex: Int?
+    let dayOfMonth: Int?
     let operationsCount: Int?
     let membersCount: Int?
+    /// Cumul d’inscriptions depuis le 1er du mois jusqu’au jour `dayOfMonth` (courbe Membres).
+    let newMembersInMonth: Int?
+    /// Panier moyen cumulé du 1er au jour `dayOfMonth` (valeur de référence).
+    let avgBasketEurInMonth: Double?
+    /// Panier moyen sur l’intervalle entre deux jalons (courbe KPI — varie jour par jour).
+    let avgBasketEurInInterval: Double?
+    /// Cumul des montants € crédités du 1er au jour `dayOfMonth` (forme de courbe KPI).
+    let basketTotalEurInMonth: Double?
+
+    init(
+        weekIndex: Int? = nil,
+        dayOfMonth: Int? = nil,
+        operationsCount: Int? = nil,
+        membersCount: Int? = nil,
+        newMembersInMonth: Int? = nil,
+        avgBasketEurInMonth: Double? = nil,
+        avgBasketEurInInterval: Double? = nil,
+        basketTotalEurInMonth: Double? = nil
+    ) {
+        self.weekIndex = weekIndex
+        self.dayOfMonth = dayOfMonth
+        self.operationsCount = operationsCount
+        self.membersCount = membersCount
+        self.newMembersInMonth = newMembersInMonth
+        self.avgBasketEurInMonth = avgBasketEurInMonth
+        self.avgBasketEurInInterval = avgBasketEurInInterval
+        self.basketTotalEurInMonth = basketTotalEurInMonth
+    }
+
+    private enum K: String, CodingKey {
+        case weekIndex = "week_index"
+        case weekIndexLegacy = "weekIndex"
+        case dayOfMonth = "day_of_month"
+        case dayOfMonthLegacy = "dayOfMonth"
+        case operationsCount = "operations_count"
+        case operationsCountLegacy = "operationsCount"
+        case membersCount = "members_count"
+        case membersCountLegacy = "membersCount"
+        case newMembersInMonth = "new_members_in_month"
+        case newMembersInMonthLegacy = "newMembersInMonth"
+        case avgBasketEurInMonth = "avg_basket_eur_in_month"
+        case avgBasketEurInInterval = "avg_basket_eur_in_interval"
+        case basketTotalEurInMonth = "basket_total_eur_in_month"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: K.self)
+        weekIndex = try c.decodeIfPresent(Int.self, forKey: .weekIndex)
+            ?? c.decodeIfPresent(Int.self, forKey: .weekIndexLegacy)
+        dayOfMonth = try c.decodeIfPresent(Int.self, forKey: .dayOfMonth)
+            ?? c.decodeIfPresent(Int.self, forKey: .dayOfMonthLegacy)
+        operationsCount = try c.decodeIfPresent(Int.self, forKey: .operationsCount)
+            ?? c.decodeIfPresent(Int.self, forKey: .operationsCountLegacy)
+        membersCount = try c.decodeIfPresent(Int.self, forKey: .membersCount)
+            ?? c.decodeIfPresent(Int.self, forKey: .membersCountLegacy)
+        newMembersInMonth = try c.decodeIfPresent(Int.self, forKey: .newMembersInMonth)
+            ?? c.decodeIfPresent(Int.self, forKey: .newMembersInMonthLegacy)
+        avgBasketEurInMonth = try c.decodeIfPresent(Double.self, forKey: .avgBasketEurInMonth)
+        avgBasketEurInInterval = try c.decodeIfPresent(Double.self, forKey: .avgBasketEurInInterval)
+        basketTotalEurInMonth = try c.decodeIfPresent(Double.self, forKey: .basketTotalEurInMonth)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: K.self)
+        try c.encodeIfPresent(weekIndex, forKey: .weekIndex)
+        try c.encodeIfPresent(dayOfMonth, forKey: .dayOfMonth)
+        try c.encodeIfPresent(operationsCount, forKey: .operationsCount)
+        try c.encodeIfPresent(membersCount, forKey: .membersCount)
+        try c.encodeIfPresent(newMembersInMonth, forKey: .newMembersInMonth)
+        try c.encodeIfPresent(avgBasketEurInMonth, forKey: .avgBasketEurInMonth)
+        try c.encodeIfPresent(avgBasketEurInInterval, forKey: .avgBasketEurInInterval)
+        try c.encodeIfPresent(basketTotalEurInMonth, forKey: .basketTotalEurInMonth)
+    }
 }
 
 // MARK: - Jeux
@@ -293,11 +367,73 @@ struct NotificationSendPayload: Encodable {
     let segment: String?
     /// `true` : n’envoyer le PassKit qu’au commerçant (même compte), pas aux autres membres.
     var testSelfOnly: Bool = false
+    /// Multi-commerce : envoyer la même campagne vers plusieurs slugs (propriétaire / équipe).
+    var businessSlugs: [String]? = nil
 
     enum CodingKeys: String, CodingKey {
         case title, message, segment
         case testSelfOnly = "test_self_only"
+        case businessSlugs = "business_slugs"
     }
+}
+
+struct NotificationCampaignSendResultDTO: Decodable {
+    let slug: String?
+    let ok: Bool?
+    let accepted: Bool?
+    let code: String?
+    let message: String?
+    let jobId: String?
+    let batchId: String?
+    let totalDevices: Int?
+    /// Vrais clients touchés par la campagne (filtre technique appliqué, = dispatch backend).
+    let deliverableDevices: Int?
+    /// Carte d’aperçu du commerçant (testable via auto-test, hors campagne réelle).
+    let previewDevices: Int?
+    let businessName: String?
+    let membersCount: Int?
+}
+
+struct NotificationBusinessReadinessDTO: Decodable, Identifiable {
+    var id: String { slug ?? businessId ?? UUID().uuidString }
+    let slug: String?
+    let businessId: String?
+    let name: String?
+    let organizationName: String?
+    let loyaltyGroupId: String?
+    let hasNotificationIcon: Bool?
+    let passkitDeviceCount: Int?
+    let passkitRegistrationCount: Int?
+    let webPushCount: Int?
+    let totalDevices: Int?
+    /// Vrais clients que la campagne touchera (filtre technique appliqué côté backend, = dispatch).
+    let deliverableDevices: Int?
+    /// Carte d’aperçu du commerçant : testable via auto-test, hors campagne réelle.
+    let previewDevices: Int?
+    /// `true` : seule la carte d’aperçu est enregistrée (0 vrai client) — prêt pour le test, pas pour une campagne.
+    let previewOnly: Bool?
+    /// Message d’action non bloquant (ex. « aperçu seulement, utilise Tester sur mon téléphone »).
+    let deliveryHint: String?
+    let membersCount: Int?
+    let subscriptionOk: Bool?
+    let ready: Bool?
+    let blockCode: String?
+    let blockMessage: String?
+
+    var displayName: String {
+        let n = (name ?? organizationName ?? slug ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return n.isEmpty ? "Commerce" : n
+    }
+
+    /// Nombre de vrais clients destinataires (priorité au champ backend réconcilié, repli sur le total).
+    var realClientDeviceCount: Int {
+        deliverableDevices ?? totalDevices ?? 0
+    }
+}
+
+struct NotificationReadinessResponse: Decodable {
+    let ok: Bool?
+    let businesses: [NotificationBusinessReadinessDTO]?
 }
 
 struct NotificationSendResponse: Decodable {
@@ -305,15 +441,24 @@ struct NotificationSendResponse: Decodable {
     let sent: Int?
     let sentWebPush: Int?
     let sentPassKit: Int?
-    let sentMerchantApp: Int?
     /// Total d’appareils ciblés (réponse dashboard / fidelity).
     let total: Int?
     let failed: Int?
     let message: String?
     let testSelfOnly: Bool?
+    /// `true` : réponse d’un auto-test (livraison sur la carte d’aperçu du commerçant).
+    let selfTest: Bool?
+    /// Code métier : `no_real_clients`, `self_test_sent`, `self_test_failed`, `no_preview_card`, `no_preview_device`…
+    let code: String?
     /// `true` : HTTP 202 — l’envoi continue sur le serveur (évite timeout sur gros volumes).
     let accepted: Bool?
     let asyncDelivery: Bool?
+    let multi: Bool?
+    let results: [NotificationCampaignSendResultDTO]?
+    let jobId: String?
+    let batchId: String?
+    // Pas de CodingKeys snake_case ici : APIClient décode avec `.convertFromSnakeCase`,
+    // un rawValue `"job_id"` ne matcherait jamais (clé convertie en `jobId` avant lookup).
 }
 
 struct CampaignSegmentsResponse: Decodable {
@@ -523,6 +668,19 @@ struct MemberGameRewardDTO: Decodable, Identifiable {
         case reward
     }
 
+    init(grantId: String?, status: String?, reward: MemberRewardNestedDTO?) {
+        self.grantId = grantId
+        self.status = status
+        self.reward = reward
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        grantId = try c.decodeIfPresent(String.self, forKey: .grantId)
+        status = try c.decodeIfPresent(String.self, forKey: .status)
+        reward = try c.decodeIfPresent(MemberRewardNestedDTO.self, forKey: .reward)
+    }
+
     var displayLabel: String { reward?.label ?? reward?.code ?? "Récompense" }
 }
 
@@ -579,19 +737,6 @@ struct PaymentReconcileSubscriptionResponse: Decodable {
     let subscriptionStatus: String?
 }
 
-/// POST `/api/businesses/:slug/dashboard/dev-simulate-payment` — accès PRO test sans Stripe / App Store.
-struct DevSimulatePaymentResponse: Decodable {
-    let ok: Bool?
-    let status: String?
-    let simulated: Bool?
-    let hasActiveSubscription: Bool?
-
-    enum CodingKeys: String, CodingKey {
-        case ok, status, simulated
-        case hasActiveSubscription = "has_active_subscription"
-    }
-}
-
 // MARK: - Paiement App Store (StoreKit 2)
 
 struct PaymentAppleSyncTransactionPayload: Encodable {
@@ -609,6 +754,21 @@ struct PaymentAppleSyncResponse: Decodable {
     let hasActiveSubscription: Bool?
     let hasPaidMerchantSubscription: Bool?
     let subscriptionStatus: String?
+    let entitlements: MerchantEntitlementsDTO?
+    let allowedBusinesses: Int?
+    let usedBusinesses: Int?
+    let canCreateBusiness: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case ok
+        case hasActiveSubscription = "has_active_subscription"
+        case hasPaidMerchantSubscription = "has_paid_merchant_subscription"
+        case subscriptionStatus = "subscription_status"
+        case entitlements
+        case allowedBusinesses = "allowed_businesses"
+        case usedBusinesses = "used_businesses"
+        case canCreateBusiness = "can_create_business"
+    }
 }
 
 struct PaymentAppleReconcileResponse: Decodable {
@@ -683,11 +843,14 @@ struct PlacesPlaceDetailsResponse: Decodable {
     let placeId: String
     let name: String?
     let formattedAddress: String?
+    /// Lien officiel Google Maps → onglet Avis (`googleMapsLinks.reviewsUri`).
+    let googleMapsReviewsUri: String?
 
     enum CodingKeys: String, CodingKey {
         case placeId = "place_id"
         case name
         case formattedAddress = "formatted_address"
+        case googleMapsReviewsUri = "google_maps_reviews_uri"
     }
 }
 

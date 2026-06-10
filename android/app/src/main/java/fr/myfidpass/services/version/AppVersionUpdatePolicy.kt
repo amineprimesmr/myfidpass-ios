@@ -15,7 +15,8 @@ object AppVersionUpdatePolicy {
         return nowMs - last >= MINIMUM_LOOKUP_INTERVAL_MS
     }
 
-    fun recordStoreLookupAttempt(context: Context, atMs: Long = System.currentTimeMillis()) {
+    /** Lookup Play Store réussi (page parsée) — pas en cas d’échec réseau. */
+    fun recordSuccessfulStoreLookup(context: Context, atMs: Long = System.currentTimeMillis()) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit()
             .putLong(KEY_LAST_LOOKUP_AT, atMs)

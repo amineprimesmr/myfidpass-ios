@@ -30,6 +30,8 @@ struct CardCustomizationBindPack {
     let programType: Binding<String>
     let tierPoints: Binding<[String]>
     let tierLabels: Binding<[String]>
+    /// Montant minimum d'achat (€) par palier — optionnel.
+    let tierMinPurchases: Binding<[String]>
     let requiredStamps: Binding<Int>
     let previewStampsCount: Binding<Int>
     let previewPointsCount: Binding<Int>
@@ -399,9 +401,12 @@ struct CardElementCustomizationSheet: View {
             if pack.programType.wrappedValue == "points" {
                 var pts = pack.tierPoints.wrappedValue
                 var labs = pack.tierLabels.wrappedValue
+                var mins = pack.tierMinPurchases.wrappedValue
                 MyCardProgramDefaults.ensureTierArraysCapacity(tierPoints: &pts, tierLabels: &labs)
+                while mins.count < pts.count { mins.append("") }
                 pack.tierPoints.wrappedValue = pts
                 pack.tierLabels.wrappedValue = labs
+                pack.tierMinPurchases.wrappedValue = mins
                 visiblePointsTierRows = MyCardProgramDefaults.resolvedVisibleTierRowCount(
                     tierPoints: pts,
                     tierLabels: labs
@@ -465,12 +470,13 @@ struct CardElementCustomizationSheet: View {
             applyRewardExamplePresets()
         } label: {
             Text("Appliquer les exemples")
-                .font(.subheadline)
-                .foregroundStyle(AppTheme.Colors.primary)
+                .font(.subheadline.weight(.medium))
                 .frame(maxWidth: .infinity)
         }
-        .buttonStyle(.plain)
-        .padding(.top, 4)
+        .buttonBorderShape(.roundedRectangle(radius: 16))
+        .controlSize(.regular)
+        .glassStyle()
+        .padding(.top, 6)
     }
 
     private func applyRewardExamplePresets() {
@@ -507,9 +513,11 @@ struct CardElementCustomizationSheet: View {
     private func removePointsTier(at index: Int) {
         var pts = pack.tierPoints.wrappedValue
         var labs = pack.tierLabels.wrappedValue
-        MyCardProgramDefaults.removePointsTier(at: index, tierPoints: &pts, tierLabels: &labs)
+        var mins = pack.tierMinPurchases.wrappedValue
+        MyCardProgramDefaults.removePointsTier(at: index, tierPoints: &pts, tierLabels: &labs, tierMinPurchases: &mins)
         pack.tierPoints.wrappedValue = pts
         pack.tierLabels.wrappedValue = labs
+        pack.tierMinPurchases.wrappedValue = mins
         visiblePointsTierRows = MyCardProgramDefaults.resolvedVisibleTierRowCount(
             tierPoints: pts,
             tierLabels: labs
@@ -519,10 +527,13 @@ struct CardElementCustomizationSheet: View {
     private func ensureTierArrayCapacity(for index: Int) {
         var pts = pack.tierPoints.wrappedValue
         var labs = pack.tierLabels.wrappedValue
+        var mins = pack.tierMinPurchases.wrappedValue
         while pts.count <= index { pts.append("") }
         while labs.count <= index { labs.append("") }
+        while mins.count <= index { mins.append("") }
         pack.tierPoints.wrappedValue = pts
         pack.tierLabels.wrappedValue = labs
+        pack.tierMinPurchases.wrappedValue = mins
     }
 
     // MARK: - Bonus d'inscription (affichage minimal : tampons uniquement ; points sans réglage — fixe 10 côté modèle)
@@ -754,27 +765,49 @@ struct CardElementCustomizationSheet: View {
 
     private var pointsRulesContent: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Palier à 10 pts = début du jeu (inscription). Ajoutez ou retirez des paliers librement.")
-                .font(.caption)
-                .foregroundStyle(AppTheme.Colors.textSecondary)
-                .fixedSize(horizontal: false, vertical: true)
             ForEach(0..<visiblePointsTierRows, id: \.self) { i in
                 pointsTierRow(index: i)
             }
             if visiblePointsTierRows < MyCardPointsRewardTiers.slotCount {
-                Button {
-                    ensureTierArrayCapacity(for: visiblePointsTierRows)
-                    visiblePointsTierRows += 1
-                } label: {
-                    Label("Ajouter une récompense", systemImage: "plus.circle.fill")
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(AppTheme.Colors.primary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .buttonStyle(.plain)
-                .padding(.top, 2)
+                addRewardRow
             }
         }
+    }
+
+    private var addRewardRow: some View {
+        Button {
+            ensureTierArrayCapacity(for: visiblePointsTierRows)
+            visiblePointsTierRows += 1
+        } label: {
+            HStack(alignment: .top, spacing: 10) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(AppTheme.Colors.cardBackground)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .strokeBorder(AppTheme.Colors.textSecondary.opacity(0.12), lineWidth: 1)
+                        )
+                    Image(systemName: "plus")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(AppTheme.Colors.primary)
+                }
+                .frame(width: 76, height: 44)
+                Text("Ajouter une récompense")
+                    .font(.subheadline)
+                    .foregroundStyle(AppTheme.Colors.textSecondary)
+                    .padding(.vertical, 12)
+                    .padding(.horizontal, 12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(AppTheme.Colors.cardBackground)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .strokeBorder(AppTheme.Colors.textSecondary.opacity(0.12), lineWidth: 1)
+                    )
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text("Ajouter une récompense"))
     }
 
     /// Palier « Début du jeu » (mode tampons uniquement).
@@ -922,11 +955,38 @@ struct CardElementCustomizationSheet: View {
                     .accessibilityLabel(Text("Supprimer ce palier"))
                 }
             }
-            if isSignupTier {
-                Text("10 pts — récompense d’inscription")
-                    .font(.caption2)
+            HStack(spacing: 8) {
+                Text("Min. achat")
+                    .font(.caption)
                     .foregroundStyle(AppTheme.Colors.textSecondary)
+                TextField("", text: Binding(
+                    get: {
+                        guard index < pack.tierMinPurchases.wrappedValue.count else { return "" }
+                        return pack.tierMinPurchases.wrappedValue[index]
+                    },
+                    set: { newVal in
+                        var arr = pack.tierMinPurchases.wrappedValue
+                        while arr.count <= index { arr.append("") }
+                        arr[index] = newVal.filter { $0.isNumber || $0 == "," || $0 == "." }
+                        pack.tierMinPurchases.wrappedValue = arr
+                    }
+                ), prompt: Text("Optionnel").foregroundStyle(AppTheme.Colors.textSecondary.opacity(0.85)))
+                .keyboardType(.decimalPad)
+                .textFieldStyle(.plain)
+                .padding(.vertical, 8)
+                .padding(.horizontal, 10)
+                .background(AppTheme.Colors.cardBackground.opacity(0.85))
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(AppTheme.Colors.textSecondary.opacity(0.1), lineWidth: 1)
+                )
+                Text("€")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(AppTheme.Colors.textSecondary)
+                Spacer(minLength: 0)
             }
+            .padding(.leading, 86)
         }
     }
 

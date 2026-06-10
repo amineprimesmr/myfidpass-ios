@@ -35,9 +35,11 @@ enum CommerceStatisticsTheme {
     static let accentPurple = Color(red: 0.69, green: 0.32, blue: 0.87)
     static let accentPink = Color(red: 1.0, green: 0.18, blue: 0.57)
     static let accentTeal = Color(red: 0.18, green: 0.62, blue: 0.78)
-    /// Vert de référence des tendances KPI (aligné sur « +x nouveaux » de la carte Membres).
-    static let kpiTrendPositiveGreen = Color(red: 0.18, green: 0.68, blue: 0.43)
-    static let positive = Color(red: 0.19, green: 0.82, blue: 0.35)
+    /// Vert DA statistiques (#00c60e) — courbes, tendances, libellés positifs.
+    static let brandGreen = Color(red: 0, green: 198 / 255.0, blue: 14 / 255.0)
+    static let kpiTrendPositiveGreen = brandGreen
+    static let positive = brandGreen
+    static let chartLine = brandGreen
     static let negative = Color(red: 1.0, green: 0.27, blue: 0.23)
     static let pillBackground = Color(red: 0.22, green: 0.22, blue: 0.24)
 

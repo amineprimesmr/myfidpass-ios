@@ -35,7 +35,12 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import fr.myfidpass.ui.mycard.MyCardRewardsSync
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -177,6 +182,11 @@ private fun RewardsSheet(
     canSaveRewards: Boolean,
     rewardsSaving: Boolean,
 ) {
+    var visibleTierRows by remember(draft.tierPoints, draft.tierLabels) {
+        mutableStateOf(
+            MyCardRewardsSync.resolvedVisibleTierRowCount(draft.tierPoints, draft.tierLabels),
+        )
+    }
     SheetPrimaryButton(
         label = "Enregistrer",
         enabled = canSaveRewards && !rewardsSaving,
@@ -201,42 +211,101 @@ private fun RewardsSheet(
             onDraftChange(draft.copy(stampRewardLabel = it))
         }
     } else {
-        PointsRewardRow(
-            left = "10 pts",
-            leftTint = LinkBlue,
-            value = draft.startGameRewardLabel,
-            placeholder = "Boisson offerte",
-            lockedLeft = true,
-        ) { onDraftChange(draft.copy(startGameRewardLabel = it)) }
-        val examples = listOf("50", "100", "150", "200", "250")
+        val examples = listOf("10", "50", "100", "150", "200", "250", "300", "350")
         val rewardExamples = listOf(
-            "Dessert offert", "Cheese offert", "Menu offert", "Formule du jour", "Réduction sur l'addition",
+            "Boisson offerte", "Dessert offert", "Cheese offert", "Menu offert",
+            "Formule du jour", "Réduction sur l'addition", "Cadeau surprise", "Offre spéciale",
         )
-        for (i in 0 until 5) {
+        for (i in 0 until visibleTierRows) {
+            val lockedLeft = i == 0
             PointsRewardRow(
-                left = draft.tierPoints.getOrElse(i) { "" },
+                left = if (lockedLeft) "10 pts" else draft.tierPoints.getOrElse(i) { "" },
                 leftPlaceholder = examples.getOrElse(i) { "" },
-                leftTint = Color.Black,
-                value = draft.tierLabels.getOrElse(i) { "" },
+                leftTint = if (lockedLeft) LinkBlue else Color.Black,
+                value = if (lockedLeft) draft.startGameRewardLabel else draft.tierLabels.getOrElse(i) { "" },
                 placeholder = rewardExamples.getOrElse(i) { "" },
-                lockedLeft = false,
-                onLeftChange = { v ->
+                lockedLeft = lockedLeft,
+                minPurchase = draft.tierMinPurchases.getOrElse(i) { "" },
+                onMinPurchaseChange = { v ->
+                    val mins = draft.tierMinPurchases.toMutableList()
+                    while (mins.size <= i) mins.add("")
+                    mins[i] = v.filter { it.isDigit() || it == ',' || it == '.' }
+                    onDraftChange(draft.copy(tierMinPurchases = mins))
+                },
+                onLeftChange = if (lockedLeft) null else { v ->
                     val pts = draft.tierPoints.toMutableList()
                     while (pts.size <= i) pts.add("")
                     pts[i] = v.filter { it.isDigit() }
                     onDraftChange(draft.copy(tierPoints = pts))
                 },
             ) { v ->
-                val labs = draft.tierLabels.toMutableList()
-                while (labs.size <= i) labs.add("")
-                labs[i] = v
-                onDraftChange(draft.copy(tierLabels = labs))
+                if (lockedLeft) {
+                    onDraftChange(draft.copy(startGameRewardLabel = v))
+                } else {
+                    val labs = draft.tierLabels.toMutableList()
+                    while (labs.size <= i) labs.add("")
+                    labs[i] = v
+                    onDraftChange(draft.copy(tierLabels = labs))
+                }
             }
+        }
+        if (visibleTierRows < MyCardRewardsSync.SLOT_COUNT) {
+            AddRewardRow(onClick = { visibleTierRows += 1 })
         }
     }
     Spacer(Modifier.height(8.dp))
-    TextButton(onClick = onApplyExamples, modifier = Modifier.fillMaxWidth()) {
-        Text("Appliquer les exemples", color = LinkBlue, fontSize = 15.sp)
+    SheetSecondaryGlassButton(label = "Appliquer les exemples", onClick = onApplyExamples)
+}
+
+@Composable
+private fun AddRewardRow(onClick: () -> Unit) {
+    Spacer(Modifier.height(10.dp))
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 2.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Box(
+            Modifier
+                .width(76.dp)
+                .height(44.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(CardBg)
+                .border(1.dp, BorderColor, RoundedCornerShape(12.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.Filled.Add, contentDescription = null, tint = LinkBlue, modifier = Modifier.size(18.dp))
+        }
+        Box(
+            Modifier
+                .weight(1f)
+                .clip(RoundedCornerShape(12.dp))
+                .background(CardBg)
+                .border(1.dp, BorderColor, RoundedCornerShape(12.dp))
+                .padding(horizontal = 12.dp, vertical = 12.dp),
+        ) {
+            Text("Ajouter une récompense", color = Muted, fontSize = 15.sp)
+        }
+    }
+}
+
+@Composable
+private fun SheetSecondaryGlassButton(label: String, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .height(44.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(Color.White.copy(alpha = 0.72f))
+            .border(1.dp, Color.Black.copy(alpha = 0.06f), RoundedCornerShape(16.dp))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(label, fontWeight = FontWeight.Medium, color = Color.Black.copy(alpha = 0.72f), fontSize = 15.sp)
     }
 }
 
@@ -296,38 +365,58 @@ private fun PointsRewardRow(
     value: String,
     placeholder: String,
     lockedLeft: Boolean,
+    minPurchase: String = "",
+    onMinPurchaseChange: ((String) -> Unit)? = null,
     onLeftChange: ((String) -> Unit)? = null,
     onChange: (String) -> Unit,
 ) {
     Spacer(Modifier.height(10.dp))
-    RewardFieldRow(
-        leftContent = {
-            if (lockedLeft) {
-                Box(
-                    Modifier
-                        .width(76.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(CardBg.copy(alpha = 0.6f))
-                        .border(1.dp, BorderColor, RoundedCornerShape(12.dp))
-                        .padding(vertical = 12.dp, horizontal = 6.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(left, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = leftTint, textAlign = TextAlign.Center)
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        RewardFieldRow(
+            leftContent = {
+                if (lockedLeft) {
+                    Box(
+                        Modifier
+                            .width(76.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(CardBg.copy(alpha = 0.6f))
+                            .border(1.dp, BorderColor, RoundedCornerShape(12.dp))
+                            .padding(vertical = 12.dp, horizontal = 6.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(left, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = leftTint, textAlign = TextAlign.Center)
+                    }
+                } else {
+                    SheetTextField(
+                        value = left,
+                        placeholder = leftPlaceholder,
+                        onValueChange = { onLeftChange?.invoke(it) },
+                        modifier = Modifier.width(76.dp),
+                        textAlign = TextAlign.Center,
+                    )
                 }
-            } else {
+            },
+            value = value,
+            placeholder = placeholder,
+            onChange = onChange,
+        )
+        if (onMinPurchaseChange != null) {
+            Row(
+                Modifier.padding(start = 86.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text("Min. achat", fontSize = 12.sp, color = Muted)
                 SheetTextField(
-                    value = left,
-                    placeholder = leftPlaceholder,
-                    onValueChange = { onLeftChange?.invoke(it) },
-                    modifier = Modifier.width(76.dp),
-                    textAlign = TextAlign.Center,
+                    value = minPurchase,
+                    placeholder = "Optionnel",
+                    onValueChange = onMinPurchaseChange,
+                    modifier = Modifier.weight(1f),
                 )
+                Text("€", fontSize = 12.sp, color = Muted)
             }
-        },
-        value = value,
-        placeholder = placeholder,
-        onChange = onChange,
-    )
+        }
+    }
 }
 
 @Composable

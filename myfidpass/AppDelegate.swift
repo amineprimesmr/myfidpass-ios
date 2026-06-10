@@ -98,10 +98,18 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
         let userInfo = notification.request.content.userInfo
-        if let action = userInfo["myfidpass_action"] as? String, action == "dashboard_sync" {
-            SyncService.requestDashboardSyncFromPush()
-            completionHandler([])
-            return
+        if let action = userInfo["myfidpass_action"] as? String {
+            if action == "dashboard_sync" {
+                SyncService.requestDashboardSyncFromPush()
+                completionHandler([])
+                return
+            }
+            // Accusé « Campagne envoyée » : supprimé côté serveur ; on n'affiche jamais ce doublon
+            // du pop-up « Campagne lancée » (défense si un ancien backend l'envoie encore).
+            if action == "campaign_receipt" {
+                completionHandler([])
+                return
+            }
         }
         completionHandler([.banner, .sound, .badge])
     }
@@ -114,12 +122,6 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         let userInfo = response.notification.request.content.userInfo
         if let action = userInfo["myfidpass_action"] as? String {
             switch action {
-            case "campaign_receipt":
-                if AuthStorage.isCachedWorkspaceStaff {
-                    NotificationCenter.default.post(name: .myfidpassOpenHomeScanner, object: nil)
-                } else {
-                    NotificationCenter.default.post(name: .myfidpassOpenCampaignsTab, object: nil)
-                }
             case "google_business_review":
                 var info: [AnyHashable: Any] = [:]
                 if let reviewId = userInfo["review_id"] as? String { info["review_id"] = reviewId }

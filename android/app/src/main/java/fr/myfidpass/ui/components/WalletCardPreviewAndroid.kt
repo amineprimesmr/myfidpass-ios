@@ -792,6 +792,7 @@ fun GoogleWalletLoyaltyPreviewAndroid(
     headerRightText: String = "Récompenses ↗",
     completionHighlightZones: Set<CardPreviewEditZone> = emptySet(),
     onZoneTap: ((CardPreviewEditZone) -> Unit)? = null,
+    onCompletionPillTap: ((CardPreviewEditZone) -> Unit)? = null,
 ) {
     val isStamps = programType?.trim()?.lowercase() == "stamps"
     val primary = backgroundHex.toComposeColorOr(Color(0xFF2563EB))
@@ -819,6 +820,7 @@ fun GoogleWalletLoyaltyPreviewAndroid(
     val heroTapZone = if (isStamps) CardPreviewEditZone.MAIN_METRICS else CardPreviewEditZone.BACKGROUND_IMAGE
     val logoNeedsSetup = CardPreviewEditZone.LOGO_BAND in completionHighlightZones
     val rewardsHeaderNeedsSetup = CardPreviewEditZone.HEADER_RIGHT in completionHighlightZones
+    val pillTapHandler = onCompletionPillTap ?: onZoneTap
 
     BoxWithConstraints(
         modifier = modifier.fillMaxWidth(),
@@ -1014,13 +1016,13 @@ fun GoogleWalletLoyaltyPreviewAndroid(
             }
             }
 
-            if (completionHighlightZones.isNotEmpty() && onZoneTap != null) {
+            if (completionHighlightZones.isNotEmpty() && pillTapHandler != null) {
                 CardPreviewCompletionPillsOverlay(
                     cardWidth = cardWidthPx,
                     totalHeight = totalHeightPx,
                     zones = completionHighlightZones,
                     layoutStyle = CardPreviewPillsLayoutStyle.GOOGLE_WALLET,
-                    onTapZone = onZoneTap,
+                    onTapZone = pillTapHandler,
                     modifier = Modifier.fillMaxSize(),
                 )
             }

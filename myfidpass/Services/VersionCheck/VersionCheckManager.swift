@@ -17,7 +17,7 @@ final class VersionCheckManager {
 
     /// Incrémenter après changement de règle métier (réinitialise le « Plus tard » obsolète une fois).
     private static let policyVersionKey = "myfidpass.appUpdate.policyVersion"
-    private static let currentPolicyVersion = 3
+    private static let currentPolicyVersion = 4
 
     private static let dismissedStoreVersionKey = "myfidpass.appUpdate.dismissedStoreVersion"
 
@@ -43,25 +43,41 @@ final class VersionCheckManager {
                   let jsonResults = rawJSON["results"] as? [Any],
                   let jsonValue = jsonResults.first as? [String: Any],
                   let availableVersion = jsonValue["version"] as? String,
-                  let currentVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String,
-                  let appLogo = jsonValue["artworkUrl512"] as? String,
-                  let appURL = (jsonValue["trackViewUrl"] as? String)?.components(separatedBy: "?").first,
-                  let releaseNotes = jsonValue["releaseNotes"] as? String else {
+                  let currentVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String else {
+                versionCheckLog.debug("VersionCheck: lookup JSON incomplet (pas de version store ou bundle local).")
                 return nil
             }
+
+            AppVersionUpdatePolicy.recordSuccessfulStoreLookup()
 
             let current = currentVersion.trimmingCharacters(in: .whitespacesAndNewlines)
             let available = availableVersion.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !current.isEmpty, !available.isEmpty else { return nil }
 
+            let releaseNotes = (jsonValue["releaseNotes"] as? String) ?? ""
+            let appLogo = (jsonValue["artworkUrl512"] as? String) ?? ""
+            let trackId: Int? = {
+                if let n = jsonValue["trackId"] as? Int { return n }
+                if let n = jsonValue["trackId"] as? NSNumber { return n.intValue }
+                return nil
+            }()
+            let appURL = (jsonValue["trackViewUrl"] as? String)?
+                .components(separatedBy: "?").first
+                ?? trackId.map { "https://apps.apple.com/app/id\($0)" }
+                ?? ""
+
             // Une seule source de vérité : ordre **numérique** (comme Réglages iOS / App Store).
             guard isStoreVersionStrictlyNewerThanInstalled(store: available, installed: current) else {
+                versionCheckLog.debug("VersionCheck: pas de MAJ (\(current, privacy: .public) ≥ store \(available, privacy: .public)).")
                 return nil
             }
 
             if UserDefaults.standard.string(forKey: Self.dismissedStoreVersionKey) == available {
+                versionCheckLog.debug("VersionCheck: MAJ \(available, privacy: .public) ignorée (Plus tard).")
                 return nil
             }
+
+            versionCheckLog.info("VersionCheck: MAJ disponible \(current, privacy: .public) → \(available, privacy: .public)")
 
             return ReturnResult(
                 currentVersion: current,

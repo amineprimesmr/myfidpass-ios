@@ -4,6 +4,13 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 @Serializable
+data class PublicBusinessInfoResponse(
+    val name: String? = null,
+    @SerialName("organizationName") val organizationName: String? = null,
+    @SerialName("google_review_write_url") val googleReviewWriteUrl: String? = null,
+)
+
+@Serializable
 data class CreateBusinessRequest(
     val name: String,
     val slug: String? = null,

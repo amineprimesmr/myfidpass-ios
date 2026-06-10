@@ -725,7 +725,7 @@ struct GoogleBusinessHubView: View {
 
     private func mapsUrlString() -> String? {
         guard let placeId = vm.status?.matchedPlaceId, !placeId.isEmpty else { return nil }
-        return "https://www.google.com/maps/place/?q=place_id:\(placeId)"
+        return CommerceStatsGoogleMapsOpener.mapsPlaceURL(placeId: placeId)?.absoluteString
     }
 
     private func newReviewUrlString() -> String? {

@@ -82,6 +82,7 @@ struct SlideToConfirm: View {
                         }
                         if maxLimit <= 0 { return }
                         if offsetX >= maxLimit - 1.5 {
+                            MerchantUXFeedback.shared.play(.confirm)
                             onSwiped()
                             animateText = false
                             withAnimation(.smooth) {

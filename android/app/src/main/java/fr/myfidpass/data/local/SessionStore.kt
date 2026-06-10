@@ -8,6 +8,7 @@ import fr.myfidpass.data.dto.AuthLoginResponse
 import fr.myfidpass.data.dto.AuthMeResponse
 import fr.myfidpass.data.dto.AuthRefreshResponse
 import fr.myfidpass.data.dto.BusinessDto
+import fr.myfidpass.data.dto.MerchantEntitlementsDto
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
@@ -130,6 +131,29 @@ class SessionStore(context: Context) {
     fun hasPaidMerchantSubscription(): Boolean {
         if (merchantScanBenchAccessActive) return true
         return serverReportsPaidMerchantSubscription == true
+    }
+
+    var allowedBusinesses: Int
+        get() = prefs.getInt(KEY_ALLOWED_BUSINESSES, 1).coerceIn(1, 5)
+        set(value) = prefs.edit().putInt(KEY_ALLOWED_BUSINESSES, value.coerceIn(1, 5)).apply()
+
+    var usedBusinesses: Int
+        get() = prefs.getInt(KEY_USED_BUSINESSES, businesses.size.coerceAtLeast(0))
+        set(value) = prefs.edit().putInt(KEY_USED_BUSINESSES, maxOf(0, value)).apply()
+
+    var canCreateBusiness: Boolean
+        get() = prefs.getBoolean(KEY_CAN_CREATE_BUSINESS, usedBusinesses < allowedBusinesses)
+        set(value) = prefs.edit().putBoolean(KEY_CAN_CREATE_BUSINESS, value).apply()
+
+    fun applyEntitlements(ent: MerchantEntitlementsDto?) {
+        if (ent == null) {
+            usedBusinesses = businesses.size
+            return
+        }
+        ent.allowedBusinesses?.let { allowedBusinesses = it.coerceIn(1, 5) }
+        ent.usedBusinesses?.let { usedBusinesses = maxOf(0, it) }
+        ent.canCreateBusiness?.let { canCreateBusiness = it }
+        MerchantScanBenchAccess.applyFullEntitlements(this)
     }
 
     /** Paywall obligatoire post-inscription (mémoire — aligné iOS `isCompletingSignupPaywallPhase`). */
@@ -280,6 +304,7 @@ class SessionStore(context: Context) {
         applyUserSession(r.user, passwordLoginField)
         hasActiveSubscription = r.hasActiveSubscription
         serverReportsPaidMerchantSubscription = r.hasPaidMerchantSubscription
+        applyEntitlements(r.entitlements)
         if (r.businesses.isNotEmpty()) {
             if (currentBusinessSlug == null || r.businesses.none { it.slug == currentBusinessSlug }) {
                 currentBusinessSlug = r.businesses.first().slug
@@ -319,6 +344,9 @@ class SessionStore(context: Context) {
         if (r.hasPaidMerchantSubscription != null) {
             serverReportsPaidMerchantSubscription = r.hasPaidMerchantSubscription
         }
+        if (r.entitlements != null) {
+            applyEntitlements(r.entitlements)
+        }
     }
 
     fun applyMeResponse(me: AuthMeResponse) {
@@ -327,6 +355,7 @@ class SessionStore(context: Context) {
         applyUserSession(me.user)
         hasActiveSubscription = me.hasActiveSubscription
         serverReportsPaidMerchantSubscription = me.hasPaidMerchantSubscription
+        applyEntitlements(me.entitlements)
         if (me.businesses.isNotEmpty()) {
             if (currentBusinessSlug == null || me.businesses.none { it.slug == currentBusinessSlug }) {
                 currentBusinessSlug = me.businesses.first().slug
@@ -350,5 +379,8 @@ class SessionStore(context: Context) {
         private const val KEY_STAFF_LOGIN = "user_staff_login"
         private const val KEY_AUTH_PROVIDER = "auth_provider"
         private const val KEY_SCAN_BENCH_ACTIVE = "merchant_scan_bench_access_active"
+        private const val KEY_ALLOWED_BUSINESSES = "allowed_businesses"
+        private const val KEY_USED_BUSINESSES = "used_businesses"
+        private const val KEY_CAN_CREATE_BUSINESS = "can_create_business"
     }
 }

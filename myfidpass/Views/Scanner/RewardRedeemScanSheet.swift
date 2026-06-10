@@ -171,9 +171,13 @@ struct RewardRedeemScanSheet: View {
             && (data.mode == "stamps" || data.pointsRequired > 0)
     }
 
+    private var qrPayload: RewardRedeemQRPayload? {
+        RewardRedeemQRPayload.parse(data.barcode)
+    }
+
     private var qrTierIndex: Int? {
-        guard let qrPayload else { return nil }
-        if case .points(_, let tier, _) = qrPayload { return tier }
+        guard let payload = qrPayload else { return nil }
+        if case .points(_, let tier, _) = payload { return tier }
         return nil
     }
 
@@ -298,7 +302,7 @@ struct RewardRedeemScanSheet: View {
         )
         return SlideToConfirm(config: cfg) {
             guard canSlideToRedeem else { return }
-            UINotificationFeedbackGenerator().notificationOccurred(.success)
+            MerchantUXFeedback.shared.play(.success)
             Task {
                 loading = true
                 errorMessage = nil
@@ -306,7 +310,7 @@ struct RewardRedeemScanSheet: View {
                     errorMessage = err
                     loading = false
                     slideResetID = UUID()
-                    UINotificationFeedbackGenerator().notificationOccurred(.error)
+                    MerchantUXFeedback.shared.play(.error)
                 } else {
                     validated = true
                     loading = false

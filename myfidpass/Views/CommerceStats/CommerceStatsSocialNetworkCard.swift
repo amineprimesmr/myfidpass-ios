@@ -10,7 +10,7 @@ import SwiftUI
 
 // MARK: - Palette couleurs par réseau
 
-private enum SocialNetworkPalette {
+enum CommerceStatsSocialNetworkPalette {
 
     static func lineColor(for networkId: String) -> Color {
         switch networkId {
@@ -48,6 +48,7 @@ private enum SocialNetworkPalette {
         case "social-instagram": return "SocialInstagram"
         case "social-tiktok":    return "SocialTikTok"
         case "social-facebook":  return "SocialFacebook"
+        case "social-twitter":   return "SocialX"
         default:                 return nil
         }
     }
@@ -76,7 +77,7 @@ private struct SocialNetworkLogo: View {
 
     var body: some View {
         ZStack {
-            if let asset = SocialNetworkPalette.assetName(for: networkId) {
+            if let asset = CommerceStatsSocialNetworkPalette.assetName(for: networkId) {
                 Image(asset)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
@@ -186,8 +187,8 @@ struct CommerceStatsSocialNetworkCard: View {
 
     @State private var showInfoSheet = false
 
-    private var lc: Color { SocialNetworkPalette.lineColor(for: detail.networkId) }
-    private var netLabel: String { SocialNetworkPalette.label(for: detail.networkId) }
+    private var lc: Color { CommerceStatsSocialNetworkPalette.lineColor(for: detail.networkId) }
+    private var netLabel: String { CommerceStatsSocialNetworkPalette.label(for: detail.networkId) }
 
     var body: some View {
         Group {
@@ -196,7 +197,7 @@ struct CommerceStatsSocialNetworkCard: View {
                     .alert(netLabel, isPresented: $showInfoSheet) {
                         Button("OK", role: .cancel) {}
                     } message: {
-                        Text(SocialNetworkPalette.infoMessage(for: detail.networkId))
+                        Text(CommerceStatsSocialNetworkPalette.infoMessage(for: detail.networkId))
                     }
             } else {
                 mainStack
@@ -279,7 +280,7 @@ struct CommerceStatsSocialNetworkCard: View {
     private var chartBlock: some View {
         let values = detail.sparkline
         let peakIdx = values.enumerated().max(by: { $0.element < $1.element })?.offset ?? max(0, values.count - 1)
-        let areaColors = SocialNetworkPalette.areaColors(for: detail.networkId)
+        let areaColors = CommerceStatsSocialNetworkPalette.areaColors(for: detail.networkId)
 
         return ZStack(alignment: .topLeading) {
             SocialNetworkDotGrid()
@@ -346,7 +347,7 @@ struct CommerceStatsSocialNetworkListButtonRow: View {
     let onRowTap: () -> Void
 
     @State private var showInfo = false
-    private var netLabel: String { SocialNetworkPalette.label(for: detail.networkId) }
+    private var netLabel: String { CommerceStatsSocialNetworkPalette.label(for: detail.networkId) }
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
@@ -366,7 +367,7 @@ struct CommerceStatsSocialNetworkListButtonRow: View {
         .alert(netLabel, isPresented: $showInfo) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text(SocialNetworkPalette.infoMessage(for: detail.networkId))
+            Text(CommerceStatsSocialNetworkPalette.infoMessage(for: detail.networkId))
         }
     }
 }

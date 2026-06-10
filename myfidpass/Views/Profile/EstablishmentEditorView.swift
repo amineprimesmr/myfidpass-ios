@@ -1331,7 +1331,7 @@ struct MerchantEstablishmentForm: View {
             let settings = try await APIClient.shared.request(APIEndpoint.businessSettings(slug: slug)) as BusinessSettingsResponse
             await MainActor.run {
                 suppressAutosave = true
-                MerchantLogoAssetCache.applyMerchantLogoTimestamps(from: settings)
+                MerchantLogoAssetCache.applyMerchantLogoTimestamps(from: settings, slug: slug)
                 if let name = settings.organizationName, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     organizationName = name
                     if let t = dataService.currentCardTemplate() { t.displayName = name }
@@ -1491,7 +1491,7 @@ struct MerchantEstablishmentForm: View {
                     b.logoURL = apiLogoURL
                     try? viewContext.save()
                     await MainActor.run { logoURL = apiLogoURL }
-                    UserDefaults.standard.set(Date(), forKey: SyncService.lastLogoUploadAtKey)
+                    MerchantMediaUploadOwnership.recordLogoUpload(for: slug)
                 }
                 if logoIconBase64 != nil {
                     let base = APIConfig.baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
@@ -1499,7 +1499,7 @@ struct MerchantEstablishmentForm: View {
                     t.logoIconURL = apiIconURL
                     try? viewContext.save()
                     await MainActor.run { logoIconURL = apiIconURL }
-                    UserDefaults.standard.set(Date(), forKey: SyncService.lastLogoIconUploadAtKey)
+                    MerchantMediaUploadOwnership.recordLogoIconUpload(for: slug)
                 }
                 await loadProfileFromServer()
                 await syncService.syncAfterServerMutation()
@@ -1549,7 +1549,8 @@ struct MerchantEstablishmentForm: View {
     private func applyEstablishmentCroppedImage(_ cropped: UIImage, spec: ImageCropSpec) {
         switch spec {
         case .walletStripLogo:
-            let path = CardLogoStorage.saveImage(cropped)
+            guard let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines), !slug.isEmpty else { return }
+            let path = CardLogoStorage.saveImage(cropped, slug: slug)
             logoURL = path ?? ""
             if let p = path {
                 dataService.updateBusiness(name: nil, email: nil, phone: nil, address: nil, logoURL: p)
@@ -1560,7 +1561,8 @@ struct MerchantEstablishmentForm: View {
                 }
             }
         case .squareIcon:
-            let path = CardLogoStorage.saveLogoIconImage(cropped)
+            guard let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines), !slug.isEmpty else { return }
+            let path = CardLogoStorage.saveLogoIconImage(cropped, slug: slug)
             logoIconURL = path ?? ""
             if let p = path, let t = dataService.currentCardTemplate() {
                 t.logoIconURL = p

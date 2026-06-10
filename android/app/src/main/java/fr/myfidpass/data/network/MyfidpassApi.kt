@@ -31,6 +31,7 @@ import fr.myfidpass.data.dto.CreditPointsResponse
 import fr.myfidpass.data.dto.DashboardEvolutionResponse
 import fr.myfidpass.data.dto.DashboardTrafficPatternsResponse
 import fr.myfidpass.data.dto.MerchantAccountingPackResponse
+import fr.myfidpass.data.dto.PublicBusinessInfoResponse
 import fr.myfidpass.data.dto.TransactionExportJsonResponse
 import fr.myfidpass.data.dto.GoogleAuthRequest
 import fr.myfidpass.data.dto.DeviceRegisterRequest
@@ -40,17 +41,25 @@ import fr.myfidpass.data.dto.GoogleBusinessReviewReplyRequest
 import fr.myfidpass.data.dto.GoogleBusinessReviewsResponse
 import fr.myfidpass.data.dto.GoogleBusinessStatusResponse
 import fr.myfidpass.data.dto.GoogleWalletUrlResponse
+import fr.myfidpass.data.dto.LoyaltyGroupCreateRequest
+import fr.myfidpass.data.dto.LoyaltyGroupCreateResponse
+import fr.myfidpass.data.dto.LoyaltyGroupDetailResponse
+import fr.myfidpass.data.dto.LoyaltyGroupLinkBusinessRequest
+import fr.myfidpass.data.dto.LoyaltyGroupLinkBusinessResponse
+import fr.myfidpass.data.dto.LoyaltyGroupOkResponse
+import fr.myfidpass.data.dto.LoyaltyGroupPatchRequest
+import fr.myfidpass.data.dto.LoyaltyGroupsListResponse
 import fr.myfidpass.data.dto.LoginRequest
 import fr.myfidpass.data.dto.LogoutRequest
 import fr.myfidpass.data.dto.MemberPublicDetailDto
 import fr.myfidpass.data.dto.MemberRewardsListResponse
 import fr.myfidpass.data.dto.MemberTicketsResponse
 import fr.myfidpass.data.dto.NotifyClientsRequest
+import fr.myfidpass.data.dto.NotificationReadinessResponse
 import fr.myfidpass.data.dto.NotificationSendRequest
 import fr.myfidpass.data.dto.BusinessCheckoutSessionRequest
 import fr.myfidpass.data.dto.PaymentCheckoutRequest
 import fr.myfidpass.data.dto.PatchGameRequest
-import fr.myfidpass.data.dto.DevSimulatePaymentResponse
 import fr.myfidpass.data.dto.PaymentReconcileResponse
 import fr.myfidpass.data.dto.PlacesAutocompleteResponse
 import fr.myfidpass.data.dto.PlacesPlaceDetailsResponse
@@ -121,6 +130,9 @@ interface MyfidpassApi {
 
     @GET("/api/auth/me")
     suspend fun me(): AuthMeResponse
+
+    @GET("/api/auth/notification-readiness")
+    suspend fun notificationReadiness(): NotificationReadinessResponse
 
     @GET("/api/auth/config")
     suspend fun authConfig(): AuthConfigResponse
@@ -224,6 +236,9 @@ interface MyfidpassApi {
         @Query("to") to: String? = null,
         @Query("limit") limit: Int? = null,
     ): MerchantAccountingPackResponse
+
+    @GET("/api/businesses/{slug}")
+    suspend fun publicBusinessInfo(@Path("slug") slug: String): PublicBusinessInfoResponse
 
     @GET("/api/businesses/{slug}/dashboard/settings")
     suspend fun businessSettings(@Path("slug") slug: String): BusinessSettingsResponse
@@ -474,6 +489,12 @@ interface MyfidpassApi {
     @GET("/api/businesses/{slug}/notifications/stats")
     suspend fun notificationStats(@Path("slug") slug: String): JsonObject
 
+    @GET("/api/businesses/{slug}/notifications/jobs/{jobId}")
+    suspend fun notificationJobStatus(
+        @Path("slug") slug: String,
+        @Path("jobId") jobId: String,
+    ): JsonObject
+
     @POST("/api/businesses/{slug}/notifications/send")
     suspend fun notificationSend(
         @Path("slug") slug: String,
@@ -509,9 +530,6 @@ interface MyfidpassApi {
 
     @POST("/api/payment/reconcile-subscription")
     suspend fun paymentReconcile(): PaymentReconcileResponse
-
-    @POST("/api/businesses/{slug}/dashboard/dev-simulate-payment")
-    suspend fun devSimulatePayment(@Path("slug") slug: String): DevSimulatePaymentResponse
 
     @POST("/api/payment/create-portal-session")
     suspend fun paymentPortal(): PortalUrlResponse
@@ -654,4 +672,34 @@ interface MyfidpassApi {
         @Path("slug") slug: String,
         @Path("memberId") memberId: String,
     )
+
+    @GET("/api/loyalty-groups")
+    suspend fun loyaltyGroupsList(): LoyaltyGroupsListResponse
+
+    @POST("/api/loyalty-groups")
+    suspend fun loyaltyGroupsCreate(@Body body: LoyaltyGroupCreateRequest): LoyaltyGroupCreateResponse
+
+    @GET("/api/loyalty-groups/{id}")
+    suspend fun loyaltyGroupDetail(@Path("id") id: String): LoyaltyGroupDetailResponse
+
+    @PATCH("/api/loyalty-groups/{id}")
+    suspend fun loyaltyGroupPatch(
+        @Path("id") id: String,
+        @Body body: LoyaltyGroupPatchRequest,
+    ): LoyaltyGroupDetailResponse
+
+    @DELETE("/api/loyalty-groups/{id}")
+    suspend fun loyaltyGroupDelete(@Path("id") id: String): LoyaltyGroupOkResponse
+
+    @POST("/api/loyalty-groups/{id}/businesses")
+    suspend fun loyaltyGroupLinkBusiness(
+        @Path("id") id: String,
+        @Body body: LoyaltyGroupLinkBusinessRequest,
+    ): LoyaltyGroupLinkBusinessResponse
+
+    @DELETE("/api/loyalty-groups/{id}/businesses/{businessId}")
+    suspend fun loyaltyGroupUnlinkBusiness(
+        @Path("id") id: String,
+        @Path("businessId") businessId: String,
+    ): LoyaltyGroupOkResponse
 }
