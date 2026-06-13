@@ -27,6 +27,7 @@ import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.hilt.navigation.compose.hiltViewModel
 import fr.myfidpass.di.AppContainer
 import fr.myfidpass.services.auth.GoogleOAuthFlow
 import fr.myfidpass.ui.screens.admin.PlatformAdminRootScreen
@@ -57,8 +58,7 @@ fun AppRoot(
     pendingScanRequest: Int = 0,
     onScanRequestConsumed: () -> Unit = {},
 ) {
-    val factory = remember(container) { viewModelFactory(container) }
-    val rootVm: RootViewModel = viewModel(factory = factory)
+    val rootVm: RootViewModel = hiltViewModel()
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -229,7 +229,7 @@ fun AppRoot(
                     )
                 }
                 RootUiState.Main -> {
-                    val dashVm: DashboardViewModel = viewModel(factory = factory)
+                    val dashVm: DashboardViewModel = hiltViewModel()
                     LaunchedEffect(Unit) {
                         ensureNotificationsAndRegister()
                     }

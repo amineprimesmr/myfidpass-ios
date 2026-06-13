@@ -2,7 +2,7 @@ CHECKLIST — Google Play Console (MyFidpass, package fr.myfidpass)
 
 ═══ DÉJÀ FAIT CÔTÉ PROJET ═══
 ✓ AAB release signé : android/app/build/outputs/bundle/release/app-release.aab (~22 Mo)
-✓ applicationId : fr.myfidpass (versionCode 1, versionName 1.0.0)
+✓ applicationId : fr.myfidpass (versionCode 3, versionName 1.40)
 ✓ google-services.json présent (Firebase myfidpass-mobile)
 ✓ Keystore upload : android/keystore/myfidpass-upload.jks (gitignored)
 ✓ URLs légales OK (scripts/verify-apple-legal-urls.sh)
@@ -10,7 +10,7 @@ CHECKLIST — Google Play Console (MyFidpass, package fr.myfidpass)
 ═══ 1) TEST INTERNE (priorité — sans review Google) ═══
 Play Console → Tester et publier → Tests → Tests internes → Créer une version
 → Uploader app-release.aab
-→ Nom de version : 1.0.0 (1)
+→ Nom de version : 1.40 (3)
 → Notes : coller release_notes_fr-FR.txt
 → Enregistrer → Examiner → Déployer
 

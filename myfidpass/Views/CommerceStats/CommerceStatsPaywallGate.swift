@@ -12,7 +12,8 @@ extension View {
     func commerceStatsPaywallGated(
         locked: Bool,
         glassOverlayMode: Bool,
-        accessibilityUnlockLabel: String,
+        unlockTitle: String = MerchantSubscriptionPricingCopy.statsProUnlockCta,
+        accessibilityUnlockLabel: String? = nil,
         onUnlock: @escaping () -> Void
     ) -> some View {
         ZStack {
@@ -27,10 +28,12 @@ extension View {
                     .fill(Color.white.opacity(glassOverlayMode ? 0.58 : 0.68))
                     .allowsHitTesting(false)
 
-                MerchantProUnlockTeaserButton(preferDarkGlassTint: glassOverlayMode) {
+                MerchantProUnlockTeaserButton(
+                    unlockTitle: unlockTitle
+                ) {
                     onUnlock()
                 }
-                .accessibilityLabel(accessibilityUnlockLabel)
+                .accessibilityLabel(accessibilityUnlockLabel ?? unlockTitle)
                 .accessibilityAddTraits(.isButton)
             }
         }

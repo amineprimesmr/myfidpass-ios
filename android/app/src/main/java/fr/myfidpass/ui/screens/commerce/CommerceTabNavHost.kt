@@ -18,7 +18,7 @@ import fr.myfidpass.ui.navigation.merchantPopExit
 import fr.myfidpass.ui.navigation.merchantPushEnter
 import fr.myfidpass.ui.navigation.merchantPushExit
 import androidx.lifecycle.viewmodel.compose.viewModel
-import fr.myfidpass.ui.screens.commerce.MatchPredictionsScreen
+import androidx.hilt.navigation.compose.hiltViewModel
 import fr.myfidpass.ui.screens.commerce.SocialMissionsScreen
 import fr.myfidpass.ui.screens.settings.AccountSettingsDetailScreen
 import fr.myfidpass.ui.screens.settings.MerchantAccountingPackScreen
@@ -30,7 +30,6 @@ import androidx.compose.runtime.remember
 import fr.myfidpass.ui.screens.members.MemberDetailScreen
 import fr.myfidpass.ui.screens.members.MembersListScreen
 import fr.myfidpass.ui.screens.stats.CommerceStatisticsDashboardScreen
-import fr.myfidpass.ui.viewModelFactory
 import fr.myfidpass.ui.viewmodel.MerchantStatsViewModel
 import kotlinx.coroutines.CoroutineScope
 
@@ -48,10 +47,18 @@ fun CommerceTabNavHost(
     onCommerceQuotaBlocked: (pendingCommerceName: String) -> Unit = {},
     onCommerceStatsAtRootChange: (Boolean) -> Unit = {},
 ) {
-    val factory = remember(container) { viewModelFactory(container) }
     val nav = rememberNavController()
     val backStackEntry by nav.currentBackStackEntryAsState()
     val isStatsRoot = embeddedRoot && backStackEntry?.destination?.route == CommerceRoutes.STATS
+    val hasProAccess = container.sessionStore.merchantProInsightsUnlocked()
+
+    fun openFlyerHub() {
+        if (!hasProAccess) {
+            onUnlockPro()
+            return
+        }
+        nav.navigate(CommerceRoutes.FLYER)
+    }
 
     LaunchedEffect(isStatsRoot) {
         if (embeddedRoot) onCommerceStatsAtRootChange(isStatsRoot)
@@ -73,7 +80,7 @@ fun CommerceTabNavHost(
                 onOpenSettings = { nav.navigate(CommerceRoutes.SETTINGS_HUB) },
                 onOpenStats = { nav.navigate(CommerceRoutes.STATS) },
                 onOpenProgram = { nav.navigate(CommerceRoutes.PROGRAM) },
-                onOpenFlyer = { nav.navigate(CommerceRoutes.FLYER) },
+                onOpenFlyer = { openFlyerHub() },
                 onOpenTeam = { nav.navigate(CommerceRoutes.TEAM) },
                 onOpenScanSecurity = { nav.navigate(CommerceRoutes.SCAN_SECURITY) },
                 onOpenAdmin = { nav.navigate(CommerceRoutes.ADMIN) },
@@ -95,7 +102,7 @@ fun CommerceTabNavHost(
                 onLoyaltyNetwork = { nav.navigate(CommerceRoutes.LOYALTY_NETWORK) },
                 onMatchPredictions = { nav.navigate(CommerceRoutes.MATCH_PREDICTIONS) },
                 onAccounting = { nav.navigate(CommerceRoutes.ACCOUNTING) },
-                onOpenFlyerHub = { nav.navigate(CommerceRoutes.FLYER) },
+                onOpenFlyerHub = { openFlyerHub() },
                 showFlyerShortcuts = true,
             )
         }
@@ -108,7 +115,7 @@ fun CommerceTabNavHost(
             )
         }
         composable(CommerceRoutes.ACCOUNT) {
-            val vm: fr.myfidpass.ui.viewmodel.AccountSettingsViewModel = viewModel(factory = factory)
+            val vm: fr.myfidpass.ui.viewmodel.AccountSettingsViewModel = hiltViewModel()
             AccountSettingsDetailScreen(
                 viewModel = vm,
                 syncService = container.syncService,
@@ -142,7 +149,7 @@ fun CommerceTabNavHost(
             )
         }
         composable(CommerceRoutes.STATS) {
-            val statsVm: MerchantStatsViewModel = viewModel(factory = factory)
+            val statsVm: MerchantStatsViewModel = hiltViewModel()
             CommerceStatisticsDashboardScreen(
                 repository = container.dashboardRepository,
                 hasProInsights = container.sessionStore.merchantProInsightsUnlocked(),
@@ -208,7 +215,7 @@ fun CommerceTabNavHost(
             ProgramHubScreen(
                 onBack = { nav.popBackStack() },
                 onGames = { nav.navigate(CommerceRoutes.GAMES) },
-                onFlyer = { nav.navigate(CommerceRoutes.FLYER) },
+                onFlyer = { openFlyerHub() },
                 onSocial = { nav.navigate(CommerceRoutes.SOCIAL) },
                 onTools = { nav.navigate(CommerceRoutes.TOOLS) },
                 onEstablishment = { nav.navigate(CommerceRoutes.ESTABLISHMENT) },
@@ -227,6 +234,8 @@ fun CommerceTabNavHost(
                 container = container,
                 snackbar = snackbarHostState,
                 openForEdit = true,
+                hasProAccess = hasProAccess,
+                onUnlockPro = onUnlockPro,
                 onBack = { nav.popBackStack() },
             )
         }

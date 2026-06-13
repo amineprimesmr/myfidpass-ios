@@ -1,0 +1,176 @@
+openapi: 3.1.0
+info:
+  title: MyFidpass Merchant API (core)
+  version: 1.40.0
+  description: |
+    Contrat REST partagé iOS / Android / backend `fidelity`.
+    Source de vérité complémentaire : myfidpass/Docs/CONTRAT_API_LOGICIEL.md
+servers:
+  - url: https://api.myfidpass.fr
+    description: Production
+
+paths:
+  /api/auth/login:
+    post:
+      summary: Connexion email / mot de passe
+      tags: [auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
+      responses:
+        "200":
+          description: Session commerçant
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthLoginResponse" }
+
+  /api/auth/refresh:
+    post:
+      summary: Rotation refresh token
+      tags: [auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refresh_token]
+              properties:
+                refresh_token: { type: string }
+      responses:
+        "200":
+          description: Nouveaux tokens
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthRefreshResponse" }
+
+  /api/auth/me:
+    get:
+      summary: Profil + commerces + abonnement
+      tags: [auth]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Détail session
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthMeResponse" }
+
+  /api/businesses/{slug}/dashboard/settings:
+    get:
+      summary: Paramètres carte / commerce
+      tags: [dashboard]
+      security: [{ bearerAuth: [], dashboardToken: [] }]
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Settings dashboard
+
+  /api/businesses/{slug}/dashboard/members:
+    get:
+      summary: Liste membres paginée
+      tags: [dashboard]
+      security: [{ bearerAuth: [], dashboardToken: [] }]
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema: { type: string }
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 1 }
+        - name: limit
+          in: query
+          schema: { type: integer, maximum: 500 }
+      responses:
+        "200":
+          description: Membres
+
+  /api/businesses/{slug}/integration/scan:
+    post:
+      summary: Scan caisse — créditer points
+      tags: [integration]
+      security: [{ bearerAuth: [], dashboardToken: [] }]
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                member_id: { type: string }
+                qr_payload: { type: string }
+                points: { type: integer }
+      responses:
+        "200":
+          description: Scan enregistré
+        "403":
+          description: subscription_required | staff_forbidden
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    dashboardToken:
+      type: apiKey
+      in: header
+      name: X-Dashboard-Token
+
+  schemas:
+    AuthLoginResponse:
+      type: object
+      properties:
+        user: { $ref: "#/components/schemas/AuthUser" }
+        token: { type: string }
+        refresh_token: { type: string }
+        businesses:
+          type: array
+          items: { $ref: "#/components/schemas/BusinessSummary" }
+        has_active_subscription: { type: boolean }
+        has_paid_merchant_subscription: { type: boolean }
+
+    AuthRefreshResponse:
+      type: object
+      properties:
+        token: { type: string }
+        refresh_token: { type: string }
+
+    AuthMeResponse:
+      allOf:
+        - $ref: "#/components/schemas/AuthLoginResponse"
+
+    AuthUser:
+      type: object
+      properties:
+        id: { type: string }
+        email: { type: string, nullable: true }
+        staff_login: { type: string, nullable: true }
+        name: { type: string, nullable: true }
+        workspace_role: { type: string, enum: [owner, manager, staff] }
+        is_admin: { type: boolean }
+
+    BusinessSummary:
+      type: object
+      properties:
+        id: { type: string }
+        slug: { type: string }
+        name: { type: string }
+        dashboard_token: { type: string }

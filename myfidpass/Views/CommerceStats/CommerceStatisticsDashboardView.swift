@@ -980,9 +980,6 @@ struct CommerceStatisticsDashboardView: View {
         .commerceStatsPaywallGated(
             locked: !commerceStatsInsightsUnlocked,
             glassOverlayMode: glassOverlayMode,
-            accessibilityUnlockLabel: isStampsProgram
-                ? "Déverrouiller avec Pro pour la fréquence d'achat et les avis Google"
-                : "Déverrouiller avec Pro pour le panier moyen et les avis Google",
             onUnlock: { presentCommerceStatsPaywall() }
         )
     }
@@ -990,10 +987,7 @@ struct CommerceStatisticsDashboardView: View {
     @ViewBuilder
     private var detailSectionsBelowCarousel: some View {
         VStack(alignment: .leading, spacing: 28) {
-            statsDetailSection(
-                title: "Plus de données",
-                accessibilityUnlockLabel: "Déverrouiller avec Pro pour le détail des statistiques"
-            ) {
+            statsDetailSection(title: "Plus de données") {
                 CommerceStatsCategoryListCard(
                     rows: detailCategoryRows(from: cachedDetailPresentation.categoryRows),
                     onViewGoogleReviews: { openCommerceGoogleReviewsOnMaps() }
@@ -1018,7 +1012,6 @@ struct CommerceStatisticsDashboardView: View {
 
             statsDetailSection(
                 title: "Engagement réseaux sociaux",
-                accessibilityUnlockLabel: "Déverrouiller avec Pro pour les statistiques d’engagement réseaux sociaux",
                 engagementManageAction: allSocialNetworksConfigured ? {
                     socialMissionsSheetPresented = true
                 } : nil
@@ -1044,7 +1037,6 @@ struct CommerceStatisticsDashboardView: View {
     @ViewBuilder
     private func statsDetailSection<Content: View>(
         title: String,
-        accessibilityUnlockLabel: String,
         engagementManageAction: (() -> Void)? = nil,
         @ViewBuilder content: () -> Content
     ) -> some View {
@@ -1064,7 +1056,6 @@ struct CommerceStatisticsDashboardView: View {
             .commerceStatsPaywallGated(
                 locked: !commerceStatsInsightsUnlocked,
                 glassOverlayMode: glassOverlayMode,
-                accessibilityUnlockLabel: accessibilityUnlockLabel,
                 onUnlock: { presentCommerceStatsPaywall() }
             )
         }
@@ -1095,8 +1086,9 @@ struct CommerceStatisticsDashboardView: View {
     private func purchaseFrequencyCompactKpiCard(presentation: CommerceStatisticsPresentation) -> some View {
         let freqRow = presentation.categoryRows.first { $0.id == "freq" }
         let spark = freqRow?.visitFrequencyDetail?.sparkline ?? []
-        let trend = freqRow?.visitFrequencyDetail?.trendPct ?? presentation.trendFrequenceDelta
-        let trendPos = freqRow?.visitFrequencyDetail?.trendIsPositive ?? ((trend ?? 0) >= 0)
+        let trend = StatsFR.displayableTrendPct(
+            freqRow?.visitFrequencyDetail?.trendPct ?? presentation.trendFrequenceDelta
+        )
         let freqValue: String = {
             guard let f = presentation.frequenceParActif, f >= 1 else { return "—" }
             return StatsFR.formatDoubleSmart(max(1, f))
@@ -1108,12 +1100,8 @@ struct CommerceStatisticsDashboardView: View {
             valueFontSize: 30,
             valueBadge: presentation.frequenceParActif != nil ? "/mois" : nil,
             valueBadgeColor: CommerceStatisticsTheme.accentBlue,
-            trendText: trend.map { d in
-                let sign = d >= 0 ? "+" : "−"
-                let pct = StatsFR.formatPct(abs(d)).replacingOccurrences(of: " %", with: "%")
-                return "\(sign)\(pct)"
-            },
-            trendPositive: trendPos,
+            trendText: trend.map { StatsFR.positiveTrendPctText($0) },
+            trendPositive: trend != nil ? true : nil,
             footnote: nil,
             onCardTap: nil,
             edgeToEdgeBottomChart: true,
@@ -1289,21 +1277,16 @@ struct CommerceStatisticsDashboardView: View {
     }
 
     private func panierTrendPositive(presentation: CommerceStatisticsPresentation) -> Bool? {
-        if let m = presentation.panierMoyenEuro, let r = presentation.panierRepereEuro, r > 0 {
-            return (m - r) >= 0
-        }
-        return presentation.trendPanierDeltaEuro.map { $0 >= 0 }
+        panierTrendText(presentation: presentation) != nil ? true : nil
     }
 
     private func panierTrendText(presentation: CommerceStatisticsPresentation) -> String? {
-        if let m = presentation.panierMoyenEuro, let r = presentation.panierRepereEuro, r > 0 {
-            let delta = m - r
-            let sign = delta >= 0 ? "+" : "−"
-            return "\(sign)\(StatsFR.formatEuro(abs(delta)))€"
+        if let m = presentation.panierMoyenEuro, let r = presentation.panierRepereEuro, r > 0,
+           let delta = StatsFR.displayableTrendEuro(m - r) {
+            return "+\(StatsFR.formatEuro(delta))€"
         }
-        if let delta = presentation.trendPanierDeltaEuro {
-            let sign = delta >= 0 ? "+" : "−"
-            return "\(sign)\(StatsFR.formatEuro(abs(delta)))€"
+        if let delta = StatsFR.displayableTrendEuro(presentation.trendPanierDeltaEuro) {
+            return "+\(StatsFR.formatEuro(delta))€"
         }
         return nil
     }
@@ -1362,10 +1345,8 @@ struct CommerceStatisticsDashboardView: View {
     }
 
     private func freqTrendText(presentation: CommerceStatisticsPresentation) -> String? {
-        guard let d = presentation.trendFrequenceDelta else { return nil }
-        let sign = d >= 0 ? "+" : "−"
-        let pct = StatsFR.formatPct(abs(d)).replacingOccurrences(of: " %", with: "%")
-        return "\(sign)\(pct)"
+        guard let d = StatsFR.displayableTrendPct(presentation.trendFrequenceDelta) else { return nil }
+        return StatsFR.positiveTrendPctText(d)
     }
 
     private func freqTopBar(presentation: CommerceStatisticsPresentation) -> CGFloat {

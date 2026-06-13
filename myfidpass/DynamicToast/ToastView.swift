@@ -183,3 +183,57 @@ struct ToastView: View {
         window.isPresented
     }
 }
+
+// MARK: - Bandeau haut (sync, etc.) — même gabarit que toast « Client détecté »
+
+enum MerchantIslandStyleBannerMetrics {
+    static func haveDynamicIsland(safeAreaTop: CGFloat) -> Bool { safeAreaTop >= 59 }
+
+    static func expandedHeight(safeAreaTop: CGFloat) -> CGFloat {
+        haveDynamicIsland(safeAreaTop: safeAreaTop) ? 90 : 70
+    }
+
+    /// Aligné sur `ToastView` (`topOffset` + marge sous l’îlot).
+    static func topInset(safeAreaTop: CGFloat) -> CGFloat {
+        let haveDI = haveDynamicIsland(safeAreaTop: safeAreaTop)
+        return haveDI ? 11 + max(safeAreaTop - 59, 0) : safeAreaTop + 10
+    }
+}
+
+/// Conteneur visuel identique au toast scan (verre clair, coins 30, hauteur 90/70).
+struct MerchantIslandStyleBanner<Icon: View>: View {
+    var title: String
+    var message: String
+    var safeAreaTop: CGFloat
+    @ViewBuilder var icon: () -> Icon
+
+    private var haveDynamicIsland: Bool {
+        MerchantIslandStyleBannerMetrics.haveDynamicIsland(safeAreaTop: safeAreaTop)
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            icon()
+                .frame(width: 50)
+            VStack(alignment: .leading, spacing: 4) {
+                if haveDynamicIsland { Spacer(minLength: 0) }
+                Text(title)
+                    .font(.callout)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(Color.primary)
+                if !message.isEmpty {
+                    Text(message)
+                        .font(.caption)
+                        .foregroundStyle(Color.secondary)
+                        .lineLimit(2)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.bottom, haveDynamicIsland ? 12 : 0)
+        }
+        .padding(.horizontal, 20)
+        .frame(maxWidth: .infinity)
+        .frame(height: MerchantIslandStyleBannerMetrics.expandedHeight(safeAreaTop: safeAreaTop))
+        .mfDynamicIslandToastGlass(minimumCorner: 30, preferDark: false)
+    }
+}

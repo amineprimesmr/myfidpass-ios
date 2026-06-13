@@ -73,7 +73,7 @@ final class MerchantAppleSubscriptionStore: ObservableObject {
             .displayPrice
     }
 
-    /// Offre découverte configurée sur le produit App Store Connect (payAsYouGo 1 €, etc.).
+    /// Offre intro StoreKit configurée sur le produit (ASC) — ex. pay-as-you-go 1 € / 1 mois.
     func hasIntroductoryOfferConfigured(slots: Int, annual: Bool) -> Bool {
         product(slots: slots, annual: annual)?.subscription?.introductoryOffer != nil
     }
@@ -89,7 +89,9 @@ final class MerchantAppleSubscriptionStore: ObservableObject {
     /// Achat in-app avec 1 € au 1er mois possible sur ce produit et ce compte Apple.
     func canPurchaseWithAppleIntroOffer(slots: Int, annual: Bool) async -> Bool {
         guard hasIntroductoryOfferConfigured(slots: slots, annual: annual) else { return false }
-        return await isEligibleForIntroOffer(slots: slots, annual: annual)
+        if await isEligibleForIntroOffer(slots: slots, annual: annual) { return true }
+        guard let product = product(slots: slots, annual: annual) else { return false }
+        return await resolveIntroductoryOfferEligibilityJWS(product: product) != nil
     }
 
     /// Achat in-app + validation serveur. Retourne la réponse API (statut abonnement côté MyFidpass).
@@ -123,11 +125,11 @@ final class MerchantAppleSubscriptionStore: ObservableObject {
         if let token = appAccountToken {
             options.insert(.appAccountToken(token))
         }
-        let storeEligible = await isEligibleForIntroOffer(slots: slots, annual: annual)
-        if !storeEligible, hasIntroductoryOfferConfigured(slots: slots, annual: annual) {
-            if let jws = await resolveIntroductoryOfferEligibilityJWS(product: product) {
-                options.insert(jws)
-            }
+        // Toujours tenter la signature serveur si une intro est configurée sur le produit :
+        // rétablit le 1 € pour un compte MyFidpass sans abo payant même si l’Apple ID a déjà consommé l’intro du groupe.
+        if hasIntroductoryOfferConfigured(slots: slots, annual: annual),
+           let jws = await resolveIntroductoryOfferEligibilityJWS(product: product) {
+            options.insert(jws)
         }
         let result = try await product.purchase(options: options)
         switch result {

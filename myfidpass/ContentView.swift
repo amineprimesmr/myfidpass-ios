@@ -317,7 +317,13 @@ struct ContentView: View {
         .accessibilityLabel("Merci pour votre confiance")
     }
 
-    private var syncBannerTopPadding: CGFloat { 10 }
+    private var merchantKeyWindowSafeAreaTop: CGFloat {
+        if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+           let win = scene.windows.first(where: { $0.isKeyWindow }) ?? scene.windows.first {
+            return win.safeAreaInsets.top
+        }
+        return 59
+    }
 
     private var syncErrorBannerVisible: Bool {
         !syncService.isSyncing
@@ -338,9 +344,12 @@ struct ContentView: View {
             }
             syncIndicatorOverlay
         }
+        .padding(.horizontal, 10)
         .padding(.top, syncBannerTopPadding)
         .animation(.spring(response: 0.42, dampingFraction: 0.84), value: syncErrorBannerVisible)
     }
+
+    private var syncBannerTopPadding: CGFloat { 10 }
 
     private var syncFailureBanner: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -396,7 +405,7 @@ struct ContentView: View {
         isSoftwareKeyboardVisible || softwareKeyboardHeight > 0 || Date() < suppressTrialPillUntil
     }
 
-    /// Bandeau sync : **même gabarit** chargement / succès, transitions spring + crossfade (plus de rétrécissement brutal).
+    /// Bandeau sync compact (pilule verre).
     private var syncIndicatorOverlay: some View {
         let isBannerInProgress = syncService.isSyncing
         return Group {
@@ -419,23 +428,13 @@ struct ContentView: View {
                     .frame(width: 24, height: 24)
                     .accessibilityHidden(true)
 
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(isBannerInProgress
-                             ? "Synchronisation en cours"
-                             : "Synchronisé")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(isBannerInProgress ? Color.primary : Color.green)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.85)
-                            .contentTransition(.interpolate)
-                        if isBannerInProgress {
-                            Text("Glissez vers le haut pour masquer")
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-                    }
-                    .frame(minWidth: 250, alignment: .leading)
+                    Text(isBannerInProgress ? "Synchronisation en cours" : "Synchronisé")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(isBannerInProgress ? Color.primary : Color.green)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                        .contentTransition(.interpolate)
+                        .frame(minWidth: 250, alignment: .leading)
                 }
                 .padding(.horizontal, 20)
                 .padding(.vertical, 9)
@@ -455,7 +454,6 @@ struct ContentView: View {
                                     syncBannerVisibleForCurrentRun = false
                                     syncBannerDragOffset = -60
                                 }
-                                // Si l'utilisateur la masque, ne pas la remontrer immédiatement.
                                 syncBannerDismissedUntil = Date().addingTimeInterval(120)
                                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
                                     withAnimation(.spring(response: 0.35, dampingFraction: 0.88)) {

@@ -161,7 +161,7 @@ struct CustomMerchantProPaywallView: View {
         .onAppear {
             refreshMeasuredTopSafeInset()
             selectedTargetSlots = initialTargetSlots
-            isMonthlyPlanSelected = true
+            isMonthlyPlanSelected = !supportsAnnualPlanToggle
         }
         .onChange(of: requiredCommerceSlots) { _, _ in
             selectedTargetSlots = initialTargetSlots
@@ -267,15 +267,38 @@ struct CustomMerchantProPaywallView: View {
         }
     }
 
-    // MARK: - Bas (CTA)
+    // MARK: - Bas (forfaits + CTA)
 
     private var bottomSection: some View {
         VStack(spacing: 14) {
-            Text(paywallPricingIntroLine)
-                .font(.system(size: 20, weight: .bold))
-                .foregroundStyle(Color(red: 0.10, green: 0.11, blue: 0.13))
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: .infinity)
+            if supportsAnnualPlanToggle {
+                HStack(spacing: 12) {
+                    PaywallBevelPlanCard(
+                        title: "Mensuel",
+                        priceLine: monthlyPlanCardPriceLine,
+                        isSelected: isMonthlyPlanSelected,
+                        savingsBadge: nil
+                    ) {
+                        selectMonthlyPlan()
+                    }
+                    PaywallBevelPlanCard(
+                        title: "Annuel",
+                        priceLine: annualPlanCardPriceLine,
+                        isSelected: !isMonthlyPlanSelected,
+                        savingsBadge: annualSavingsBadge
+                    ) {
+                        selectAnnualPlan()
+                    }
+                }
+            } else {
+                PaywallBevelPlanCard(
+                    title: effectiveCommerceSlots == 1 ? "Mensuel" : "\(effectiveCommerceSlots) commerces",
+                    priceLine: effectiveCommerceSlots == 1 ? monthlyPlanCardPriceLine : nil,
+                    isSelected: true,
+                    savingsBadge: multiCommerceSavingsBadge
+                ) {}
+                    .allowsHitTesting(false)
+            }
 
             PaywallBevelContinueButton(
                 title: paywallContinueButtonTitle,
@@ -296,6 +319,15 @@ struct CustomMerchantProPaywallView: View {
                     .foregroundStyle(Color.red.opacity(0.85))
                     .multilineTextAlignment(.center)
             }
+
+            if !appleStore.isLoadingProducts,
+               selectedPlanAvailableOnStore,
+               !appleStore.hasIntroductoryOfferConfigured(slots: effectiveCommerceSlots, annual: selectedPlanIsAnnual) {
+                Text(introOfferMissingOnStoreMessage)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Color.orange.opacity(0.92))
+                    .multilineTextAlignment(.center)
+            }
         }
         .padding(.horizontal, 22)
         .padding(.bottom, isSheetPresentation ? 22 : 28)
@@ -304,17 +336,126 @@ struct CustomMerchantProPaywallView: View {
 
     // MARK: - Prix
 
-    private var paywallPricingIntroLine: String {
-        "Le premier mois à 1€, puis \(pricingUpgradeQuote.toMonthlyLabel) / mois"
+    private var selectedPlanIntroDisplayPrice: String? {
+        appleStore.introductoryOfferDisplayPrice(slots: effectiveCommerceSlots, annual: selectedPlanIsAnnual)
+            .map(normalizePrice)
+    }
+
+    private var introOfferMissingOnStoreMessage: String {
+        let productId = MerchantAppleSubscriptionProducts.productId(
+            slots: effectiveCommerceSlots,
+            annual: selectedPlanIsAnnual
+        ) ?? "?"
+        return "L’offre 1 € n’est pas active sur \(productId) dans l’App Store. Ajoutez une offre intro « paiement progressif » 1 € / 1 mois dans App Store Connect, puis attendez la propagation (jusqu’à 24 h)."
     }
 
     private var paywallFooterCommitmentText: String {
-        "Puis \(pricingUpgradeQuote.toMonthlyLabel)/mois sans engagement"
+        if selectedPlanIsAnnual {
+            let raw = appleStore.displayPriceLine(slots: effectiveCommerceSlots, annual: true)
+                ?? MerchantSubscriptionPricingCopy.paywallAnnualFallbackPrice
+            if let intro = selectedPlanIntroDisplayPrice {
+                return "\(intro) le 1er mois, puis \(normalizePrice(raw)) / an sans engagement"
+            }
+            return "Puis \(normalizePrice(raw)) / an sans engagement"
+        }
+        let monthly = appleStore.displayPriceLine(slots: effectiveCommerceSlots, annual: false)
+            .map(normalizePrice)
+            ?? pricingUpgradeQuote.toMonthlyLabel
+        if let intro = selectedPlanIntroDisplayPrice {
+            return "\(intro) le 1er mois, puis \(monthly) / mois sans engagement"
+        }
+        return "Puis \(monthly) / mois sans engagement"
+    }
+
+    private var monthlyPlanCardPriceLine: String {
+        let raw = appleStore.displayPriceLine(slots: effectiveCommerceSlots, annual: false)
+            ?? pricingUpgradeQuote.toMonthlyLabel
+        return "\(compactEuroPrice(normalizePrice(raw))) /mois"
+    }
+
+    private var annualPlanCardPriceLine: String {
+        if let annual = appleStore.product(slots: effectiveCommerceSlots, annual: true) {
+            let monthly = (annual.price as NSDecimalNumber).doubleValue / 12.0
+            return "\(compactEuroPrice(formatEuroAmount(monthly))) /mois"
+        }
+        return "\(compactEuroPrice(MerchantMultiPricing.annualMonthlyEquivalentLabel(slots: effectiveCommerceSlots))) /mois"
+    }
+
+    private var monthlyPriceLine: String {
+        let raw = appleStore.displayPriceLine(slots: effectiveCommerceSlots, annual: false)
+            ?? pricingUpgradeQuote.toMonthlyLabel
+        return "1 € puis \(normalizePrice(raw)) / mois"
+    }
+
+    private var annualPriceLine: String {
+        let raw = appleStore.displayPriceLine(slots: effectiveCommerceSlots, annual: true)
+            ?? MerchantSubscriptionPricingCopy.paywallAnnualFallbackPrice
+        return "1 € puis \(normalizePrice(raw)) / an"
+    }
+
+    private var annualSavingsBadge: String? {
+        guard let pct = computedAnnualSavingsPercent, pct > 0 else { return "Économisez 33 %" }
+        return "Économisez \(pct) %"
+    }
+
+    private var multiCommerceSavingsBadge: String? {
+        guard effectiveCommerceSlots > 1,
+              let pct = MerchantMultiPricing.multiCommerceSavingsPercent(slots: effectiveCommerceSlots) else { return nil }
+        return "Économisez \(pct) %"
+    }
+
+    private var computedAnnualSavingsPercent: Int? {
+        guard supportsAnnualPlanToggle,
+              let monthly = appleStore.product(slots: effectiveCommerceSlots, annual: false),
+              let annual = appleStore.product(slots: effectiveCommerceSlots, annual: true)
+        else { return nil }
+        let m = (monthly.price as NSDecimalNumber).doubleValue
+        let a = (annual.price as NSDecimalNumber).doubleValue
+        guard m > 0, a > 0 else { return nil }
+        let yearlyFromMonthly = m * 12
+        let saved = (1 - a / yearlyFromMonthly) * 100
+        return max(1, Int(saved.rounded()))
+    }
+
+    private func normalizePrice(_ raw: String) -> String {
+        let s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if s.hasPrefix("$") {
+            let amount = String(s.dropFirst()).trimmingCharacters(in: .whitespaces)
+            return "\(amount.replacingOccurrences(of: ".", with: ",")) €"
+        }
+        return s
+    }
+
+    private func compactEuroPrice(_ raw: String) -> String {
+        raw.replacingOccurrences(of: " €", with: "€")
+    }
+
+    private func formatEuroAmount(_ amount: Double) -> String {
+        String(format: "%.2f", amount).replacingOccurrences(of: ".", with: ",") + " €"
+    }
+
+    private func selectMonthlyPlan() {
+        guard !isMonthlyPlanSelected else { return }
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+            isMonthlyPlanSelected = true
+        }
+    }
+
+    private func selectAnnualPlan() {
+        guard isMonthlyPlanSelected else { return }
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+            isMonthlyPlanSelected = false
+        }
     }
 
     private var paywallContinueButtonTitle: String {
         if pricingUpgradeQuote.isUpgrade, authService.hasEncashedMerchantSubscription {
             return "Passer à \(effectiveCommerceSlots) commerces"
+        }
+        if let intro = selectedPlanIntroDisplayPrice {
+            return "Essayer pour \(compactEuroPrice(intro))"
         }
         return MerchantSubscriptionPricingCopy.paywallContinueCta
     }

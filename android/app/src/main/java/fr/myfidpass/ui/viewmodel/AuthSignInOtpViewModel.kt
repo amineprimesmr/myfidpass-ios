@@ -11,10 +11,13 @@ import fr.myfidpass.data.repo.AuthRepository
 import fr.myfidpass.ui.screens.onboarding.OnboardingEmailValidation
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import dagger.hilt.android.lifecycle.HiltViewModel
+import javax.inject.Inject
 
 enum class AuthSignInStep { Identifier, Otp }
 
-class AuthSignInOtpViewModel(
+@HiltViewModel
+class AuthSignInOtpViewModel @Inject constructor(
     private val authRepository: AuthRepository,
     private val firstLaunch: FirstLaunchPreferences,
 ) : ViewModel() {

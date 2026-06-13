@@ -51,6 +51,23 @@ enum StatsFR {
         String(format: "%.0f %%", pct)
     }
 
+    /// Tendance affichable : jamais de valeur négative ou nulle (rien plutôt qu’un −%).
+    static func displayableTrendPct(_ raw: Double?) -> Double? {
+        guard let raw, raw > 0.05 else { return nil }
+        return raw
+    }
+
+    /// Variation € affichable : uniquement les hausses.
+    static func displayableTrendEuro(_ raw: Double?) -> Double? {
+        guard let raw, raw > 0.009 else { return nil }
+        return raw
+    }
+
+    static func positiveTrendPctText(_ pct: Double) -> String {
+        let formatted = formatPct(pct).replacingOccurrences(of: " %", with: "%")
+        return "+\(formatted)"
+    }
+
     static func formatDoubleSmart(_ v: Double) -> String {
         let rounded = v.rounded()
         if abs(v - rounded) < 1e-9 {

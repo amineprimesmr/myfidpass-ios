@@ -29,12 +29,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.hilt.navigation.compose.hiltViewModel
 import fr.myfidpass.di.AppContainer
 import fr.myfidpass.ui.components.GlassIconButton
 import fr.myfidpass.ui.screens.onboarding.AuthEmailOtpVerificationContent
 import fr.myfidpass.ui.screens.onboarding.OnboardingProcessHeader
-import fr.myfidpass.ui.viewModelFactory
 import fr.myfidpass.ui.viewmodel.AuthSignInOtpViewModel
 import fr.myfidpass.ui.viewmodel.AuthSignInStep
 import androidx.compose.foundation.text.KeyboardOptions
@@ -50,8 +49,7 @@ fun AuthSignInOtpScreen(
     onBack: () -> Unit,
     onSuccess: () -> Unit,
 ) {
-    val factory = remember(container) { viewModelFactory(container) }
-    val vm: AuthSignInOtpViewModel = viewModel(factory = factory)
+    val vm: AuthSignInOtpViewModel = hiltViewModel()
     val statusTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val navBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     val step = AuthSignInStep.entries[vm.currentStep]

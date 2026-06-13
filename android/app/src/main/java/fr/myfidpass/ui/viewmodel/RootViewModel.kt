@@ -10,9 +10,11 @@ import fr.myfidpass.data.local.FirstLaunchPreferences
 import fr.myfidpass.data.local.SessionStore
 import fr.myfidpass.data.repo.AuthRepository
 import fr.myfidpass.services.sync.SyncService
+import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
+import javax.inject.Inject
 
 sealed interface RootUiState {
     data object Loading : RootUiState
@@ -22,7 +24,8 @@ sealed interface RootUiState {
     data object Main : RootUiState
 }
 
-class RootViewModel(
+@HiltViewModel
+class RootViewModel @Inject constructor(
     private val authRepository: AuthRepository,
     private val sessionStore: SessionStore,
     private val firstLaunch: FirstLaunchPreferences,

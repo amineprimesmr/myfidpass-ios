@@ -92,6 +92,8 @@ enum PostCardFlyerPromoEligibility {
 struct PostCardFlyerPromoSheet: View {
     let slug: String
     @Binding var isPresented: Bool
+    var hasProAccess: Bool
+    var onUnlockPro: () -> Void
     var onCreateFlyerTapped: () -> Void
 
     private static let contentHorizontalInset: CGFloat = 22
@@ -110,7 +112,7 @@ struct PostCardFlyerPromoSheet: View {
 
             Spacer(minLength: 28)
 
-            createFlyerSlider
+            createFlyerButton
         }
         .padding(.horizontal, Self.contentHorizontalInset)
         .padding(.top, 28)
@@ -163,26 +165,29 @@ struct PostCardFlyerPromoSheet: View {
             .accessibilityLabel("Aperçu d’un flyer de jeu en caisse")
     }
 
-    private var createFlyerSlider: some View {
-        SlideToConfirm(config: slideConfig) {
+    private var createFlyerButton: some View {
+        Button {
             UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-            UIAccessibility.post(notification: .announcement, argument: "Ouverture de la création de flyer.")
             isPresented = false
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
-                onCreateFlyerTapped()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                if hasProAccess {
+                    onCreateFlyerTapped()
+                } else {
+                    onUnlockPro()
+                }
             }
+        } label: {
+            Text(hasProAccess ? "Créer mon flyer" : MerchantSubscriptionPricingCopy.paywallContinueCta)
+                .font(.system(size: 17, weight: .semibold))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 18)
         }
-    }
-
-    private var slideConfig: SlideToConfirm.Config {
-        SlideToConfirm.Config(
-            idleText: "Glisser pour créer le flyer",
-            onSwipeText: "Créer mon flyer",
-            confirmationText: "C’est parti",
-            tint: AppTheme.Colors.primary,
-            foregroundColor: .white,
-            height: 68,
-            knobPadding: 6
+        .buttonStyle(.borderedProminent)
+        .tint(AppTheme.Colors.primary)
+        .accessibilityLabel(
+            hasProAccess
+                ? "Créer mon flyer de jeu"
+                : MerchantSubscriptionPricingCopy.paywallContinueCta
         )
     }
 }

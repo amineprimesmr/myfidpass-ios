@@ -168,6 +168,18 @@ fun MainTabsScreen(
         showProPaywall = true
     }
 
+    fun openFlyerHub(startCreateAssistant: Boolean = false, openForEdit: Boolean = false) {
+        if (!container.sessionStore.merchantProInsightsUnlocked()) {
+            openPaywall()
+            return
+        }
+        flyerHubStartCreateAssistant = startCreateAssistant
+        flyerHubOpenForEdit = openForEdit
+        showFlyerHub = true
+    }
+
+    val hasProAccess = container.sessionStore.merchantProInsightsUnlocked()
+
     val onSubscribe: () -> Unit = {
         val slots = fr.myfidpass.util.MerchantMultiPricing.slotsToPurchase(
             usedBusinesses = container.sessionStore.usedBusinesses,
@@ -266,9 +278,7 @@ fun MainTabsScreen(
                                     showFlyerAttentionDot = flyerAttentionDot,
                                     onOpenFlyer = {
                                         runAfterHomeSidebarDismisses {
-                                            flyerHubStartCreateAssistant = false
-                                            flyerHubOpenForEdit = false
-                                            showFlyerHub = true
+                                            openFlyerHub()
                                         }
                                     },
                                     onOpenFootballGame = {
@@ -493,9 +503,7 @@ fun MainTabsScreen(
                     onOpenPaywall = { adding, pending -> openPaywall(adding, pending) },
                     onOpenFlyerHub = {
                         showSettings = false
-                        flyerHubStartCreateAssistant = false
-                        flyerHubOpenForEdit = false
-                        showFlyerHub = true
+                        openFlyerHub()
                     },
                     showFlyerShortcuts = true,
                     modifier = Modifier.fillMaxSize(),
@@ -508,6 +516,8 @@ fun MainTabsScreen(
                     snackbar = snackbarHostState,
                     startCreateAssistant = flyerHubStartCreateAssistant,
                     openForEdit = flyerHubOpenForEdit,
+                    hasProAccess = hasProAccess,
+                    onUnlockPro = onUnlockPro,
                     onFlyerSaveSuccess = { showFlyerHub = false },
                     onBack = {
                         showFlyerHub = false
@@ -547,11 +557,12 @@ fun MainTabsScreen(
             PostCardFlyerPromoSheet(
                 slug = slug,
                 visible = showFlyerPromo && slug.isNotEmpty(),
+                hasProAccess = hasProAccess,
                 onDismiss = { showFlyerPromo = false },
+                onUnlockPro = { openPaywall() },
                 onCreateFlyer = {
-                    flyerHubStartCreateAssistant = true
-                    flyerHubOpenForEdit = false
-                    showFlyerHub = true
+                    showFlyerPromo = false
+                    openFlyerHub(startCreateAssistant = true)
                 },
             )
 

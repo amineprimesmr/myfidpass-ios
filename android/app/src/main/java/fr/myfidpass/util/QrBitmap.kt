@@ -1,5 +1,7 @@
 package fr.myfidpass.util
 
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import android.graphics.Bitmap
@@ -17,4 +19,10 @@ fun qrCodeImageBitmap(data: String, size: Int = 512): ImageBitmap {
         }
     }
     return bmp.asImageBitmap()
+}
+
+/** QR mémorisé — ne pas appeler [qrCodeImageBitmap] directement dans le corps d’un composant animé. */
+@Composable
+fun rememberQrCodeBitmap(data: String, size: Int): ImageBitmap {
+    return remember(data, size) { qrCodeImageBitmap(data, size) }
 }

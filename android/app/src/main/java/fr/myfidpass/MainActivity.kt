@@ -15,6 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.ProcessLifecycleOwner
+import dagger.hilt.android.AndroidEntryPoint
 import fr.myfidpass.ui.AppRoot
 import fr.myfidpass.ui.theme.MyfidpassTheme
 import kotlinx.coroutines.CoroutineScope
@@ -22,6 +23,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
+@AndroidEntryPoint
 class MainActivity : ComponentActivity() {
 
     var pendingOAuthUri by mutableStateOf<Uri?>(null)

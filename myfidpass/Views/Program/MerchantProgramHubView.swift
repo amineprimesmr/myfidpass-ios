@@ -127,228 +127,10 @@ struct MerchantProgramHubView: View {
     }
 }
 
-// MARK: - Racine onglet Flyer (IA + éditeur)
+
 
 @MainActor
-private struct ProgramFlyerTabRoot: View {
-    let slug: String
-    let palette: DashboardRevolutPalette
-    let seedRecreateFlyer: Bool
-    let seedOpenFlyerForEdit: Bool
-    let startInCreateFromEditBack: Bool
-    let liveCommerceSnapshot: CommerceFlyerLiveSnapshot?
-    let onFlyerSaveSuccessReturnToCommerce: (() -> Void)?
-    let onBackFromModifyToCreateFlyer: (() -> Void)?
-    let onBackFromModifyToYourFlyerPreview: (() -> Void)?
-    let onExitFlyerHubPopCommerce: (() -> Void)?
-    @EnvironmentObject private var syncService: SyncService
-    @Environment(\.scenePhase) private var scenePhase
-    @StateObject private var model: ProgramFlyerEditorModel
-
-    init(
-        slug: String,
-        palette: DashboardRevolutPalette,
-        seedRecreateFlyer: Bool = false,
-        seedOpenFlyerForEdit: Bool = false,
-        startInCreateFromEditBack: Bool = false,
-        liveCommerceSnapshot: CommerceFlyerLiveSnapshot? = nil,
-        onFlyerSaveSuccessReturnToCommerce: (() -> Void)? = nil,
-        onBackFromModifyToCreateFlyer: (() -> Void)? = nil,
-        onBackFromModifyToYourFlyerPreview: (() -> Void)? = nil,
-        onExitFlyerHubPopCommerce: (() -> Void)? = nil
-    ) {
-        self.slug = slug
-        self.palette = palette
-        self.seedRecreateFlyer = seedRecreateFlyer
-        self.seedOpenFlyerForEdit = seedOpenFlyerForEdit
-        self.startInCreateFromEditBack = startInCreateFromEditBack
-        self.liveCommerceSnapshot = liveCommerceSnapshot
-        self.onFlyerSaveSuccessReturnToCommerce = onFlyerSaveSuccessReturnToCommerce
-        self.onBackFromModifyToCreateFlyer = onBackFromModifyToCreateFlyer
-        self.onBackFromModifyToYourFlyerPreview = onBackFromModifyToYourFlyerPreview
-        self.onExitFlyerHubPopCommerce = onExitFlyerHubPopCommerce
-        let tryDraft = !seedRecreateFlyer
-        let sessionOpenForEdit = !seedRecreateFlyer && seedOpenFlyerForEdit
-        _model = StateObject(
-            wrappedValue: ProgramFlyerEditorModel(
-                slug: slug,
-                liveCommerceSnapshot: seedOpenFlyerForEdit ? liveCommerceSnapshot : nil,
-                allowRestoringSessionDraft: tryDraft,
-                sessionStartedWithOpenForEdit: sessionOpenForEdit
-            )
-        )
-    }
-
-    var body: some View {
-        FlyerAIGeneratorSheet(
-            slug: slug,
-            palette: palette,
-            initialPrimaryHex: model.state.colorPrimary,
-            flyerModel: model,
-            isTabRoot: true,
-            seedRecreateFlyerSession: seedRecreateFlyer,
-            seedOpenFlyerForEdit: seedOpenFlyerForEdit,
-            startInCreateFromEditBack: startInCreateFromEditBack,
-            onFlyerSaveSuccessReturnToCommerce: onFlyerSaveSuccessReturnToCommerce,
-            onBackFromModifyToCreateFlyer: onBackFromModifyToCreateFlyer,
-            onBackFromModifyToYourFlyerPreview: onBackFromModifyToYourFlyerPreview,
-            onExitFlyerHubPopCommerce: onExitFlyerHubPopCommerce
-        )
-        .onChange(of: scenePhase) { _, new in
-            if new == .background { model.persistUnsavedFlyerSessionDraftIfNeeded() }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
-            model.persistUnsavedFlyerSessionDraftIfNeeded()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .myfidpassMatchPredictionsConfigDidSave)) { note in
-            guard let s = note.userInfo?["slug"] as? String, s == slug else { return }
-            if let on = note.userInfo?["enabled"] as? Bool {
-                model.applyMatchPredictionsEnabledForPreview(on)
-            }
-            Task { await model.load(showProgress: false) }
-        }
-        .task(id: slug) {
-            if seedRecreateFlyer {
-                CommerceFlyerEditorDraftStore.clear(slug: slug)
-                await model.load(showProgress: true, forceFullFlyerPrefsMerge: true)
-            } else if model.usesInstantCommerceAlignedBootstrap {
-                /// Bootstrap disque fiable (teintes présentes) : sync serveur en arrière-plan sans écraser l’état local.
-                Task { @MainActor in
-                    await model.load(showProgress: false)
-                }
-            } else {
-                /// Cache sparse / défauts : fusion complète depuis GET (couleurs enregistrées côté API).
-                await model.load(
-                    showProgress: !model.hasCompletedSuccessfulFlyerLoad,
-                    forceFullFlyerPrefsMerge: true
-                )
-            }
-        }
-        /// Pas de pull-to-refresh sur le flyer (créer / modifier / aperçu) : évite un rechargement involontaire
-        /// de l’état local + `WKWebView` / sync qui font « sauter » l’édition.
-    }
-}
-
-// MARK: - Navigation
-
-private enum ProgramHubRoute: Hashable {
-    case myCard
-}
-
-// MARK: - Flyer QR (édition in-app + aperçu)
-
-/// Plafonds `fidelity/backend/src/lib/flyer-prefs.js` : logo &lt; 5 Mo, fond &lt; 6 Mo (longueur chaîne), JSON `flyer_prefs` total plafonné (`MAX_JSON_CHARS`).
-/// Le logo et le fond doivent tenir **ensemble** dans le JSON : on cible des data URLs nettement sous les plafonds par champ.
-private enum FlyerDashboardFlyerPrefsLimits {
-    /// Marge sous `MAX_JSON_CHARS` côté API (évite 400 « Flyer trop volumineux » après stringify serveur).
-    static let serverFlyerPrefsJSONMaxBytes = 10 * 1024 * 1024 - 384_000
-    static let maxBgDataURLUtf8Bytes = 6 * 1024 * 1024 - 1
-    static let maxLogoDataURLUtf8Bytes = 5 * 1024 * 1024 - 1
-    /// JPEG décodé pour le fond IA : marge avec logo (~2,4 Mo de chaîne max) + `state` dans le même JSON.
-    static let aiBackgroundJPEGMaxDecodedBytes = 2_800_000
-    /// Chaîne `custom_logo_data_url` (souvent JPEG) — cible sous le plafond JSON avec `flyerLogoExportDataURLReliable`.
-    static let logoPngMaxEncodedUtf8Bytes = 2_400_000
-}
-
-private enum FlyerGeneratedImageDecode {
-    /// `UIImage(data:)` échoue parfois (profils ICC, PNG exotiques) — même stratégème que le sélecteur photo.
-    static func uiImage(fromBase64PNG raw: String) -> UIImage? {
-        guard let data = Data(base64Encoded: raw), !data.isEmpty else { return nil }
-        if let u = UIImage(data: data) { return u }
-        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
-              let cg = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
-        // Pas d’accès à `UIScreen.main` ici (Swift 6 : hors MainActor) — repli décodage uniquement.
-        return UIImage(cgImage: cg, scale: 1.0, orientation: .up)
-    }
-}
-
-/// Sauvegarde du fond IA généré sur disque entre les sessions — survit à un force-quit.
-/// Effacé après enregistrement serveur réussi ; restauré au prochain lancement si le serveur n’a pas encore le fond.
-private final class FlyerPendingBgStorage {
-    static let shared = FlyerPendingBgStorage()
-    private init() {}
-
-    private func fileURL(slug: String) -> URL {
-        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
-        let safe = slug.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? "flyer"
-        return caches.appendingPathComponent("flyerPendingBg_\(safe).dat")
-    }
-
-    /// Enregistre le PNG brut (issu du base64) sur disque.
-    func save(pngBase64: String, slug: String) {
-        guard !pngBase64.isEmpty, let data = Data(base64Encoded: pngBase64) else { return }
-        try? data.write(to: fileURL(slug: slug), options: .atomic)
-    }
-
-    /// Charge le PNG depuis le disque → base64 String prêt pour `generatedBase64`.
-    func loadBase64(slug: String) -> String? {
-        let url = fileURL(slug: slug)
-        guard let data = try? Data(contentsOf: url), !data.isEmpty else { return nil }
-        return data.base64EncodedString()
-    }
-
-    func clear(slug: String) {
-        try? FileManager.default.removeItem(at: fileURL(slug: slug))
-    }
-
-    func hasPending(slug: String) -> Bool {
-        FileManager.default.fileExists(atPath: fileURL(slug: slug).path)
-    }
-}
-
-/// Copie de l’illustration **avant** un « Recréer » (permet de revenir à la 1ʳᵉ version si le 2ᵉ rendu déçoit) — indépendant de `flyerPendingBg`.
-private final class FlyerRecreatePreviousBackupStorage {
-    static let shared = FlyerRecreatePreviousBackupStorage()
-    private init() {}
-
-    private func fileURL(slug: String) -> URL {
-        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
-        let safe = slug.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? "flyer"
-        return caches.appendingPathComponent("flyerRecreatePrevious_\(safe).dat")
-    }
-
-    func save(rawBase64: String, slug: String) {
-        guard !rawBase64.isEmpty, let data = Data(base64Encoded: rawBase64) else { return }
-        try? data.write(to: fileURL(slug: slug), options: .atomic)
-    }
-
-    func loadBase64(slug: String) -> String? {
-        let url = fileURL(slug: slug)
-        guard let data = try? Data(contentsOf: url), !data.isEmpty else { return nil }
-        return data.base64EncodedString()
-    }
-
-    func clear(slug: String) {
-        try? FileManager.default.removeItem(at: fileURL(slug: slug))
-    }
-}
-
-/// Décode `data:image/…;base64,…` (PNG, JPEG, WebP) — même fond qu’après GET dashboard.
-private enum FlyerDataURLImageDecode {
-    static func uiImage(fromDataURLString s: String?) -> UIImage? {
-        let t = s?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard t.hasPrefix("data:image/"), let comma = t.firstIndex(of: ",") else { return nil }
-        let b64 = String(t[t.index(after: comma)...])
-            .replacingOccurrences(of: "\n", with: "")
-            .replacingOccurrences(of: "\r", with: "")
-        return FlyerGeneratedImageDecode.uiImage(fromBase64PNG: b64)
-    }
-}
-
-private struct FlyerEditSnapshot: Equatable {
-    var state: FlyerStateDTO
-    var logo: FlyerRemoteImagePayload
-    var bg: FlyerRemoteImagePayload
-}
-
-private enum FlyerBackgroundSelectionState: Equatable {
-    case none
-    case template(String)
-    case custom
-}
-
-@MainActor
-private final class ProgramFlyerEditorModel: ObservableObject {
+final class ProgramFlyerEditorModel: ObservableObject {
     let slug: String
 
     @Published var state: FlyerStateDTO
@@ -390,7 +172,7 @@ private final class ProgramFlyerEditorModel: ObservableObject {
     /// Horodatage du dernier `load()` démarré (throttle court).
     private var lastLoadRequestAt: Date = .distantPast
     /// Dernier chargement réussi depuis l’API — évite un GET à chaque retour sur l’onglet Flyer (fluide, état local conservé).
-    /// Accès fichier uniquement (`ProgramFlyerEditorModel` est `private`).
+    /// Accès réservé au module Program (FlyerTabRoot lit cette date via le modèle).
     var lastSuccessfulServerLoadAt: Date?
     /// Au moins un `load()` réussi (l’assistant ne doit pas lire la date brute, réservée au modèle).
     var hasCompletedSuccessfulFlyerLoad: Bool { lastSuccessfulServerLoadAt != nil }
@@ -2113,7 +1895,7 @@ private struct FlyerViewModeUsageGuideCard: View {
 }
 
 @MainActor
-private struct FlyerAIGeneratorSheet: View {
+struct FlyerAIGeneratorSheet: View {
     let slug: String
     let palette: DashboardRevolutPalette
     let initialPrimaryHex: String

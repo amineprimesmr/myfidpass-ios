@@ -2,7 +2,7 @@ package fr.myfidpass.ui.screens.settings
 
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
@@ -20,7 +20,6 @@ import fr.myfidpass.ui.screens.commerce.ScanSecuritySettingsScreen
 import fr.myfidpass.ui.screens.commerce.TeamManagementScreen
 import fr.myfidpass.ui.screens.settings.LoyaltyNetworkSettingsScreen
 import fr.myfidpass.ui.screens.commerce.TeamMemberDetailScreen
-import fr.myfidpass.ui.viewModelFactory
 import fr.myfidpass.ui.viewmodel.AccountSettingsViewModel
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.remember
@@ -39,7 +38,6 @@ fun SettingsFlowNavHost(
     modifier: Modifier = Modifier,
     showFlyerShortcuts: Boolean = false,
 ) {
-    val factory = remember(container) { viewModelFactory(container) }
     val nav = rememberNavController()
 
     NavHost(
@@ -76,7 +74,7 @@ fun SettingsFlowNavHost(
             )
         }
         composable(CommerceRoutes.ACCOUNT) {
-            val vm: AccountSettingsViewModel = viewModel(factory = factory)
+            val vm: AccountSettingsViewModel = hiltViewModel()
             AccountSettingsDetailScreen(
                 viewModel = vm,
                 syncService = container.syncService,

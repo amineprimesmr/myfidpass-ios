@@ -186,7 +186,7 @@ struct CommerceStatsPointsAttributedCard: View {
             .lineLimit(1)
             .minimumScaleFactor(0.7)
 
-            if let t = detail.trendPct {
+            if let t = StatsFR.displayableTrendPct(detail.trendPct) {
                 Text(trendMagnitudeString(t))
                     .font(CommerceStatisticsTheme.statisticNumbers(size: 16, weight: .semibold))
                     .foregroundStyle(trendColor)
@@ -197,9 +197,7 @@ struct CommerceStatsPointsAttributedCard: View {
     }
 
     private func trendMagnitudeString(_ t: Double) -> String {
-        let sign = t >= 0 ? "+" : "−"
-        let pct = String(format: "%.1f%%", abs(t))
-        return sign + pct
+        "+\(String(format: "%.1f%%", t))"
     }
 
     private var chartBlock: some View {

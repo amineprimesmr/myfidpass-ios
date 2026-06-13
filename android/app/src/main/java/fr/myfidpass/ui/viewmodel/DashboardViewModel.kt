@@ -12,16 +12,20 @@ import fr.myfidpass.data.dto.TransactionDto
 import fr.myfidpass.data.repo.DashboardRepository
 import fr.myfidpass.services.sync.SyncService
 import fr.myfidpass.ui.mycard.CardPreviewSnapshotSync
+import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import javax.inject.Inject
 
-class DashboardViewModel(
+@HiltViewModel
+class DashboardViewModel @Inject constructor(
     private val dashboardRepository: DashboardRepository,
     private val syncService: SyncService,
-    private val appContext: Context,
+    @ApplicationContext private val appContext: Context,
 ) : ViewModel() {
 
     var stats: BusinessStatsResponse? by mutableStateOf(null)

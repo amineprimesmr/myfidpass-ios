@@ -1,9 +1,9 @@
 package fr.myfidpass.services.sync
 
 import android.content.Context
-import androidx.room.Room
 import fr.myfidpass.data.dto.MemberDto
 import fr.myfidpass.data.dto.TransactionDto
+import fr.myfidpass.data.local.db.DatabaseProvider
 import fr.myfidpass.data.local.db.MyfidpassDatabase
 import fr.myfidpass.data.local.db.entities.MemberEntity
 import fr.myfidpass.util.MerchantTechnicalMember
@@ -20,11 +20,7 @@ class SyncService(
     private val repository: DashboardRepository,
 ) {
     private val appContext = context.applicationContext
-    private val db = Room.databaseBuilder(
-        appContext,
-        MyfidpassDatabase::class.java,
-        "myfidpass.db",
-    ).fallbackToDestructiveMigration().build()
+    private val db: MyfidpassDatabase = DatabaseProvider.get(appContext)
 
     private val mutex = Mutex()
     private val lastSyncBySlug = AtomicLong(0)

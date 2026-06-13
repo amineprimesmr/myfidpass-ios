@@ -13,10 +13,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -47,12 +46,18 @@ import androidx.compose.ui.unit.dp
 import fr.myfidpass.BuildConfig
 import fr.myfidpass.data.dto.CampaignAutomationConfigDto
 import fr.myfidpass.data.dto.CampaignAutomationRuleDto
+import fr.myfidpass.data.dto.LOCATION_ENTRY_RULE_ID
+import fr.myfidpass.data.dto.defaultPerimeterNotificationMessage
+import fr.myfidpass.data.dto.mergedAutomationRules
 import fr.myfidpass.data.dto.NotificationBusinessReadinessDto
 import fr.myfidpass.data.local.NotificationSendLocalHistoryStore
 import fr.myfidpass.data.local.SessionStore
 import fr.myfidpass.data.repo.DashboardRepository
 import fr.myfidpass.util.MerchantUXFeedback
 import fr.myfidpass.util.readUriAsImageDataUrl
+import fr.myfidpass.ui.components.MerchantFloatingTabBarMetrics
+import fr.myfidpass.ui.components.MerchantProUnlockTeaserButton
+import fr.myfidpass.ui.components.PerimeterMapView
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonArray
@@ -84,7 +89,6 @@ fun CampaignsTabScreen(
     var bodyText by remember { mutableStateOf("") }
     var selectedSegment by remember { mutableStateOf<String?>(null) }
     var automation by remember { mutableStateOf<CampaignAutomationConfigDto?>(null) }
-    var ruleMessages by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     var perimeterMessage by remember { mutableStateOf("") }
     var locationLat by remember { mutableStateOf<Double?>(null) }
     var locationLng by remember { mutableStateOf<Double?>(null) }
@@ -97,10 +101,7 @@ fun CampaignsTabScreen(
     var sendSuccessCount by remember { mutableStateOf<Int?>(null) }
     var uploadingIcon by remember { mutableStateOf(false) }
     var showLogoPopup by remember { mutableStateOf(false) }
-    var showPerimeter by remember { mutableStateOf(false) }
-    var eventEditorRuleId by remember { mutableStateOf<String?>(null) }
-    var showEventEditor by remember { mutableStateOf(false) }
-    var pendingDeleteEventId by remember { mutableStateOf<String?>(null) }
+    var isPerimeterEditing by remember { mutableStateOf(false) }
     var readinessRows by remember { mutableStateOf<List<NotificationBusinessReadinessDto>>(emptyList()) }
     var selectedSendSlugs by remember { mutableStateOf<Set<String>>(emptySet()) }
 
@@ -137,28 +138,6 @@ fun CampaignsTabScreen(
         } ?: scope.launch { snackbarHostState.showSnackbar("Image invalide (max 512 Ko)") }
     }
 
-    if (showPerimeter) {
-        PerimeterSettingsScreen(
-            repository = repository,
-            snackbar = snackbarHostState,
-            onBack = {
-                showPerimeter = false
-                slug?.let { s ->
-                    scope.launch {
-                        loadCampaignData(repository, s) { settings, auto ->
-                            automation = auto
-                            perimeterMessage = settings.locationRelevantText.orEmpty()
-                            locationLat = settings.locationLat
-                            locationLng = settings.locationLng
-                            locationRadiusMeters = settings.locationRadiusMeters ?: 100
-                        }
-                    }
-                }
-            },
-        )
-        return
-    }
-
     LaunchedEffect(slug) {
         val s = slug ?: run {
             dataLoading = false
@@ -167,19 +146,21 @@ fun CampaignsTabScreen(
         dataLoading = true
         loadError = null
         loadCampaignData(repository, s) { settings, auto ->
-            automation = auto
+            val mergedRules = mergedAutomationRules(auto)
+            automation = CampaignAutomationConfigDto(rules = mergedRules)
             val commerceName = settings.organizationName?.trim()?.takeIf { it.isNotEmpty() }
                 ?: sessionStore.businesses.firstOrNull { it.slug == s }?.organizationName?.trim()?.takeIf { it.isNotEmpty() }
                 ?: sessionStore.businesses.firstOrNull { it.slug == s }?.name?.trim()?.takeIf { it.isNotEmpty() }
                 ?: ""
             title = settings.notificationTitleOverride?.trim()?.takeIf { it.isNotEmpty() } ?: commerceName
             bodyText = ""
-            perimeterMessage = settings.locationRelevantText.orEmpty()
+            perimeterMessage = settings.locationRelevantText.orEmpty().ifBlank {
+                mergedRules[LOCATION_ENTRY_RULE_ID]?.message.orEmpty()
+            }
             locationLat = settings.locationLat
             locationLng = settings.locationLng
             locationRadiusMeters = settings.locationRadiusMeters ?: 100
             notificationIconUrl = settings.notificationIconUrl?.trim()?.takeIf { it.isNotEmpty() }
-            ruleMessages = auto?.rules?.mapValues { it.value.message.orEmpty() }.orEmpty()
         }.onFailure { loadError = it.message }
         dataLoading = false
         if (sessionStore.businesses.size > 1) {
@@ -230,29 +211,20 @@ fun CampaignsTabScreen(
         val s = slug ?: return
         scope.launch {
             runCatching {
-                val current = automation?.rules?.toMutableMap() ?: mutableMapOf()
+                val locEnabled = hasCustomIcon && (automation?.rules?.get(LOCATION_ENTRY_RULE_ID)?.enabled == true)
+                val msg = perimeterMessage.trim().ifBlank { defaultPerimeterNotificationMessage }
                 val patch = buildJsonObject {
                     putJsonObject("campaign_automation") {
                         put("version", automation?.version ?: 1)
                         put("global_cooldown_days", automation?.globalCooldownDays ?: 7)
                         putJsonObject("rules") {
-                            current.forEach { (k, v) ->
-                                putJsonObject(k) {
-                                    val iconOk = hasCustomIcon
-                                    put("enabled", if (iconOk && v.enabled == true) 1 else 0)
-                                    val msg = ruleMessages[k]?.trim()?.takeIf { it.isNotEmpty() } ?: v.message
-                                    msg?.let { put("message", it) }
-                                    v.eventType?.let { put("event_type", it) }
-                                    v.delayMinutes?.let { put("delay_minutes", it) }
-                                    v.title?.let { put("title", it) }
-                                    v.segment?.let { put("segment", it) }
-                                }
+                            putJsonObject(LOCATION_ENTRY_RULE_ID) {
+                                put("enabled", if (locEnabled) 1 else 0)
+                                put("message", msg)
                             }
                         }
                     }
-                    if (perimeterMessage.isNotBlank()) {
-                        put("location_relevant_text", perimeterMessage.trim())
-                    }
+                    put("location_relevant_text", if (locEnabled) msg else "")
                 }
                 repository.patchDashboardSettings(s, patch)
                 onDone()
@@ -262,15 +234,14 @@ fun CampaignsTabScreen(
         }
     }
 
-    fun saveAutomationRule(ruleId: String, enabled: Boolean, message: String) {
+    fun saveLocationEntry(enabled: Boolean) {
         val current = automation?.rules?.toMutableMap() ?: mutableMapOf()
-        val row = current[ruleId]?.copy(
+        val msg = perimeterMessage.trim().ifBlank { defaultPerimeterNotificationMessage }
+        current[LOCATION_ENTRY_RULE_ID] = CampaignAutomationRuleDto(
             enabled = enabled && hasCustomIcon,
-            message = message,
-        ) ?: CampaignAutomationRuleDto(enabled = enabled && hasCustomIcon, message = message)
-        current[ruleId] = row
+            message = msg,
+        )
         automation = automation?.copy(rules = current) ?: CampaignAutomationConfigDto(rules = current)
-        ruleMessages = ruleMessages + (ruleId to message)
         patchAutomation()
     }
 
@@ -303,145 +274,188 @@ fun CampaignsTabScreen(
         if (bodyText.isBlank()) return
         scope.launch {
             isSending = true
-            sendProgress = 0.08f
-            delay(150)
-            sendProgress = 0.35f
-            val result = runCatching {
-                sendProgress = 0.55f
-                repository.sendNotification(
-                    s,
-                    bodyText.trim(),
-                    title.trim().takeIf { it.isNotEmpty() },
-                    selectedSegment,
-                    businessSlugs = sendSlugs.takeIf { it.size > 1 },
-                )
-            }
-            result.fold(
-                onSuccess = { resp ->
-                    val serverMsg = resp["message"]?.jsonPrimitive?.content?.trim()
-                    val code = resp["code"]?.jsonPrimitive?.contentOrNull
-                    if (code == "no_real_clients") {
-                        snackbarHostState.showSnackbar(
-                            serverMsg?.takeIf { it.isNotEmpty() }
-                                ?: "Aucun vrai client n'a encore ajouté la carte. Partage le lien de ta carte pour que tes clients l'ajoutent à Apple Wallet.",
-                        )
-                        return@fold
-                    }
+            sendProgress = 0.06f
+            try {
+                sendProgress = 0.20f
+                val trimmedMessage = bodyText.trim()
+                val trimmedTitle = title.trim().takeIf { it.isNotEmpty() }
+                val result = runCatching {
+                    repository.sendNotification(
+                        s,
+                        trimmedMessage,
+                        trimmedTitle,
+                        selectedSegment,
+                        businessSlugs = sendSlugs.takeIf { it.size > 1 },
+                    )
+                }
+                result.fold(
+                    onSuccess = { resp ->
+                        val serverMsg = resp["message"]?.jsonPrimitive?.content?.trim()
+                        val code = resp["code"]?.jsonPrimitive?.contentOrNull
+                        if (code == "no_real_clients") {
+                            snackbarHostState.showSnackbar(
+                                serverMsg?.takeIf { it.isNotEmpty() }
+                                    ?: "Aucun vrai client n'a encore ajouté la carte. Partage le lien de ta carte pour que tes clients l'ajoutent à Apple Wallet.",
+                            )
+                            return@fold
+                        }
 
-                    val count = resp["total"]?.jsonPrimitive?.intOrNull
-                        ?: resp["sent"]?.jsonPrimitive?.intOrNull
-                        ?: resp["sent_count"]?.jsonPrimitive?.intOrNull
-                        ?: resp["recipients"]?.jsonPrimitive?.intOrNull
-                    val zeroTargets = (count ?: 0) == 0
-                    val multiResults = if (resp["multi"]?.jsonPrimitive?.booleanOrNull == true) {
-                        (resp["results"] as? JsonArray)
-                            ?.mapNotNull { it as? JsonObject }
-                            ?.filter { it["ok"]?.jsonPrimitive?.booleanOrNull == true }
-                            .orEmpty()
-                    } else {
-                        emptyList()
-                    }
-                    if (zeroTargets) {
-                        snackbarHostState.showSnackbar(
-                            serverMsg?.takeIf { it.isNotEmpty() }
-                                ?: "Aucun appareil joignable — les clients doivent avoir la carte dans Wallet ou le navigateur.",
-                        )
-                        return@fold
-                    }
+                        val count = resp["total"]?.jsonPrimitive?.intOrNull
+                            ?: resp["sent"]?.jsonPrimitive?.intOrNull
+                            ?: resp["sent_count"]?.jsonPrimitive?.intOrNull
+                            ?: resp["recipients"]?.jsonPrimitive?.intOrNull
+                        val zeroTargets = (count ?: 0) == 0
+                        val multiResults = if (resp["multi"]?.jsonPrimitive?.booleanOrNull == true) {
+                            (resp["results"] as? JsonArray)
+                                ?.mapNotNull { it as? JsonObject }
+                                ?.filter { it["ok"]?.jsonPrimitive?.booleanOrNull == true }
+                                .orEmpty()
+                        } else {
+                            emptyList()
+                        }
+                        if (zeroTargets) {
+                            snackbarHostState.showSnackbar(
+                                serverMsg?.takeIf { it.isNotEmpty() }
+                                    ?: "Aucun appareil joignable — les clients doivent avoir la carte dans Wallet ou le navigateur.",
+                            )
+                            return@fold
+                        }
 
-                    sendProgress = 0.64f
-                    val trimmedMessage = bodyText.trim()
-                    val trimmedTitle = title.trim().takeIf { it.isNotEmpty() }
-                    if (multiResults.isNotEmpty()) {
-                        for (row in multiResults) {
-                            val rowSlug = row["slug"]?.jsonPrimitive?.contentOrNull ?: s
-                            val rowJob = row["job_id"]?.jsonPrimitive?.contentOrNull
-                            val rowBatch = row["batch_id"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
-                            if (!rowJob.isNullOrBlank()) {
+                        sendProgress = 0.64f
+                        if (multiResults.isNotEmpty()) {
+                            for (row in multiResults) {
+                                val rowSlug = row["slug"]?.jsonPrimitive?.contentOrNull ?: s
+                                val rowJob = row["job_id"]?.jsonPrimitive?.contentOrNull
+                                val rowBatch = row["batch_id"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+                                if (!rowJob.isNullOrBlank()) {
+                                    scope.launch {
+                                        pollNotificationJob(
+                                            repository = repository,
+                                            context = context,
+                                            slug = rowSlug,
+                                            jobId = rowJob,
+                                            batchId = rowBatch,
+                                            title = trimmedTitle,
+                                            message = trimmedMessage,
+                                            expectedDevices = row["deliverable_devices"]?.jsonPrimitive?.intOrNull
+                                                ?: row["total_devices"]?.jsonPrimitive?.intOrNull ?: 0,
+                                            playSoundOnDelivered = false,
+                                        )
+                                    }
+                                }
+                            }
+                        } else {
+                            val batchId = resp["batch_id"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+                            val jobId = resp["job_id"]?.jsonPrimitive?.contentOrNull
+                            if (!jobId.isNullOrBlank()) {
                                 scope.launch {
                                     pollNotificationJob(
                                         repository = repository,
                                         context = context,
-                                        slug = rowSlug,
-                                        jobId = rowJob,
-                                        batchId = rowBatch,
+                                        slug = s,
+                                        jobId = jobId,
+                                        batchId = batchId,
                                         title = trimmedTitle,
                                         message = trimmedMessage,
-                                        expectedDevices = row["deliverable_devices"]?.jsonPrimitive?.intOrNull
-                                            ?: row["total_devices"]?.jsonPrimitive?.intOrNull ?: 0,
+                                        expectedDevices = count ?: 0,
                                         playSoundOnDelivered = false,
                                     )
                                 }
                             }
                         }
-                    } else {
-                        val batchId = resp["batch_id"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
-                        val jobId = resp["job_id"]?.jsonPrimitive?.contentOrNull
-                        if (!jobId.isNullOrBlank()) {
-                            scope.launch {
-                                pollNotificationJob(
-                                    repository = repository,
-                                    context = context,
-                                    slug = s,
-                                    jobId = jobId,
-                                    batchId = batchId,
-                                    title = trimmedTitle,
-                                    message = trimmedMessage,
-                                    expectedDevices = count ?: 0,
-                                    playSoundOnDelivered = false,
-                                )
-                            }
+
+                        val successMessage = when {
+                            multiResults.isNotEmpty() ->
+                                "Notification envoyée vers ${multiResults.size} commerce${if (multiResults.size > 1) "s" else ""}."
+                            else ->
+                                "Notification envoyée à ${count ?: 0} client${if ((count ?: 0) > 1) "s" else ""}."
                         }
-                    }
 
-                    val successMessage = when {
-                        multiResults.isNotEmpty() ->
-                            "Notification envoyée vers ${multiResults.size} commerce${if (multiResults.size > 1) "s" else ""}."
-                        else ->
-                            "Notification envoyée à ${count ?: 0} client${if ((count ?: 0) > 1) "s" else ""}."
-                    }
+                        sendSuccessCount = if (multiResults.isNotEmpty()) {
+                            count ?: multiResults.size
+                        } else {
+                            count ?: 0
+                        }
+                        delay(350)
+                        sendProgress = 0.72f
 
-                    sendProgress = 0.72f
-                    bodyText = ""
-                    patchAutomation()
-                    delay(400)
-                    sendProgress = 0.86f
-                    delay(400)
-                    sendProgress = 0.97f
-                    delay(300)
-                    sendProgress = 1f
-                    delay(260)
-                    MerchantUXFeedback.playNotificationSent(context = context)
-                    snackbarHostState.showSnackbar(successMessage)
-                    sendSuccessCount = if (multiResults.isNotEmpty()) {
-                        count ?: multiResults.size
-                    } else {
-                        count ?: 0
-                    }
-                    delay(1400)
-                    sendSuccessCount = null
-                },
-                onFailure = {
-                    snackbarHostState.showSnackbar(it.message ?: "Erreur lors de l'envoi")
-                },
-            )
-            isSending = false
-            sendProgress = 0f
+                        bodyText = ""
+                        patchAutomation()
+                        sendProgress = 0.80f
+                        sendProgress = 0.86f
+                        sendProgress = 0.91f
+                        sendProgress = 0.97f
+                        sendProgress = 1f
+
+                        delay(280)
+                        MerchantUXFeedback.playNotificationSent(context = context)
+                        snackbarHostState.showSnackbar(successMessage)
+                        delay(900)
+                        sendSuccessCount = null
+                    },
+                    onFailure = {
+                        snackbarHostState.showSnackbar(it.message ?: "Erreur lors de l'envoi")
+                    },
+                )
+            } finally {
+                isSending = false
+                sendProgress = 0f
+            }
         }
     }
 
     Box(modifier.fillMaxSize()) {
+        val panelShape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
+        if (slug != null) {
+            PerimeterMapView(
+                latitude = locationLat,
+                longitude = locationLng,
+                radiusMeters = locationRadiusMeters,
+                showMapChrome = false,
+                darkAppearance = true,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(panelShape),
+            )
+        } else {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .clip(panelShape)
+                    .background(MaterialTheme.colorScheme.background),
+            )
+        }
+
         Column(
             Modifier
                 .fillMaxSize()
-                .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
-                .background(MaterialTheme.colorScheme.background)
-                .verticalScroll(rememberScrollState())
-                .padding(top = 12.dp)
-                .padding(top = if (isSending) 8.dp else 0.dp)
-                .padding(horizontal = 16.dp)
-                .padding(bottom = 100.dp),
+                .clip(panelShape)
+                .then(if (isPerimeterEditing) Modifier.imePadding() else Modifier),
         ) {
+            Box(
+                Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+            ) {
+                Column(
+                    Modifier
+                        .fillMaxSize()
+                        .then(
+                            if (!hasProAccess) {
+                                Modifier.blur(10.dp).alpha(0.88f)
+                            } else {
+                                Modifier
+                            },
+                        ),
+                ) {
+                    Column(
+                        Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                            .padding(top = 12.dp)
+                            .padding(top = if (isSending) 8.dp else 0.dp)
+                            .padding(horizontal = 16.dp),
+                    ) {
             if (isSending) {
                 NotificationSendTopProgressStrip(sendProgress)
                 Spacer(Modifier.height(8.dp))
@@ -603,62 +617,61 @@ fun CampaignsTabScreen(
                 Spacer(Modifier.height(14.dp))
             }
 
-            Box(Modifier.fillMaxWidth()) {
-                BorderBeamNotificationComposer(
-                    title = title,
-                    message = bodyText,
-                    onTitleChange = { title = it },
-                    onMessageChange = { bodyText = it },
-                    selectedSegment = selectedSegment,
-                    onSegmentSelected = { selectedSegment = it },
-                    onSend = { sendNotification() },
-                    sending = isSending,
-                    sendEnabled = hasProAccess && bodyText.isNotBlank() && hasCustomIcon,
-                    sendSuccessCount = sendSuccessCount,
-                    modifier = Modifier.then(
-                        if (!hasProAccess) Modifier.blur(5.dp).alpha(0.85f) else Modifier,
-                    ),
-                )
+            BorderBeamNotificationComposer(
+                title = title,
+                message = bodyText,
+                onTitleChange = { title = it },
+                onMessageChange = { bodyText = it },
+                selectedSegment = selectedSegment,
+                onSegmentSelected = { selectedSegment = it },
+                onSend = { sendNotification() },
+                sending = isSending,
+                sendEnabled = hasProAccess && bodyText.isNotBlank() && hasCustomIcon,
+                sendSuccessCount = sendSuccessCount,
+            )
+            Spacer(Modifier.weight(1f))
+                    }
+
+                    if (slug != null) {
+                        NotificationsPerimeterFooter(
+                            perimeterMessage = perimeterMessage,
+                            onPerimeterMessageChange = { newMessage ->
+                                perimeterMessage = newMessage
+                                if (hasCustomIcon) {
+                                    saveLocationEntry(enabled = true)
+                                }
+                            },
+                            hasCustomIcon = hasCustomIcon,
+                            logoUrl = notificationIconUrl ?: iconApiUrl,
+                            authToken = authToken,
+                            onEditingChanged = { isPerimeterEditing = it },
+                            modifier = Modifier
+                                .padding(horizontal = 16.dp)
+                                .padding(
+                                    bottom = when {
+                                        isPerimeterEditing -> 8.dp
+                                        !hasProAccess -> MerchantFloatingTabBarMetrics.notificationsPerimeterBottomWithSubscribePill
+                                        else -> MerchantFloatingTabBarMetrics.contentBottomInset
+                                    },
+                                ),
+                        )
+                    }
+                }
+
                 if (!hasProAccess) {
-                    ProUnlockTeaserButton(
+                    Box(
+                        Modifier
+                            .matchParentSize()
+                            .background(Color.Black.copy(alpha = 0.14f)),
+                    )
+                    MerchantProUnlockTeaserButton(
                         onUnlock = onUnlockPro,
-                        modifier = Modifier.align(Alignment.Center),
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .padding(horizontal = 24.dp),
                     )
                 }
             }
-
-            Spacer(Modifier.height(20.dp))
-
-            AutomationHubCarousel(
-                automation = automation,
-                ruleMessages = ruleMessages,
-                notificationIconUrl = if (hasCustomIcon) iconApiUrl else null,
-                authToken = authToken,
-                perimeterMessage = perimeterMessage,
-                onPerimeterMessageChange = { perimeterMessage = it; patchAutomation() },
-                onRuleMessageChange = { id, msg ->
-                    ruleMessages = ruleMessages + (id to msg)
-                    patchAutomation()
-                },
-                onToggle = { id, enabled ->
-                    saveAutomationRule(id, enabled, ruleMessages[id].orEmpty())
-                },
-                onOpenPerimeter = { showPerimeter = true },
-                locationLat = locationLat,
-                locationLng = locationLng,
-                locationRadiusMeters = locationRadiusMeters,
-                hasCustomIcon = hasCustomIcon,
-                onAddEventProgramming = {
-                    eventEditorRuleId = null
-                    showEventEditor = true
-                },
-                onEditEventProgramming = { id ->
-                    eventEditorRuleId = id
-                    showEventEditor = true
-                },
-                onDeleteEventProgramming = { pendingDeleteEventId = it },
-            )
-
         }
 
         if (showLogoPopup && !hasCustomIcon) {
@@ -682,51 +695,6 @@ fun CampaignsTabScreen(
                 )
             }
         }
-    }
-
-    if (showEventEditor) {
-        val rule = eventEditorRuleId?.let { automation?.rules?.get(it) }
-        EventAutomationEditorSheet(
-            editingRuleId = eventEditorRuleId,
-            initialTitle = rule?.title.orEmpty(),
-            initialMessage = rule?.message.orEmpty(),
-            initialEventType = rule?.eventType.orEmpty(),
-            initialDelayMinutes = rule?.delayMinutes ?: 60,
-            onDismiss = { showEventEditor = false },
-            onSave = { id, t, msg, eventType, delay ->
-                val current = automation?.rules?.toMutableMap() ?: mutableMapOf()
-                current[id] = CampaignAutomationRuleDto(
-                    enabled = hasCustomIcon,
-                    message = msg,
-                    title = t,
-                    eventType = eventType,
-                    delayMinutes = delay,
-                )
-                automation = automation?.copy(rules = current) ?: CampaignAutomationConfigDto(rules = current)
-                ruleMessages = ruleMessages + (id to msg)
-                patchAutomation()
-            },
-        )
-    }
-
-    pendingDeleteEventId?.let { id ->
-        androidx.compose.material3.AlertDialog(
-            onDismissRequest = { pendingDeleteEventId = null },
-            title = { Text("Supprimer cette programmation ?") },
-            text = { Text("La programmation sera supprimée.") },
-            confirmButton = {
-                TextButton(onClick = {
-                    val current = automation?.rules?.toMutableMap() ?: mutableMapOf()
-                    current.remove(id)
-                    automation = automation?.copy(rules = current)
-                    patchAutomation()
-                    pendingDeleteEventId = null
-                }) { Text("Supprimer", color = MaterialTheme.colorScheme.error) }
-            },
-            dismissButton = {
-                TextButton(onClick = { pendingDeleteEventId = null }) { Text("Annuler") }
-            },
-        )
     }
 }
 

@@ -44,7 +44,7 @@ import androidx.compose.ui.res.painterResource
 import fr.myfidpass.R
 import fr.myfidpass.ui.mycard.CardPreviewEditZone
 import fr.myfidpass.ui.mycard.StampIconCatalog
-import fr.myfidpass.util.qrCodeImageBitmap
+import fr.myfidpass.util.rememberQrCodeBitmap
 import fr.myfidpass.util.toComposeColorOr
 
 private const val CARD_ASPECT = 375f / 478f
@@ -120,6 +120,7 @@ fun WalletCardPreviewAndroid(
     val logoModel = pendingLogoDataUrl ?: logoUrl
     val hasBackground = !bgModel.isNullOrBlank()
     val headerBarColor = if (hasBackground) primary else primary
+    val qrBitmap = rememberQrCodeBitmap(qrPayload, if (compact) 280 else 320)
 
     WalletCardFrame(
         modifier = modifier,
@@ -231,7 +232,7 @@ fun WalletCardPreviewAndroid(
                         contentAlignment = Alignment.Center,
                     ) {
                         Image(
-                            bitmap = qrCodeImageBitmap(qrPayload, 320),
+                            bitmap = qrBitmap,
                             contentDescription = null,
                             modifier = Modifier
                                 .fillMaxWidth(0.92f)
@@ -295,6 +296,7 @@ fun StampCardPreviewAndroid(
         filled < 5 -> if (5 - filled == 1) "DANS 1 PASSAGE" else "DANS ${5 - filled} PASSAGES"
         else -> if (total - filled == 1) "DANS 1 PASSAGE" else "DANS ${total - filled} PASSAGES"
     }
+    val qrBitmap = rememberQrCodeBitmap(qrPayload, if (compact) 240 else 280)
 
     WalletCardFrame(
         modifier = modifier,
@@ -403,7 +405,7 @@ fun StampCardPreviewAndroid(
                     contentAlignment = Alignment.Center,
                 ) {
                     Image(
-                        bitmap = qrCodeImageBitmap(qrPayload, 280),
+                        bitmap = qrBitmap,
                         contentDescription = null,
                         modifier = Modifier
                             .fillMaxWidth(0.55f)
@@ -821,6 +823,7 @@ fun GoogleWalletLoyaltyPreviewAndroid(
     val logoNeedsSetup = CardPreviewEditZone.LOGO_BAND in completionHighlightZones
     val rewardsHeaderNeedsSetup = CardPreviewEditZone.HEADER_RIGHT in completionHighlightZones
     val pillTapHandler = onCompletionPillTap ?: onZoneTap
+    val qrBitmap = rememberQrCodeBitmap(qrPayload, if (compact) 280 else 340)
 
     BoxWithConstraints(
         modifier = modifier.fillMaxWidth(),
@@ -952,7 +955,7 @@ fun GoogleWalletLoyaltyPreviewAndroid(
                     contentAlignment = Alignment.Center,
                 ) {
                     Image(
-                        bitmap = qrCodeImageBitmap(qrPayload, if (compact) 280 else 340),
+                        bitmap = qrBitmap,
                         contentDescription = null,
                         modifier = Modifier
                             .size(qrSize)

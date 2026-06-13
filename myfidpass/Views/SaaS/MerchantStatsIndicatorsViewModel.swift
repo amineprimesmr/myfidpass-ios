@@ -762,11 +762,20 @@ final class MerchantStatsIndicatorsViewModel: ObservableObject {
                 title = "Audience en plateau"
                 icon = "minus.circle.fill"
             }
+            let dataLine: String = {
+                if trend.deltaPct >= 10 {
+                    return "Tendance : +\(StatsFR.formatPct(trend.deltaPct)) (à partir des dernières semaines)"
+                }
+                if trend.deltaPct <= -10 {
+                    return "Activité en baisse sur les dernières semaines."
+                }
+                return "Activité stable sur les dernières semaines."
+            }()
             callouts.append(
                 .init(
                     icon: icon,
                     title: title,
-                    dataLine: "Tendance : \(trend.deltaSign)\(StatsFR.formatPct(abs(trend.deltaPct))) (à partir des dernières semaines)",
+                    dataLine: dataLine,
                     nextStep: "Si la tendance stagne : testez 1 levier (offre, message, fréquence) et suivez l’évolution sur la période.",
                     accessibilityLabel: "\(title). \(trend.deltaPct)"
                 )

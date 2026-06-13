@@ -1,10 +1,12 @@
 package fr.myfidpass.ui.screens.tabs
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,28 +18,27 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.outlined.PhotoLibrary
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -88,6 +89,7 @@ private fun WalletNotificationPreviewSize.metrics(): WalletPreviewMetrics = when
 }
 
 /** Aperçu notification Wallet — aligné iOS `WalletNotificationPreviewBlock`. */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun WalletNotificationPreviewBlock(
     notificationTitle: String,
@@ -99,9 +101,13 @@ fun WalletNotificationPreviewBlock(
     messagePlaceholder: String = "Message sur le pass",
     maxLength: Int = 200,
     previewSize: WalletNotificationPreviewSize = WalletNotificationPreviewSize.Standard,
+    lightGlassSurface: Boolean = false,
+    onEditingChanged: (Boolean) -> Unit = {},
     footer: @Composable () -> Unit = {},
 ) {
-    var editing by remember { mutableStateOf(false) }
+    val bringIntoViewRequester = remember { BringIntoViewRequester() }
+    val interactionSource = remember { MutableInteractionSource() }
+    val isMessageFocused by interactionSource.collectIsFocusedAsState()
     val metrics = previewSize.metrics()
     val titleStyle = if (previewSize == WalletNotificationPreviewSize.Carousel) {
         MaterialTheme.typography.titleSmall
@@ -113,6 +119,17 @@ fun WalletNotificationPreviewBlock(
     } else {
         MaterialTheme.typography.bodyMedium
     }
+    val titleColor = if (lightGlassSurface) Color.White else Color.Black
+    val bodyColor = if (lightGlassSurface) Color.White.copy(alpha = 0.92f) else Color.Black.copy(alpha = 0.92f)
+    val placeholderColor = if (lightGlassSurface) Color.White.copy(alpha = 0.42f) else Color.Black.copy(alpha = 0.38f)
+    val cursorColor = if (lightGlassSurface) Color.White else Color(0xFF2563EB)
+
+    LaunchedEffect(isMessageFocused) {
+        onEditingChanged(isMessageFocused)
+        if (isMessageFocused) {
+            bringIntoViewRequester.bringIntoView()
+        }
+    }
 
     Column(
         modifier.fillMaxWidth(),
@@ -121,7 +138,7 @@ fun WalletNotificationPreviewBlock(
         Row(
             Modifier
                 .fillMaxWidth()
-                .walletNotificationPreviewSurface(previewSize)
+                .walletNotificationPreviewSurface(previewSize, lightGlassSurface)
                 .padding(
                     horizontal = metrics.horizontalPadding,
                     vertical = metrics.verticalPadding,
@@ -143,47 +160,28 @@ fun WalletNotificationPreviewBlock(
                     notificationTitle,
                     style = titleStyle,
                     fontWeight = FontWeight.SemiBold,
-                    color = Color.Black,
+                    color = titleColor,
                     maxLines = 2,
                 )
-                if (editing) {
-                    TextField(
-                        value = message,
-                        onValueChange = { onMessageChange(it.take(maxLength)) },
-                        placeholder = { Text(messagePlaceholder, style = bodyStyle) },
-                        textStyle = bodyStyle.copy(color = Color.Black.copy(alpha = 0.92f)),
-                        modifier = Modifier.fillMaxWidth(),
-                        minLines = 2,
-                        colors = TextFieldDefaults.colors(
-                            focusedContainerColor = Color.Transparent,
-                            unfocusedContainerColor = Color.Transparent,
-                            focusedIndicatorColor = Color.Transparent,
-                            unfocusedIndicatorColor = Color.Transparent,
-                            cursorColor = Color(0xFF2563EB),
-                        ),
-                    )
-                } else {
-                    Text(
-                        message.ifBlank { messagePlaceholder },
-                        style = bodyStyle,
-                        color = if (message.isBlank()) {
-                            Color.Black.copy(alpha = 0.38f)
-                        } else {
-                            Color.Black.copy(alpha = 0.92f)
-                        },
-                        maxLines = 8,
-                    )
-                }
-            }
-            IconButton(
-                onClick = { editing = !editing },
-                modifier = Modifier.size(width = 32.dp, height = 40.dp),
-            ) {
-                Icon(
-                    if (editing) Icons.Default.Check else Icons.Default.Edit,
-                    contentDescription = if (editing) "Terminer" else "Modifier",
-                    modifier = Modifier.size(metrics.editIconSize),
-                    tint = if (editing) Color(0xFF2563EB) else Color.Black.copy(alpha = 0.48f),
+                TextField(
+                    value = message,
+                    onValueChange = { onMessageChange(it.take(maxLength)) },
+                    placeholder = { Text(messagePlaceholder, style = bodyStyle, color = placeholderColor) },
+                    textStyle = bodyStyle.copy(color = bodyColor),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .bringIntoViewRequester(bringIntoViewRequester),
+                    minLines = 2,
+                    interactionSource = interactionSource,
+                    colors = TextFieldDefaults.colors(
+                        focusedTextColor = bodyColor,
+                        unfocusedTextColor = bodyColor,
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent,
+                        focusedIndicatorColor = Color.Transparent,
+                        unfocusedIndicatorColor = Color.Transparent,
+                        cursorColor = cursorColor,
+                    ),
                 )
             }
         }
@@ -328,6 +326,7 @@ fun NotificationLogoPopupCard(
 @Composable
 private fun Modifier.walletNotificationPreviewSurface(
     previewSize: WalletNotificationPreviewSize,
+    lightGlass: Boolean = false,
 ): Modifier {
     val metrics = previewSize.metrics()
     val shape = RoundedCornerShape(metrics.cornerRadius)
@@ -342,10 +341,32 @@ private fun Modifier.walletNotificationPreviewSurface(
             .clip(shape)
             .background(Color.White, shape)
             .border(1.dp, Color.Black.copy(alpha = 0.09f), shape)
-        WalletNotificationPreviewSize.Standard -> this
-            .clip(shape)
-            .background(Color.White.copy(alpha = 0.88f), shape)
-            .border(1.dp, Color.White.copy(alpha = 0.55f), shape)
+        WalletNotificationPreviewSize.Standard -> if (lightGlass) {
+            val darkGlass = Color(0xFF1C1C22)
+            this
+                .shadow(
+                    elevation = 8.dp,
+                    shape = shape,
+                    spotColor = Color.Black.copy(alpha = 0.35f),
+                    ambientColor = Color.Black.copy(alpha = 0.18f),
+                )
+                .clip(shape)
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(
+                            Color.White.copy(alpha = 0.20f),
+                            darkGlass.copy(alpha = 0.62f),
+                        ),
+                    ),
+                    shape,
+                )
+                .border(1.dp, Color.White.copy(alpha = 0.28f), shape)
+        } else {
+            this
+                .clip(shape)
+                .background(Color.White.copy(alpha = 0.88f), shape)
+                .border(1.dp, Color.White.copy(alpha = 0.55f), shape)
+        }
     }
 }
 

@@ -12,10 +12,7 @@ enum MerchantSubscriptionPricingCopy {
 
     static let paywallBevelTitle = "Combien de commerces avez-vous ?"
 
-    static let paywallContinueCta = "Continuer"
-
-    /// Au-dessus des cartes Mensuel / Annuel.
-    static let paywallPricingIntroLine = "Le premier mois à 1€, puis…"
+    static let paywallContinueCta = "Essayer pour 1€"
 
     /// Code offre App Store Connect (custom) — secours si la signature serveur est indisponible : menu ⋯ → Code promo Apple.
     static let appleCustomOfferCode = "MYFID1EURO"
@@ -41,10 +38,16 @@ enum MerchantSubscriptionPricingCopy {
     static let annualAfterTrialTitle = "Abonnement annuel"
     static let monthlySubscriptionStepDetail = "Renouvellement mensuel via l’App Store."
     static let annualSubscriptionStepDetail = "Renouvellement annuel via l’App Store."
-    static let purchaseCta = "Commencer pour 1 €"
+    static let purchaseCta = "Essayer pour 1€"
 
     /// Pastille flottante au-dessus du tab bar (Accueil / Notifs / Statistiques).
     static let subscribeFloatingPillCta = "Essayer 1 mois à 1€"
+
+    /// Bouton déverrouillage sections Pro (statistiques commerçant).
+    static let statsProUnlockCta = "Débloquer les données du commerce avec Pro"
+
+    /// Bouton déverrouillage flyer de jeu (hub + feuille post-carte).
+    static let flyerProUnlockCta = "Débloquer le flyer de jeu avec Pro"
     static let paywallNoCommitmentLine = "Sans engagement, annulable à tout moment"
     static let paywallAnnualUpsellCta = "Annuel −33 %"
     static let paywallMonthlySwitchBackCta = "Mensuel"

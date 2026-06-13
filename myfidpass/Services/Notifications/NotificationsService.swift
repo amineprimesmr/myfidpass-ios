@@ -180,43 +180,9 @@ final class NotificationsService: NSObject, ObservableObject {
 
     // MARK: - Onboarding commerçant (relance création carte)
 
-    /// Relances onboarding commerçant (carte + flyer) — **locales**, pas APNs serveur.
-    /// Jamais planifiées si l’abonnement payant est actif (`hasPaidMerchantSubscription`).
+    /// Relances onboarding commerçant désactivées — produit : notifications manuelles + périmètre Wallet uniquement.
     func refreshMerchantCardSetupReminder() async {
-        guard AuthStorage.isLoggedIn else {
-            await cancelMerchantOnboardingReminders()
-            return
-        }
-        // Jamais pour les comptes staff.
-        if let staff = AuthStorage.userStaffLogin?.trimmingCharacters(in: .whitespacesAndNewlines), !staff.isEmpty {
-            await cancelMerchantOnboardingReminders()
-            return
-        }
-        // Abonnement payant encaissé (Apple/Stripe, persisté par AuthService) : plus de relance carte/flyer.
-        if AuthStorage.merchantHasEncashedSubscription {
-            await cancelMerchantOnboardingReminders()
-            return
-        }
-        guard let slug = AuthStorage.currentBusinessSlug?.trimmingCharacters(in: .whitespacesAndNewlines), !slug.isEmpty else {
-            await cancelMerchantOnboardingReminders()
-            return
-        }
-
-        let settings = await notificationSettings()
-        let authorized = {
-            switch settings.authorizationStatus {
-            case .authorized, .provisional, .ephemeral: return true
-            default: return false
-            }
-        }()
-        guard authorized else { return }
-
-        let pending = await pendingNotificationRequests()
-        await refreshCardReminder(slug: slug, pending: pending)
-        await refreshFlyerReminder(slug: slug, pending: pending)
-        UNUserNotificationCenter.current().removePendingNotificationRequests(
-            withIdentifiers: [Self.legacyTrialReminderRequestId]
-        )
+        await cancelMerchantOnboardingReminders()
     }
 
     private func refreshCardReminder(slug: String, pending: [UNNotificationRequest]) async {

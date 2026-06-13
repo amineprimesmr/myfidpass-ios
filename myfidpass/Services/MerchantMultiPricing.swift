@@ -56,4 +56,24 @@ enum MerchantMultiPricing {
         let euros = String(format: "%.2f", Double(max(0, cents)) / 100.0).replacingOccurrences(of: ".", with: ",")
         return "\(euros) €"
     }
+
+    /// Équivalent mensuel de l’offre annuelle (ex. 399 € / an → 33,25 € / mois).
+    static func annualMonthlyEquivalentCents(slots: Int) -> Int {
+        Int((Double(annualTotalCents(slots: slots)) / 12.0).rounded())
+    }
+
+    static func annualMonthlyEquivalentLabel(slots: Int) -> String {
+        formatEuro(annualMonthlyEquivalentCents(slots: slots))
+    }
+
+    /// Économie vs tarif « 1 commerce × N » (grille dégressive 2+ commerces).
+    static func multiCommerceSavingsPercent(slots: Int) -> Int? {
+        let n = min(5, max(1, slots))
+        guard n > 1 else { return nil }
+        let actual = monthlyTotalCents(slots: n)
+        let naive = n * monthly1Cents
+        guard naive > 0, actual < naive else { return nil }
+        let saved = (1.0 - Double(actual) / Double(naive)) * 100.0
+        return max(1, Int(saved.rounded()))
+    }
 }

@@ -372,16 +372,7 @@ struct WalletCardPreview: View {
         let payload = trimmed.isEmpty ? "5b34fc46-19d4-46db-95d3-dc2ffbc0" : trimmed
         let side = AppTheme.CardPreviewLayout.qrDisplaySide(cardWidth: cardWidth, compact: compact)
         let renderPx = max(128, ceil(side * AppTheme.DisplayMetrics.displayScale))
-        if let qrImage = QRCodeGenerator.generateQR(from: payload, size: renderPx) {
-            Image(uiImage: qrImage)
-                .interpolation(.none)
-                .resizable()
-                .scaledToFit()
-                .frame(width: side, height: side)
-                .padding(4)
-                .background(Color.white)
-                .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
-        }
+        CachedWalletQRCode(payload: payload, displaySide: side, renderPixels: renderPx)
     }
 
     private func fieldBlock(label: String, value: String, align: HorizontalAlignment = .leading, cardWidth: CGFloat) -> some View {
@@ -454,6 +445,37 @@ struct WalletCardPreview: View {
 }
 
 // MARK: - Génération QR (comme le vrai pass) — partagé avec CafeDesArtsCardPreview
+
+/// QR mis en cache — évite CIFilter à chaque frame d’animation (ex. zoom Ma Carte).
+struct CachedWalletQRCode: View {
+    let payload: String
+    let displaySide: CGFloat
+    let renderPixels: CGFloat
+
+    @State private var qrImage: UIImage?
+
+    var body: some View {
+        Group {
+            if let qrImage {
+                Image(uiImage: qrImage)
+                    .interpolation(.none)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: displaySide, height: displaySide)
+                    .padding(4)
+                    .background(Color.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+            } else {
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(Color.white)
+                    .frame(width: displaySide, height: displaySide)
+            }
+        }
+        .task(id: "\(payload)-\(Int(renderPixels))") {
+            qrImage = QRCodeGenerator.generateQR(from: payload, size: renderPixels)
+        }
+    }
+}
 
 enum QRCodeGenerator {
     /// QR standard (noir sur blanc) — pour usage avec fond blanc.

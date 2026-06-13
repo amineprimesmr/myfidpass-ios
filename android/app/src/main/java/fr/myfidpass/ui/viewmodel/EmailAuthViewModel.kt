@@ -9,8 +9,11 @@ import fr.myfidpass.data.local.FirstLaunchPreferences
 import fr.myfidpass.data.repo.AuthRepository
 import fr.myfidpass.data.repo.EmailLoginResult
 import kotlinx.coroutines.launch
+import dagger.hilt.android.lifecycle.HiltViewModel
+import javax.inject.Inject
 
-class EmailAuthViewModel(
+@HiltViewModel
+class EmailAuthViewModel @Inject constructor(
     private val authRepository: AuthRepository,
     private val firstLaunch: FirstLaunchPreferences,
 ) : ViewModel() {

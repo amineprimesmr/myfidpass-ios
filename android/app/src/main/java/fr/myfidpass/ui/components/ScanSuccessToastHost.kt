@@ -53,7 +53,7 @@ fun ScanSuccessToastHost(
         Box(
             Modifier
                 .fillMaxWidth()
-                .padding(horizontal: 16.dp, vertical: 10.dp),
+                .padding(horizontal = 16.dp, vertical = 10.dp),
             contentAlignment = Alignment.TopCenter,
         ) {
             Row(

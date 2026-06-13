@@ -34,15 +34,17 @@ fun WalletPreviewImage(
             return
         }
     }
-    val request = ImageRequest.Builder(context)
-        .data(trimmed)
-        .crossfade(true)
-        .apply {
-            if (!authToken.isNullOrBlank() && trimmed.contains("/api/")) {
-                addHeader("Authorization", "Bearer $authToken")
+    val request = remember(trimmed, authToken) {
+        ImageRequest.Builder(context)
+            .data(trimmed)
+            .crossfade(true)
+            .apply {
+                if (!authToken.isNullOrBlank() && trimmed.contains("/api/")) {
+                    addHeader("Authorization", "Bearer $authToken")
+                }
             }
-        }
-        .build()
+            .build()
+    }
     AsyncImage(
         model = request,
         contentDescription = null,

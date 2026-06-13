@@ -132,6 +132,9 @@ struct BorderBeamManualNotificationComposerView: View {
     private static let beamPalette: [Color] = [.green, .blue, .pink, .orange, .indigo]
     private let titlePlaceholderLabel = "Titre du message"
     private let messagePlaceholderFull = "Écrivez votre message"
+    private let fieldTextColor = Color.white
+    private let fieldPlaceholderColor = Color.white.opacity(0.42)
+    private let chromeFillColor = Color(white: 0.17)
 
     private var segmentMenuLabel: String {
         guard let s = segment, !s.isEmpty else { return "Tous les clients" }
@@ -160,7 +163,7 @@ struct BorderBeamManualNotificationComposerView: View {
                 cornerRadius: 20,
                 isEnabled: true
             )
-            .background(Color.white.opacity(0.06), in: .rect(cornerRadius: 20))
+            .background(Color.black, in: .rect(cornerRadius: 20))
             .preferredColorScheme(.dark)
             .onAppear {
                 restartMessagePlaceholderAnimation()
@@ -205,7 +208,8 @@ struct BorderBeamManualNotificationComposerView: View {
                     .disabled(sendingLocked)
                     .lineLimit(1 ... 2)
                     .font(.body)
-                    .foregroundStyle(Color.primary)
+                    .foregroundStyle(fieldTextColor)
+                    .tint(fieldTextColor)
                     .padding(.top, 8)
                     .submitLabel(.next)
                     .onSubmit {
@@ -215,7 +219,7 @@ struct BorderBeamManualNotificationComposerView: View {
                 if notificationTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !titleFieldFocused {
                     Text(titlePlaceholderLabel)
                         .font(.body)
-                        .foregroundStyle(Color.primary.opacity(0.42))
+                        .foregroundStyle(fieldPlaceholderColor)
                         .padding(.top, 8)
                         .allowsHitTesting(false)
                 }
@@ -228,7 +232,8 @@ struct BorderBeamManualNotificationComposerView: View {
                     .disabled(sendingLocked)
                     .lineLimit(3 ... 10)
                     .font(.body)
-                    .foregroundStyle(Color.primary)
+                    .foregroundStyle(fieldTextColor)
+                    .tint(fieldTextColor)
                     .padding(.top, 8)
                     .submitLabel(.done)
                     .onSubmit {
@@ -238,7 +243,7 @@ struct BorderBeamManualNotificationComposerView: View {
                 if messageBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !messageFieldFocused {
                     Text(animatedMessagePlaceholderText)
                         .font(.body)
-                        .foregroundStyle(Color.primary.opacity(0.42))
+                        .foregroundStyle(fieldPlaceholderColor)
                         .padding(.top, 8)
                         .allowsHitTesting(false)
                 }
@@ -251,7 +256,7 @@ struct BorderBeamManualNotificationComposerView: View {
                 Spacer(minLength: 0)
 
                 customSendButtonLikeBorderBeam()
-                    .foregroundStyle(Color.primary)
+                    .foregroundStyle(fieldTextColor)
             }
         }
         .padding(15)
@@ -317,11 +322,11 @@ struct BorderBeamManualNotificationComposerView: View {
             HStack(spacing: 6) {
                 Text(segmentMenuLabel)
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(Color.primary)
+                    .foregroundStyle(fieldTextColor)
                     .lineLimit(1)
                 Image(systemName: "chevron.down")
                     .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(Color.primary.opacity(0.85))
+                    .foregroundStyle(fieldTextColor.opacity(0.85))
             }
             .padding(.horizontal, 12)
             .frame(height: 35)
@@ -332,7 +337,7 @@ struct BorderBeamManualNotificationComposerView: View {
                 cornerRadius: 20,
                 isEnabled: true
             )
-            .background(.background, in: .capsule)
+            .background(chromeFillColor, in: .capsule)
         }
         .disabled(!hasSlug || sendingLocked)
         .accessibilityLabel("Destinataires : \(segmentMenuLabel)")
@@ -349,9 +354,13 @@ struct BorderBeamManualNotificationComposerView: View {
                     Image(systemName: "checkmark")
                         .font(.system(size: 15, weight: .bold))
                         .foregroundStyle(.green)
+                } else if isSending {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(fieldTextColor)
                 } else {
                     Image(systemName: "arrow.up")
-                        .foregroundStyle(Color.primary)
+                        .foregroundStyle(fieldTextColor)
                 }
             }
             .frame(width: 35, height: 35)
@@ -360,9 +369,9 @@ struct BorderBeamManualNotificationComposerView: View {
                 beam: Self.beamPalette,
                 beamBlur: 15,
                 cornerRadius: 20,
-                isEnabled: true
+                isEnabled: !isSending && sendSuccessCount == nil
             )
-            .background(.background, in: .circle)
+            .background(chromeFillColor, in: .circle)
         }
         .disabled(sendDisabled)
         .accessibilityLabel(isSending ? "Envoi de la notification en cours" : "Envoyer la campagne")

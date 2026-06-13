@@ -12,8 +12,11 @@ import fr.myfidpass.data.repo.AuthRepository
 import fr.myfidpass.services.notifications.NotificationPermissionHelper
 import fr.myfidpass.services.sync.SyncService
 import kotlinx.coroutines.launch
+import dagger.hilt.android.lifecycle.HiltViewModel
+import javax.inject.Inject
 
-class AccountSettingsViewModel(
+@HiltViewModel
+class AccountSettingsViewModel @Inject constructor(
     private val authRepository: AuthRepository,
     private val sessionStore: SessionStore,
     private val syncService: SyncService,

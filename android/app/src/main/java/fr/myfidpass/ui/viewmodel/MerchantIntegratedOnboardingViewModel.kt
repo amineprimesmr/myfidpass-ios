@@ -12,8 +12,11 @@ import fr.myfidpass.ui.screens.onboarding.IntegratedOnboardingStep
 import fr.myfidpass.ui.screens.onboarding.OnboardingEmailValidation
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import dagger.hilt.android.lifecycle.HiltViewModel
+import javax.inject.Inject
 
-class MerchantIntegratedOnboardingViewModel(
+@HiltViewModel
+class MerchantIntegratedOnboardingViewModel @Inject constructor(
     private val authRepository: AuthRepository,
     private val firstLaunch: FirstLaunchPreferences,
     private val sessionStore: SessionStore,

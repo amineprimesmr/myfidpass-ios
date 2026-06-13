@@ -2,24 +2,43 @@ package fr.myfidpass.ui.components
 
 import android.content.Context
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import fr.myfidpass.data.local.CardPreviewSnapshotStore
 import fr.myfidpass.data.local.CommerceFlyerStore
+import fr.myfidpass.ui.components.MerchantProUnlockTeaserButton
+
+private const val FLYER_PRO_UNLOCK_CTA = "Débloquer le flyer de jeu avec Pro"
+private const val PAYWALL_CONTINUE_CTA = "Essayer pour 1€"
 
 /** Aligné iOS `PostCardFlyerPromoEligibility`. */
 object PostCardFlyerPromoEligibility {
@@ -81,12 +100,63 @@ object PostCardFlyerPromoEligibility {
     }
 }
 
+@Composable
+fun FlyerProUnlockOverlay(
+    locked: Boolean,
+    onUnlock: () -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    Box(modifier) {
+        Box(
+            Modifier.then(
+                if (locked) {
+                    Modifier
+                        .blur(8.dp)
+                        .alpha(0.38f)
+                } else {
+                    Modifier
+                },
+            ),
+        ) {
+            content()
+        }
+        if (locked) {
+            Box(
+                Modifier
+                    .matchParentSize()
+                    .background(Color.Black.copy(alpha = 0.42f)),
+            )
+            FlyerProUnlockButton(
+                onClick = onUnlock,
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .padding(horizontal = 24.dp),
+            )
+        }
+    }
+}
+
+@Composable
+fun FlyerProUnlockButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    MerchantProUnlockTeaserButton(
+        onUnlock = onClick,
+        modifier = modifier,
+        unlockTitle = FLYER_PRO_UNLOCK_CTA,
+    )
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PostCardFlyerPromoSheet(
     slug: String,
     visible: Boolean,
+    hasProAccess: Boolean,
     onDismiss: () -> Unit,
+    onUnlockPro: () -> Unit,
     onCreateFlyer: () -> Unit,
 ) {
     if (!visible) return
@@ -106,7 +176,7 @@ fun PostCardFlyerPromoSheet(
                 .padding(bottom = 32.dp),
         ) {
             Text(
-                "Créez votre flyer",
+                "Créez et affichez votre flyer de jeu",
                 fontSize = 26.sp,
                 fontWeight = FontWeight.Bold,
                 color = Color.White,
@@ -119,16 +189,29 @@ fun PostCardFlyerPromoSheet(
                 lineHeight = 22.sp,
             )
             Spacer(Modifier.height(24.dp))
-            SlideToConfirm(
-                label = "Créer le flyer",
-                onConfirmed = {
+            Button(
+                onClick = {
                     onDismiss()
-                    onCreateFlyer()
+                    if (hasProAccess) {
+                        onCreateFlyer()
+                    } else {
+                        onUnlockPro()
+                    }
                 },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(Color.White.copy(0.08f), RoundedCornerShape(999.dp)),
-            )
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFF007AFF),
+                    contentColor = Color.White,
+                ),
+            ) {
+                Text(
+                    if (hasProAccess) "Créer mon flyer" else PAYWALL_CONTINUE_CTA,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 17.sp,
+                    modifier = Modifier.padding(vertical = 6.dp),
+                )
+            }
         }
     }
 }

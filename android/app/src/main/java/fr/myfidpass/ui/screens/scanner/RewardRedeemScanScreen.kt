@@ -140,7 +140,7 @@ fun RewardRedeemScanScreen(
                                         .onSuccess { res ->
                                             validated = true
                                             val label = res.rewardLabel ?: args.rewardLabel
-                                            onScanSuccessToast?.invoke("$displayName — $label")
+                                            onScanSuccessToast?.invoke("Récompense utilisée — $label")
                                             delay(900)
                                             onDone()
                                         }

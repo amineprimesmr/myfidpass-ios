@@ -41,6 +41,7 @@ import fr.myfidpass.R
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import fr.myfidpass.ui.stats.CommerceGoogleReviewsMonthHistory
+import fr.myfidpass.ui.stats.CommerceStatisticsDataBuilder
 import fr.myfidpass.ui.stats.CommerceStatsMonthNavigator
 import fr.myfidpass.ui.theme.CommerceStatsPalette
 import fr.myfidpass.ui.theme.MerchantDesignSystem
@@ -367,14 +368,15 @@ fun CommerceStatsCompactKpiCard(
             valueSubline?.let {
                 Text(it, color = palette.onTilePrimary.copy(0.72f), fontSize = 14.sp)
             }
-            trendEuro?.let { delta ->
-                val sign = if (delta >= 0) "+" else "−"
-                Text(
-                    "$sign${"%.2f".format(java.util.Locale.FRANCE, kotlin.math.abs(delta))} €",
-                    color = palette.kpiTrendGreen,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.SemiBold,
-                )
+            trendEuro?.let { raw ->
+                CommerceStatisticsDataBuilder.displayableTrendEuro(raw)?.let { delta ->
+                    Text(
+                        "+${"%.2f".format(java.util.Locale.FRANCE, delta)} €",
+                        color = palette.kpiTrendGreen,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
             }
             if (trendEuro == null) {
                 trendLabel?.let { label ->

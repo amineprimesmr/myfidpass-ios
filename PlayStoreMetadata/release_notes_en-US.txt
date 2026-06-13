@@ -1,6 +1,6 @@
-First Android release of MyFidpass:
-• Merchant onboarding (email + OTP code)
-• Dashboard, QR scanner, customizable loyalty card
-• Google Wallet card preview
-• Campaigns and push notifications
-• Pro subscription via secure payment (Stripe)
+MyFidpass 1.40:
+• Start-game rewards: single use, “Reward used” state
+• Merchant stats: purchase frequency and KPI fixes
+• Stamp scan: “New reward” / full-card toasts
+• Pro paywall: €1 trial then monthly subscription
+• General fixes and stability

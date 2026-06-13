@@ -98,7 +98,6 @@ object CommerceStatisticsDataBuilder {
         val opsSeries = evolution.map { it.operationsCount ?: 0 }
         val (ptsSpark, ptsTrend, ptsTrendPos) = pointsRowSparklineAndTrend(opsSeries)
         val freqSpark = normalizeSeries(opsSeries.map { it.toFloat() })
-        val (_, freqTrend, freqTrendPos) = pointsRowSparklineAndTrend(opsSeries)
 
         val indicatorRows = listOf(
             CommerceCategoryRowData(
@@ -169,8 +168,8 @@ object CommerceStatisticsDataBuilder {
             swatch = colorPts,
             visitFrequencyDetail = CommerceVisitFrequencyDetail(
                 sparkline = freqSpark,
-                trendPct = freqTrend,
-                trendIsPositive = freqTrendPos,
+                trendPct = null,
+                trendIsPositive = true,
             ),
         )
 
@@ -245,9 +244,10 @@ object CommerceStatisticsDataBuilder {
         val norm = normalizeSeries(opsSeries.map { it.toFloat() })
         val pair = operationsTrendPair(opsSeries)
         val trend = pair?.let { (last, prev) ->
-            if (prev <= 0 || last <= 0) null else ((last - prev).toDouble() / prev) * 100.0
+            if (prev <= 0 || last <= 0) null
+            else displayableTrendPct(((last - prev).toDouble() / prev) * 100.0)
         }
-        return Triple(norm, trend, (trend ?: 0.0) >= 0)
+        return Triple(norm, trend, true)
     }
 
     private val membersMonthMilestoneCount = 7
@@ -327,6 +327,12 @@ object CommerceStatisticsDataBuilder {
     fun formatInt(n: Int): String = "%,d".format(java.util.Locale.FRANCE, n).replace('\u00A0', ' ')
 
     fun formatPct(ratio: Double): String = "${(ratio * 100).toInt()} %"
+
+    /** Tendance affichable : jamais de valeur négative ou nulle. */
+    fun displayableTrendPct(raw: Double?): Double? = raw?.takeIf { it > 0.05 }
+
+    /** Variation € affichable : uniquement les hausses. */
+    fun displayableTrendEuro(raw: Double?): Double? = raw?.takeIf { it > 0.009 }
 
     fun formatEuro(v: Double): String = if (v % 1.0 < 0.05) v.toInt().toString() else "%.1f".format(v)
 

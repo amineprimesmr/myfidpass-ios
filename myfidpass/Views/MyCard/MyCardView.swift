@@ -12,157 +12,6 @@ import Photos
 import PhotosUI
 import UIKit
 
-enum CardPreviewFormat: String, CaseIterable {
-    case wallet
-    case creditCard
-    case stampGrid
-    /// Design dédié avec grille de tampons visible (Café des Arts).
-    case cafeDesArts
-}
-
-/// Modifier pour adopter le style Liquid Glass natif des sheets sur iOS 26 (coins système, pas de fond opaque).
-struct LiquidGlassSheetModifier: ViewModifier {
-    func body(content: Content) -> some View {
-        if #available(iOS 26, *) {
-            content.presentationCornerRadius(nil)
-        } else {
-            content
-        }
-    }
-}
-
-/// Aperçu d’une image depuis une URL (http) ou un chemin local (logo ou image de fond).
-struct CardImagePreviewView: View {
-    let urlOrPath: String
-    var body: some View {
-        let trimmed = urlOrPath.trimmingCharacters(in: .whitespaces)
-        Group {
-            if trimmed.isEmpty {
-                EmptyView()
-            } else if let filePath = resolvedFilePath(trimmed) {
-                LocalImagePreviewView(path: filePath)
-            } else if let url = resolvedHTTPURL(trimmed), isAPILogoURL(url) {
-                AuthenticatedLogoView(url: MerchantLogoAssetCache.stripeLogoDisplayURL(url), stripBackgroundFill: false)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .clipped()
-            } else if let url = resolvedHTTPURL(trimmed), isAPICardBackgroundURL(url) {
-                AuthenticatedLogoView(url: url, stripBackgroundFill: false)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .clipped()
-            } else if let url = resolvedHTTPURL(trimmed) {
-                DecodedURLImage(url: url, contentMode: .fit, maxPixelDimension: 1200)
-                    .frame(maxWidth: .infinity)
-                    .clipped()
-            } else {
-                LocalImagePreviewView(path: urlOrPath)
-            }
-        }
-        .id(trimmed)
-    }
-
-    /// URL absolue ou chemin `/api/...` renvoyé seul par le backend.
-    private func resolvedHTTPURL(_ s: String) -> URL? {
-        if let u = URL(string: s), u.scheme == "http" || u.scheme == "https" { return u }
-        if s.hasPrefix("/"), let u = URL(string: s, relativeTo: APIConfig.baseURL)?.absoluteURL,
-           u.scheme == "http" || u.scheme == "https" {
-            return u
-        }
-        return nil
-    }
-    private func resolvedFilePath(_ path: String) -> String? {
-        APIResourceURL.localImageFilePathIfPresent(path)
-            ?? CardLogoStorage.fullPath(forRelative: path)
-    }
-    private func isAPILogoURL(_ url: URL) -> Bool {
-        guard url.scheme == "http" || url.scheme == "https" else { return false }
-        guard url.host() == APIConfig.baseURL.host() else { return false }
-        // Bandeau carte uniquement (`…/logo`), pas `logo-icon` ni chemins ambigus.
-        return url.path.hasSuffix("/logo")
-    }
-
-    private func isAPICardBackgroundURL(_ url: URL) -> Bool {
-        (url.scheme == "http" || url.scheme == "https") && url.host() == APIConfig.baseURL.host() && url.path.contains("card-background")
-    }
-}
-
-private struct LocalImagePreviewView: View {
-    let path: String
-    @State private var image: UIImage?
-    var body: some View {
-        Group {
-            if let img = image {
-                Image(uiImage: img)
-                    .resizable()
-                    .scaledToFit()
-            } else {
-                Color.gray.opacity(0.2)
-            }
-        }
-        .frame(maxWidth: .infinity)
-        .clipped()
-        .onAppear { loadImage() }
-        .onChange(of: path) { _, _ in loadImage() }
-    }
-    private func loadImage() {
-        let fullPath = path.hasPrefix("/") || path.hasPrefix("file:") ? (path.hasPrefix("file:") ? (URL(string: path)?.path ?? path) : path) : (CardLogoStorage.fullPath(forRelative: path) ?? path)
-        Task {
-            let fp = fullPath
-            let img = await Task.detached(priority: .userInitiated) {
-                ImageIODownsampling.imageFromFile(at: fp, maxPixelDimension: 1400)
-            }.value
-            await MainActor.run { image = img }
-        }
-    }
-}
-
-/// Paliers points éditables dans « Récompenses » (10 pts inclus en 1ʳᵉ ligne).
-enum MyCardPointsRewardTiers {
-    static let slotCount = 8
-    static let minVisibleCount = 5
-}
-
-/// État comparé pour savoir si « Enregistrer » doit apparaître (aligné sur ce que `saveTemplate` envoie).
-
-private struct MyCardPersistedSnapshot: Equatable {
-    var displayName: String
-    var requiredStamps: Int
-    var primaryHex: String
-    var accentHex: String
-    var labelHex: String
-    var stripDisplayMode: String
-    var stripText: String
-    var logoURL: String
-    /// Contenu du fichier logo local : le chemin ne change pas quand on remplace l’image (`cardLogo.png`).
-    var localLogoFileModification: Date?
-    var stampEmoji: String
-    var cardBackgroundImagePath: String?
-    /// Idem fond carte : même chemin `cardBackground.png` si l’utilisateur change seulement l’image.
-    var localCardBackgroundFileModification: Date?
-    var cardBackgroundRemoteURL: String?
-    var cardBackgroundWasRemoved: Bool
-    var programType: String
-    var pointsPerEuro: Int
-    var pointsPerVisit: Int
-    var pointsMinAmountEur: String
-    var tierPoints: [String]
-    var tierLabels: [String]
-    var stampRewardLabel: String
-    var expiryMonths: String
-    var sector: String
-    var stampMidRewardLabel: String
-    var stampMidRewardEnabled: Bool
-    /// Récompense « Début du jeu » (1ʳᵉ tour de roue avant tout palier).
-    var startGameRewardLabel: String
-    var backTerms: String
-    var backContact: String
-    var labelRestants: String
-    var labelMember: String
-    var notificationTitleOverride: String
-    var notificationChangeMessage: String
-    var stampIconWasRemoved: Bool
-    var stampIconPendingBase64: String?
-}
-
 struct MyCardView: View {
     /// Commerce affiché — figé à l’ouverture pour éviter de mélanger logo / couleurs entre comptes.
     private let businessSlug: String
@@ -199,6 +48,9 @@ struct MyCardView: View {
     @State private var customizationZone: CardPreviewEditZone?
     /// Zoom fluide sur le logo (coin haut-gauche de l’aperçu).
     @State private var cardLogoZoomFocused = false
+    @State private var cardLogoZoomScale: CGFloat = 1
+    @State private var cardLogoZoomOffsetX: CGFloat = 0
+    @State private var cardLogoZoomOffsetY: CGFloat = 0
     @State private var walletPassData: Data?
     @State private var walletLoading = false
     @State private var walletErrorMessage: String?
@@ -438,7 +290,10 @@ struct MyCardView: View {
                 if previewStampsCount > new { previewStampsCount = new }
             }
             .onChange(of: customizationZone) { _, new in
-                if new == nil { cardLogoZoomFocused = false }
+                if new == nil { setCardLogoZoomFocused(false) }
+            }
+            .onChange(of: cardLogoZoomFocused) { _, focused in
+                syncCardLogoZoomTransform(focused: focused)
             }
     }
 
@@ -603,7 +458,7 @@ struct MyCardView: View {
     private func requestLeaveMyCard() {
         customizationZone = nil
         if cardLogoZoomFocused {
-            cardLogoZoomFocused = false
+            setCardLogoZoomFocused(false)
             return
         }
         if hasUnsavedCardChanges {
@@ -796,7 +651,7 @@ struct MyCardView: View {
                             onEditZoneTap: handleCardPreviewZoneTap,
                             onCompletionPillTap: openCardCustomizationZone,
                             fidelityQRPayloadURL: fidelityCardPageURLString,
-                            completionHighlightZones: shouldShowCompletionPills ? cardCompletionPreviewZones : []
+                            completionHighlightZones: (shouldShowCompletionPills && !cardLogoZoomFocused) ? cardCompletionPreviewZones : []
                         )
                     } else {
                         WalletCardPreview(
@@ -820,18 +675,18 @@ struct MyCardView: View {
                             onEditZoneTap: handleCardPreviewZoneTap,
                             onCompletionPillTap: openCardCustomizationZone,
                             fidelityQRPayloadURL: fidelityCardPageURLString,
-                            completionHighlightZones: shouldShowCompletionPills ? cardCompletionPreviewZones : []
+                            completionHighlightZones: (shouldShowCompletionPills && !cardLogoZoomFocused) ? cardCompletionPreviewZones : []
                         )
                     }
                 }
                 .padding(.horizontal, AppTheme.Spacing.lg)
-                .scaleEffect(cardLogoZoomFocused ? 1.75 : 1, anchor: .topLeading)
-                .offset(x: cardLogoZoomFocused ? 16 : 0, y: cardLogoZoomFocused ? 4 : 0)
+                .compositingGroup()
+                .scaleEffect(cardLogoZoomScale, anchor: .topLeading)
+                .offset(x: cardLogoZoomOffsetX, y: cardLogoZoomOffsetY)
             }
-            .animation(.spring(response: 0.46, dampingFraction: 0.86), value: cardLogoZoomFocused)
             .id(programType)
             .frame(maxWidth: .infinity, alignment: .topLeading)
-            .frame(minHeight: cardLogoZoomFocused ? 220 : nil, alignment: .topLeading)
+            .frame(minHeight: 220, alignment: .topLeading)
         }
         .padding(.top, AppTheme.Spacing.md)
         .padding(.bottom, AppTheme.Spacing.sm)
@@ -839,13 +694,32 @@ struct MyCardView: View {
 
     private func handleCardPreviewZoneTap(_ zone: CardPreviewEditZone) {
         if zone == .logoBand {
+            if cardLogoZoomFocused, customizationZone == .logoBand {
+                customizationZone = nil
+                setCardLogoZoomFocused(false)
+                return
+            }
             openCardCustomizationZone(.logoBand)
             return
         }
         if cardLogoZoomFocused {
-            cardLogoZoomFocused = false
+            setCardLogoZoomFocused(false)
         }
         openCardCustomizationZone(zone)
+    }
+
+    private func setCardLogoZoomFocused(_ focused: Bool) {
+        guard cardLogoZoomFocused != focused else { return }
+        cardLogoZoomFocused = focused
+    }
+
+    private func syncCardLogoZoomTransform(focused: Bool) {
+        let animation = focused ? MerchantMotion.cardLogoZoomIn : MerchantMotion.cardLogoZoomOut
+        withAnimation(animation) {
+            cardLogoZoomScale = focused ? 1.75 : 1
+            cardLogoZoomOffsetX = focused ? 16 : 0
+            cardLogoZoomOffsetY = focused ? 4 : 0
+        }
     }
 
     private func openCardCustomizationZone(_ zone: CardPreviewEditZone) {
@@ -859,9 +733,9 @@ struct MyCardView: View {
             return
         }
         if zone == .logoBand {
-            cardLogoZoomFocused = true
+            setCardLogoZoomFocused(true)
         } else {
-            cardLogoZoomFocused = false
+            setCardLogoZoomFocused(false)
         }
         customizationZone = zone
     }

@@ -396,8 +396,9 @@ private struct TopBarLiquidGlassPressableStyle: ButtonStyle {
 
 /// Bouton verre + cadenas : courte animation « déverrouillage » puis ouverture du paywall (callback).
 struct MerchantProUnlockTeaserButton: View {
-    /// `true` sur fond sombre / overlay Commerce : verre teinté sombre + texte clair.
+    /// Conservé pour compatibilité des call sites — le bouton utilise toujours le verre adaptatif système.
     var preferDarkGlassTint: Bool = false
+    var unlockTitle: String = "Déverrouiller avec Pro"
     let onUnlockRequested: () -> Void
 
     @State private var lockOpen = false
@@ -420,20 +421,20 @@ struct MerchantProUnlockTeaserButton: View {
                     .font(.system(size: 17, weight: .semibold))
                     .symbolRenderingMode(.hierarchical)
                     .contentTransition(.symbolEffect(.replace))
-                Text("Déverrouiller avec Pro")
-                    .font(.system(size: 15, weight: .semibold))
-                    .multilineTextAlignment(.leading)
+                Text(unlockTitle)
+                    .font(.system(size: 15.5, weight: .semibold))
+                    .multilineTextAlignment(.center)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            .foregroundStyle(preferDarkGlassTint ? Color.white : Color.primary)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, alignment: .center)
+            .foregroundStyle(Color.primary)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 13)
         }
         .buttonBorderShape(.roundedRectangle(radius: 20))
         .controlSize(.large)
-        .liquidGlassButtonAppearance(
-            preferDarkGlassTint ? .regularTint(LiquidGlassNativeTint.darkRegular) : .adaptive,
-            cornerRadius: 20
-        )
+        .liquidGlassButtonAppearance(.adaptive, cornerRadius: 20)
     }
 }
 

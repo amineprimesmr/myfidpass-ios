@@ -29,10 +29,6 @@ struct MerchantProUnlockTeaserSheet: View {
                     .font(.title2.bold())
                     .multilineTextAlignment(.center)
 
-                Text(MerchantSubscriptionPricingCopy.paywallPricingIntroLine)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(AppTheme.Colors.primary)
-
                 Text("Scan caisse, points, campagnes et automatisations — sans limite.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)

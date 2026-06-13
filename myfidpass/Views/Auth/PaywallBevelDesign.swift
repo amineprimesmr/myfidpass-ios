@@ -259,7 +259,7 @@ private struct PaywallFeatureBlockHeightKey: PreferenceKey {
 
 struct PaywallBevelPlanCard: View {
     let title: String
-    let priceLine: String
+    let priceLine: String?
     let isSelected: Bool
     let savingsBadge: String?
     let onTap: () -> Void
@@ -290,9 +290,11 @@ struct PaywallBevelPlanCard: View {
                             }
                         }
                     }
-                    Text(priceLine)
-                        .font(.system(size: 14, weight: .regular))
-                        .foregroundStyle(Color(red: 0.45, green: 0.47, blue: 0.50))
+                    if let priceLine {
+                        Text(priceLine)
+                            .font(.system(size: 14, weight: .regular))
+                            .foregroundStyle(Color(red: 0.45, green: 0.47, blue: 0.50))
+                    }
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 18)
@@ -310,7 +312,7 @@ struct PaywallBevelPlanCard: View {
                         )
                 )
 
-                if let savingsBadge, isSelected {
+                if let savingsBadge {
                     Text(savingsBadge)
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(.white)

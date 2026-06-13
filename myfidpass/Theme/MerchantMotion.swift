@@ -58,6 +58,12 @@ enum MerchantMotion {
 
     /// Crossfade léger entre états racine (ex. auth ↔ app).
     static let rootCrossfade: Animation = .easeInOut(duration: 0.22)
+
+    /// Zoom logo Ma Carte (entrée).
+    static let cardLogoZoomIn: Animation = .spring(response: 0.26, dampingFraction: 0.86, blendDuration: 0)
+
+    /// Dézoom logo Ma Carte — rapide, sans rebond (tap retour / autre zone / fermeture feuille).
+    static let cardLogoZoomOut: Animation = .easeOut(duration: 0.14)
 }
 
 extension NavigationPath {

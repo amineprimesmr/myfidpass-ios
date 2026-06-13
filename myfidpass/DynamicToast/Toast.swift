@@ -63,11 +63,22 @@ struct Toast {
         pointsCapped: Bool = false,
         pointsRequested: Int? = nil,
         pointsAdded: Int? = nil,
-        stampCycleCompleted: Bool = false
+        stampCycleCompleted: Bool = false,
+        unlockedRewardLabel: String? = nil
     ) -> Toast {
         var capSuffix = ""
         if pointsCapped, let req = pointsRequested, let got = pointsAdded, req > got {
             capSuffix = "\nPlafond sécurité : \(got) pt crédité(s) (calcul : \(req))."
+        }
+        let rewardLabel = unlockedRewardLabel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !rewardLabel.isEmpty {
+            return Toast(
+                symbol: "gift.fill",
+                symbolFont: .system(size: 35),
+                symbolForegroundStyle: (.white, Color(red: 1, green: 0.55, blue: 0.2)),
+                title: "Nouvelle récompense",
+                message: "\(memberName) — \(rewardLabel)\(capSuffix)"
+            )
         }
         let title = stampCycleCompleted ? "Carte complète — récompense !" : "1 tampon ajouté"
         let rewardLine = stampCycleCompleted
@@ -81,6 +92,18 @@ struct Toast {
                 : (.white, .green),
             title: title,
             message: "\(memberName)\(rewardLine)\(capSuffix)"
+        )
+    }
+
+    /// Toast caisse après validation d’une récompense (tampons ou points).
+    static func rewardRedeemed(memberName: String, rewardLabel: String) -> Toast {
+        let label = rewardLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+        return Toast(
+            symbol: "gift.fill",
+            symbolFont: .system(size: 32, weight: .semibold),
+            symbolForegroundStyle: (.white, Color(red: 1, green: 0.55, blue: 0.2)),
+            title: "Récompense utilisée",
+            message: label.isEmpty ? memberName : "\(memberName) — \(label)"
         )
     }
 }

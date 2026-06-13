@@ -45,7 +45,10 @@ object MerchantFloatingTabBarMetrics {
     val contentBottomInset = 88.dp
     /** Espace entre la pastille abo et le haut de la tab bar. */
     val subscribePillGapAboveTabBar = 12.dp
-    val subscribePillBottomInset = contentBottomInset + subscribePillGapAboveTabBar
+    /** Marge basse pour ancrer la pastille abo juste au-dessus de la tab bar flottante. */
+    val subscribePillBottomInset = contentBottomInset
+    /** Espace sous le footer périmètre (onglet Notifications) quand la pastille abo est visible. */
+    val notificationsPerimeterBottomWithSubscribePill = subscribePillBottomInset + 48.dp + 12.dp
 }
 
 @Composable

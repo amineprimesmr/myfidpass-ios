@@ -265,9 +265,8 @@ struct CommerceStatsSocialNetworkCard: View {
                 .foregroundStyle(CommerceStatisticsTheme.onCardPrimary(forGlassOverlay: g))
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
-            if let t = detail.trendPct {
-                let sign = t >= 0 ? "+" : "−"
-                Text("\(sign)\(String(format: "%.1f%%", abs(t)))")
+            if let t = StatsFR.displayableTrendPct(detail.trendPct) {
+                Text("+\(String(format: "%.1f%%", t))")
                     .font(CommerceStatisticsTheme.statisticNumbers(size: 16, weight: .semibold))
                     .foregroundStyle(CommerceStatisticsTheme.kpiTrendPositiveGreen)
                     .padding(.leading, 10)

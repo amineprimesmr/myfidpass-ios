@@ -333,8 +333,8 @@ enum CommerceStatisticsDataBuilder {
             audienceSplit: nil,
             visitFrequencyDetail: .init(
                 sparkline: bars.map(\.value),
-                trendPct: dFreq,
-                trendIsPositive: (dFreq ?? 0) >= 0
+                trendPct: nil,
+                trendIsPositive: true
             )
         )
 
@@ -494,11 +494,10 @@ enum CommerceStatisticsDataBuilder {
             }
         }
         var trend: Double?
-        var positive = true
+        let positive = true
         if let pair = operationsTrendPair(opsSeries), pair.prev > 0, pair.last > 0 {
             let d = Double(pair.last - pair.prev) / Double(pair.prev) * 100.0
-            trend = d
-            positive = d >= 0
+            trend = StatsFR.displayableTrendPct(d)
         }
         return (spark, trend, positive)
     }
@@ -627,18 +626,17 @@ enum CommerceStatisticsDataBuilder {
         return (ops[ops.count - 1], ops[ops.count - 2])
     }
 
-    /// Tendance grossière : compare deux intervalles d’activité (opérations), pas le jalon courant s’il est à 0.
+    /// Tendance panier : variation € estimée entre deux jalons d’activité (hausse uniquement).
+    /// Fréquence : pas de % comparatif ici (jalons opérations ≠ mois précédent).
     private static func trendDeltas(evolution: [EvolutionWeekDTO], stats: BusinessStatsResponse?) -> (Double?, Double?) {
         let ops = evolution.compactMap { $0.operationsCount }
         guard let pair = operationsTrendPair(ops), pair.prev > 0 else { return (nil, nil) }
-        let freqDelta: Double? = pair.last > 0
-            ? (Double(pair.last - pair.prev) / Double(pair.prev)) * 100
-            : nil
         var dPanier: Double? = nil
         if let basket = stats?.avgBasketEur, basket > 0, pair.last > 0 {
-            dPanier = Double(pair.last - pair.prev) * basket
+            let raw = Double(pair.last - pair.prev) * basket
+            dPanier = StatsFR.displayableTrendEuro(raw)
         }
-        return (dPanier, freqDelta)
+        return (dPanier, nil)
     }
 }
 

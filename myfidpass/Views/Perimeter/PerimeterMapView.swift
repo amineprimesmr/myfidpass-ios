@@ -142,6 +142,7 @@ struct PerimeterMapView: View {
                         .stroke(AppTheme.Colors.primary, lineWidth: 2)
                 }
                 .mapStyle(standardMapStyle)
+                .preferredColorScheme(.dark)
                 .safeAreaInset(edge: .top, spacing: 0) {
                     Color.clear.frame(height: 52)
                 }
@@ -155,6 +156,7 @@ struct PerimeterMapView: View {
             } else {
                 Map(position: $cameraPosition, interactionModes: .all)
                     .mapStyle(standardMapStyle)
+                    .preferredColorScheme(.dark)
                     .safeAreaInset(edge: .top, spacing: 0) {
                         Color.clear.frame(height: 52)
                     }

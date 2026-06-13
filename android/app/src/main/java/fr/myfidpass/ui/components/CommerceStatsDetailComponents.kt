@@ -51,6 +51,8 @@ import fr.myfidpass.ui.stats.CommerceStatisticsDataBuilder
 import fr.myfidpass.ui.theme.CommerceStatsPalette
 import fr.myfidpass.ui.theme.MerchantDesignSystem
 
+private const val COMMERCE_STATS_PRO_UNLOCK_CTA = "Débloquer les données du commerce avec Pro"
+
 @Composable
 fun CommerceStatsProUnlockOverlay(
     locked: Boolean,
@@ -87,20 +89,16 @@ fun CommerceStatsProUnlockOverlay(
 }
 
 @Composable
-fun CommerceStatsProUnlockButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
-    Row(
-        modifier
-            .clip(RoundedCornerShape(50))
-            .background(Color.White)
-            .border(1.dp, Color.Black.copy(alpha = 0.08f), RoundedCornerShape(50))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 18.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(16.dp))
-        Spacer(Modifier.width(8.dp))
-        Text("Déverrouiller avec Pro", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
-    }
+fun CommerceStatsProUnlockButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    unlockTitle: String = COMMERCE_STATS_PRO_UNLOCK_CTA,
+) {
+    MerchantProUnlockTeaserButton(
+        onUnlock = onClick,
+        modifier = modifier,
+        unlockTitle = unlockTitle,
+    )
 }
 
 @Composable
@@ -275,10 +273,9 @@ private fun CommerceStatsLargeMetricTile(
                         fontWeight = FontWeight.SemiBold,
                     )
                 }
-                trendPct?.let { t ->
-                    val sign = if (t >= 0) "+" else "−"
+                CommerceStatisticsDataBuilder.displayableTrendPct(trendPct)?.let { t ->
                     Text(
-                        "$sign${"%.1f".format(java.util.Locale.FRANCE, kotlin.math.abs(t))} %",
+                        "+${"%.1f".format(java.util.Locale.FRANCE, t)} %",
                         color = chartLineColor,
                         fontSize = 13.sp,
                         fontWeight = FontWeight.SemiBold,

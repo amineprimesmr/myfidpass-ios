@@ -1,13 +1,31 @@
-# Artefacts locaux lourds / temporaires (ne pas versionner — clones plus légers).
+# Artefacts locaux lourds / temporaires
 .venv_motion/
 .tmp_motion_frames/
 .agents/
+.claude/worktrees/
 
 .DS_Store
 
-# AAB Play Store (généré par scripts/prepare-play-upload.sh)
-PlayStoreMetadata/releases/
+# Android build & IDE
+android/.gradle/
+android/**/build/
+android/.kotlin/
+android/.idea/
+android/local.properties
+android/captures/
+android/*.apk
+android/*.aab
+android/keystore.properties
+android/keystore/
+android/app/google-services.json
 
-# Xcode utilisateur (évite conflits Git / bruit).
+# iOS / Xcode
 **/xcuserdata/
 *.xcuserstate
+DerivedData/
+
+# Play Store releases (généré localement)
+PlayStoreMetadata/releases/
+
+# Archive onboarding fitness (hors produit MyFidpass — ne pas indexer)
+Docs/ProcessOnboardingMirror/

@@ -36,12 +36,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.hilt.navigation.compose.hiltViewModel
 import fr.myfidpass.di.AppContainer
 import fr.myfidpass.ui.components.GlassIconButton
 import fr.myfidpass.ui.screens.auth.AuthLaunchEntryScreen
 import fr.myfidpass.ui.screens.auth.MerchantPaywallScreen
-import fr.myfidpass.ui.viewModelFactory
 import fr.myfidpass.ui.viewmodel.MerchantIntegratedOnboardingViewModel
 import fr.myfidpass.ui.viewmodel.MerchantOnboardingViewModel
 
@@ -59,11 +58,9 @@ fun MerchantOnboardingRootScreen(
     onExistingAccountEmail: (String) -> Unit,
     onGoogleSignIn: (signUp: Boolean) -> Unit,
 ) {
-    val factory = remember(container) { viewModelFactory(container) }
-    val flowVm: MerchantIntegratedOnboardingViewModel = viewModel(factory = factory)
-    val establishmentVm: MerchantOnboardingViewModel = viewModel(
+    val flowVm: MerchantIntegratedOnboardingViewModel = hiltViewModel()
+    val establishmentVm: MerchantOnboardingViewModel = hiltViewModel(
         key = "integrated_establishment",
-        factory = factory,
     )
     val firstLaunch = container.firstLaunchPreferences
     val statusTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()

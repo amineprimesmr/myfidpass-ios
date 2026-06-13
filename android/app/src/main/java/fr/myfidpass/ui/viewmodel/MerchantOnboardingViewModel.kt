@@ -11,8 +11,11 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import retrofit2.HttpException
+import dagger.hilt.android.lifecycle.HiltViewModel
+import javax.inject.Inject
 
-class MerchantOnboardingViewModel(
+@HiltViewModel
+class MerchantOnboardingViewModel @Inject constructor(
     private val authRepository: AuthRepository,
 ) : ViewModel() {
 

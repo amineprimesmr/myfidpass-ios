@@ -235,7 +235,7 @@ fun PaywallBevelContinueButton(
 @Composable
 fun PaywallBevelPlanCard(
     title: String,
-    priceLine: String,
+    priceLine: String? = null,
     isSelected: Boolean,
     savingsBadge: String? = null,
     onClick: () -> Unit,
@@ -283,10 +283,12 @@ fun PaywallBevelPlanCard(
                     }
                 }
             }
-            Spacer(Modifier.height(6.dp))
-            Text(priceLine, fontSize = 14.sp, color = Color(0xFF737578))
+            priceLine?.let {
+                Spacer(Modifier.height(6.dp))
+                Text(it, fontSize = 14.sp, color = Color(0xFF737578))
+            }
         }
-        if (savingsBadge != null && isSelected) {
+        if (savingsBadge != null) {
             Text(
                 savingsBadge,
                 fontSize = 11.sp,

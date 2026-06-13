@@ -54,6 +54,41 @@ object MerchantMultiPricing {
         return "$euros €"
     }
 
+    fun monthlyTotalLabel(slots: Int): String = formatEuro(monthlyTotalCents(slots))
+
+    fun annualTotalLabel(slots: Int): String = formatEuro(annualTotalCents(slots))
+
+    /** Équivalent mensuel de l’offre annuelle (ex. 399 € / an → 33,25 € / mois). */
+    fun annualMonthlyEquivalentCents(slots: Int): Int =
+        kotlin.math.round(annualTotalCents(slots) / 12.0).toInt()
+
+    fun annualMonthlyEquivalentLabel(slots: Int): String =
+        formatEuro(annualMonthlyEquivalentCents(slots))
+
+    /** Annuel réservé au palier 1 commerce — aligné iOS `supportsAnnualPlan`. */
+    fun supportsAnnualPlan(slots: Int): Boolean = slots.coerceIn(1, 5) == 1
+
+    fun annualSavingsPercent(slots: Int): Int? {
+        if (!supportsAnnualPlan(slots)) return null
+        val monthly = monthlyTotalCents(slots)
+        val annual = annualTotalCents(slots)
+        if (monthly <= 0 || annual <= 0) return null
+        val yearlyFromMonthly = monthly * 12.0
+        val saved = (1.0 - annual / yearlyFromMonthly) * 100.0
+        return maxOf(1, saved.toInt())
+    }
+
+    /** Économie vs tarif « 1 commerce × N » (grille dégressive 2+ commerces). */
+    fun multiCommerceSavingsPercent(slots: Int): Int? {
+        val n = slots.coerceIn(1, 5)
+        if (n <= 1) return null
+        val actual = monthlyTotalCents(n)
+        val naive = n * MONTHLY_1_CENTS
+        if (naive <= 0 || actual >= naive) return null
+        val saved = (1.0 - actual.toDouble() / naive.toDouble()) * 100.0
+        return maxOf(1, saved.toInt())
+    }
+
     fun slotsToPurchase(
         usedBusinesses: Int,
         allowedBusinesses: Int,

@@ -687,16 +687,7 @@ struct CafeDesArtsCardPreview: View {
         let payload = trimmed.isEmpty ? "5b34fc46-19d4-46db-95d3-dc2ffbc0" : trimmed
         let side = AppTheme.CardPreviewLayout.qrDisplaySide(cardWidth: cardWidth, compact: compact)
         let renderPx = max(128, ceil(side * AppTheme.DisplayMetrics.displayScale))
-        if let qrImage = QRCodeGenerator.generateQR(from: payload, size: renderPx) {
-            Image(uiImage: qrImage)
-                .interpolation(.none)
-                .resizable()
-                .scaledToFit()
-                .frame(width: side, height: side)
-                .padding(4)
-                .background(Color.white)
-                .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
-        }
+        CachedWalletQRCode(payload: payload, displaySide: side, renderPixels: renderPx)
     }
 
     // MARK: - Logo (même logique que WalletCardPreview, .fit pour pas de crop)

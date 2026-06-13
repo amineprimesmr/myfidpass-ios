@@ -6,11 +6,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.hilt.navigation.compose.hiltViewModel
 import fr.myfidpass.di.AppContainer
 import fr.myfidpass.data.repo.BusinessCreationRepository
 import fr.myfidpass.ui.screens.onboarding.MerchantEstablishmentScreen
-import fr.myfidpass.ui.viewModelFactory
 import fr.myfidpass.ui.viewmodel.MerchantOnboardingViewModel
 import kotlinx.coroutines.launch
 
@@ -23,8 +22,7 @@ fun AddCommerceScreen(
     onCreated: () -> Unit,
     onQuotaBlocked: (establishmentName: String) -> Unit = {},
 ) {
-    val factory = viewModelFactory(container)
-    val vm: MerchantOnboardingViewModel = viewModel(factory = factory)
+    val vm: MerchantOnboardingViewModel = hiltViewModel()
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) {

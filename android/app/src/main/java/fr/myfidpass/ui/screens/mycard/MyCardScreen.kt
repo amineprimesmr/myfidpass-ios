@@ -36,17 +36,13 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.runtime.getValue
-import androidx.compose.ui.graphics.TransformOrigin
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -179,16 +175,20 @@ fun MyCardScreen(
 
     val hasUnsaved = baseline != null && draft.snapshotForDirtyCompare() != baseline
     val missing = draft.missingRequirements()
-    val completionZones = buildSet {
-        addAll(missing.map { it.suggestedEditZone })
-        if (missing.any { it == CardMissingRequirement.Couleurs }) {
-            add(CardPreviewEditZone.CARD_APPEARANCE)
+    val cardPreviewSnapshot = remember(slug) {
+        slug.takeIf { it.isNotBlank() }?.let { CardPreviewSnapshotStore.load(context, it) }
+    }
+    val cardConfiguredHint = slug.isNotBlank() &&
+        MyCardCompletionRequirements.isConfigured(viewModel.settings, cardPreviewSnapshot)
+    val completionZones = remember(missing, cardConfiguredHint, viewModel.settings) {
+        buildSet {
+            addAll(missing.map { it.suggestedEditZone })
+            if (missing.any { it == CardMissingRequirement.Couleurs }) {
+                add(CardPreviewEditZone.CARD_APPEARANCE)
+            }
         }
     }
     val rewardsConfigurationComplete = !missing.contains(CardMissingRequirement.Recompenses)
-    val cardPreviewSnapshot = slug.takeIf { it.isNotBlank() }?.let { CardPreviewSnapshotStore.load(context, it) }
-    val cardConfiguredHint = slug.isNotBlank() &&
-        MyCardCompletionRequirements.isConfigured(viewModel.settings, cardPreviewSnapshot)
     val shouldShowCompletionPills = missing.isNotEmpty() &&
         !(cardConfiguredHint && viewModel.settings == null)
 
@@ -304,6 +304,11 @@ fun MyCardScreen(
             return
         }
         if (zone == CardPreviewEditZone.LOGO_BAND) {
+            if (cardLogoZoomFocused && activeZone == CardPreviewEditZone.LOGO_BAND) {
+                activeZone = null
+                cardLogoZoomFocused = false
+                return
+            }
             cardLogoZoomFocused = true
         } else {
             cardLogoZoomFocused = false
@@ -358,11 +363,10 @@ fun MyCardScreen(
         showProgramSwitchConfirm = false
     }
 
-    val logoZoomScale by animateFloatAsState(
-        targetValue = if (cardLogoZoomFocused) 1.75f else 1f,
-        animationSpec = spring(dampingRatio = 0.86f, stiffness = 420f),
-        label = "cardLogoZoom",
-    )
+    val openZoneHandler = rememberUpdatedState(newValue = ::openCustomizationZone)
+    val onCompletionPillTap = remember { { zone: CardPreviewEditZone -> openZoneHandler.value(zone) } }
+    val onZoneTapHandler = rememberUpdatedState(newValue = ::handleZoneTap)
+    val onZoneTap = remember { { zone: CardPreviewEditZone -> onZoneTapHandler.value(zone) } }
 
     val pageBg = Color(0xFFF2F2F7)
 
@@ -448,16 +452,9 @@ fun MyCardScreen(
                 }
             }
 
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = if (cardLogoZoomFocused) 240.dp else 0.dp)
-                    .padding(horizontal = 14.dp, vertical = 12.dp)
-                    .graphicsLayer {
-                        scaleX = logoZoomScale
-                        scaleY = logoZoomScale
-                        transformOrigin = TransformOrigin(0f, 0f)
-                    },
+            MyCardLogoZoomFrame(
+                zoomFocused = cardLogoZoomFocused,
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
             ) {
                 GoogleWalletLoyaltyPreviewAndroid(
                     businessName = draft.displayName.ifBlank { "Ma Carte Fidélité" },
@@ -487,9 +484,13 @@ fun MyCardScreen(
                     tierPoints = draft.tierPoints,
                     tierLabels = draft.tierLabels,
                     authToken = sessionStore.accessToken,
-                    completionHighlightZones = if (shouldShowCompletionPills) completionZones else emptySet(),
-                    onZoneTap = ::handleZoneTap,
-                    onCompletionPillTap = ::openCustomizationZone,
+                    completionHighlightZones = if (shouldShowCompletionPills && !cardLogoZoomFocused) {
+                        completionZones
+                    } else {
+                        emptySet()
+                    },
+                    onZoneTap = onZoneTap,
+                    onCompletionPillTap = onCompletionPillTap,
                 )
             }
             Text(

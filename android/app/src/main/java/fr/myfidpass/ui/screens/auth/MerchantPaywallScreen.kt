@@ -81,17 +81,51 @@ fun MerchantPaywallScreen(
         )
     }
     var selectedTargetSlots by remember { mutableIntStateOf(initialTargetSlots) }
+    var isMonthlyPlanSelected by remember { mutableStateOf(false) }
 
     LaunchedEffect(initialTargetSlots, addingAnotherCommerce) {
         selectedTargetSlots = initialTargetSlots
     }
 
     val effectiveSlots = selectedTargetSlots.coerceIn(1, 5)
+    val supportsAnnualPlanToggle = MerchantMultiPricing.supportsAnnualPlan(effectiveSlots)
+    val selectedPlanIsAnnual = supportsAnnualPlanToggle && !isMonthlyPlanSelected
 
-    val pricingQuote = remember(paidSlotsBaseline, effectiveSlots) {
-        MerchantMultiPricing.quote(paidSlotsBaseline, effectiveSlots)
+    LaunchedEffect(effectiveSlots, supportsAnnualPlanToggle) {
+        if (!supportsAnnualPlanToggle) {
+            isMonthlyPlanSelected = true
+        }
     }
+
+    val monthlyPlanCardPriceLine = remember(effectiveSlots) {
+        "${MerchantMultiPricing.monthlyTotalLabel(effectiveSlots).replace(" €", "€")} /mois"
+    }
+    val annualPlanCardPriceLine = remember(effectiveSlots) {
+        "${MerchantMultiPricing.annualMonthlyEquivalentLabel(effectiveSlots).replace(" €", "€")} /mois"
+    }
+    val monthlyPriceLine = remember(effectiveSlots) {
+        "1 € puis ${MerchantMultiPricing.monthlyTotalLabel(effectiveSlots)} / mois"
+    }
+    val annualPriceLine = remember(effectiveSlots) {
+        "1 € puis ${MerchantMultiPricing.annualTotalLabel(effectiveSlots)} / an"
+    }
+    val annualSavingsBadge = remember(effectiveSlots) {
+        MerchantMultiPricing.annualSavingsPercent(effectiveSlots)?.let { "Économisez $it %" }
+            ?: "Économisez 33 %"
+    }
+    val multiCommerceSavingsBadge = remember(effectiveSlots) {
+        MerchantMultiPricing.multiCommerceSavingsPercent(effectiveSlots)?.let { "Économisez $it %" }
+    }
+
     val showsCommerceQuotaSection = true
+
+    val footerCommitmentText = remember(effectiveSlots, selectedPlanIsAnnual) {
+        if (selectedPlanIsAnnual) {
+            "Puis ${MerchantMultiPricing.annualTotalLabel(effectiveSlots)} / an sans engagement"
+        } else {
+            "Puis ${MerchantMultiPricing.monthlyTotalLabel(effectiveSlots)} / mois sans engagement"
+        }
+    }
 
     LaunchedEffect(closeRevealDelayMs) {
         if (closeRevealDelayMs > 0) {
@@ -200,14 +234,37 @@ fun MerchantPaywallScreen(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
-                Text(
-                    "Le premier mois à 1€, puis ${pricingQuote.toMonthlyLabel} / mois",
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color(0xFF1A1C22),
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth(),
-                )
+                if (supportsAnnualPlanToggle) {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        PaywallBevelPlanCard(
+                            title = "Mensuel",
+                            priceLine = monthlyPlanCardPriceLine,
+                            isSelected = isMonthlyPlanSelected,
+                            onClick = { isMonthlyPlanSelected = true },
+                            modifier = Modifier.weight(1f),
+                        )
+                        PaywallBevelPlanCard(
+                            title = "Annuel",
+                            priceLine = annualPlanCardPriceLine,
+                            isSelected = !isMonthlyPlanSelected,
+                            savingsBadge = annualSavingsBadge,
+                            onClick = { isMonthlyPlanSelected = false },
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                } else {
+                    PaywallBevelPlanCard(
+                        title = if (effectiveSlots == 1) "Mensuel" else "$effectiveSlots commerces",
+                        priceLine = if (effectiveSlots == 1) monthlyPlanCardPriceLine else null,
+                        isSelected = true,
+                        savingsBadge = multiCommerceSavingsBadge,
+                        onClick = {},
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
 
                 errorMessage?.let {
                     Text(
@@ -220,7 +277,7 @@ fun MerchantPaywallScreen(
                 }
 
                 PaywallBevelContinueButton(
-                    title = "Continuer",
+                    title = "Essayer pour 1€",
                     isLoading = loading,
                     isEnabled = !loading,
                     onClick = {
@@ -229,7 +286,7 @@ fun MerchantPaywallScreen(
                         runCatching {
                             val checkout = LegalURLs.merchantEmbeddedSaasPaymentPage(
                                 prefilledEmail = userEmail,
-                                planAnnual = false,
+                                planAnnual = selectedPlanIsAnnual,
                                 commerceSlots = effectiveSlots,
                                 accessToken = sessionStore.accessToken,
                                 refreshToken = sessionStore.refreshToken,
@@ -244,10 +301,12 @@ fun MerchantPaywallScreen(
                 )
 
                 Text(
-                    "Sans engagement",
+                    footerCommitmentText,
                     fontSize = 15.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = Color(0xFF2E3038),
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth(),
                 )
             }
         }

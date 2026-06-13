@@ -1,7 +1,7 @@
 package fr.myfidpass.core.auth
 
-import android.util.Base64
 import org.json.JSONObject
+import java.util.Base64
 
 object JwtAccessExpiry {
     fun expirationEpochSeconds(jwt: String): Long? {
@@ -11,7 +11,7 @@ object JwtAccessExpiry {
             var payload = parts[1]
             val rem = payload.length % 4
             if (rem > 0) payload += "=".repeat(4 - rem)
-            val decoded = Base64.decode(payload, Base64.URL_SAFE or Base64.NO_WRAP)
+            val decoded = Base64.getUrlDecoder().decode(payload)
             val json = JSONObject(String(decoded, Charsets.UTF_8))
             json.optLong("exp", 0L).takeIf { it > 0L }
         }.getOrNull()

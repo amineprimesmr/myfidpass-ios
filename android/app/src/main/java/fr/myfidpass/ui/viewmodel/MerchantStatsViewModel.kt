@@ -23,13 +23,16 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import dagger.hilt.android.lifecycle.HiltViewModel
+import javax.inject.Inject
 
 data class StatsMonthSnapshot(
     val stats: BusinessStatsResponse,
     val evolution: fr.myfidpass.data.dto.DashboardEvolutionResponse,
 )
 
-class MerchantStatsViewModel(
+@HiltViewModel
+class MerchantStatsViewModel @Inject constructor(
     private val repository: DashboardRepository,
     private val sessionStore: SessionStore,
 ) : ViewModel() {
@@ -231,7 +234,7 @@ class MerchantStatsViewModel(
             val panierMoyen = real.panierMoyenEuro
             val panierRepere = real.panierRepereEuro
             val panierTrendEuro = if (panierMoyen != null && panierRepere != null && panierRepere > 0) {
-                panierMoyen - panierRepere
+                CommerceStatisticsDataBuilder.displayableTrendEuro(panierMoyen - panierRepere)
             } else {
                 null
             }
